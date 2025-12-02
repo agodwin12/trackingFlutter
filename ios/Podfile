@@ -1,4 +1,7 @@
 platform :ios, '14.0'
+use_frameworks! :linkage => :static
+
+$FirebaseSDKVersion = '11.2.0'   # <--- ADD THIS
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
