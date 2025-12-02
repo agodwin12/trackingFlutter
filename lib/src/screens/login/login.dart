@@ -163,18 +163,21 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
 
       if (response.statusCode == 200) {
         SharedPreferences prefs = await SharedPreferences.getInstance();
+
+        // ✅ Save all user data
         await prefs.setString("accessToken", responseData["accessToken"]);
         await prefs.setString("user", jsonEncode(responseData["user"]));
+
+        // 🆕 CRITICAL: Save user_id separately for PIN service
+        await prefs.setInt("user_id", responseData["user"]["id"]);
+
+        debugPrint('✅ Login successful - Saved user_id: ${responseData["user"]["id"]}');
 
         // ✅ Register notification token
         await NotificationService.registerToken();
 
         // ✅ Check if user needs to change password (first login)
-        // Option 1: Backend returns isFirstLogin flag
         bool isFirstLogin = responseData["isFirstLogin"] ?? false;
-
-        // Option 2: Check if password is still the default/temporary password
-        // bool mustChangePassword = responseData["mustChangePassword"] ?? false;
 
         setState(() {
           _isLoading = false;
@@ -183,6 +186,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
         if (mounted) {
           // ✅ If first login, navigate to Reset Password screen
           if (isFirstLogin) {
+            debugPrint('🔐 First login detected - navigating to password reset');
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
@@ -209,6 +213,8 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
             if (vehicles.isNotEmpty) {
               int firstVehicleId = vehicles[0]["id"];
 
+              debugPrint('✅ Navigating to dashboard with vehicle ID: $firstVehicleId');
+
               // Navigate to Modern Dashboard
               Navigator.pushReplacement(
                 context,
@@ -232,7 +238,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
         _isLoading = false;
       });
       _showErrorSnackbar("Connection error. Please try again.");
-      print("Login error: $error");
+      debugPrint("❌ Login error: $error");
     }
   }
 

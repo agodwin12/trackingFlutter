@@ -1,4 +1,4 @@
-// lib/screens/dashboard/dashboard_screen.dart
+// lib/screens/dashboard/dashboard.dart
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -11,6 +11,7 @@ import 'package:tracking/src/screens/dashboard/widgets/dashboard_widget.dart';
 import '../../core/utility/app_theme.dart';
 
 import '../settings/settings.dart';
+import '../stoeln vehicle/stolen_alert.dart';
 import '../trip/trip_screen.dart';
 
 class ModernDashboard extends StatefulWidget {
@@ -30,6 +31,7 @@ class _ModernDashboardState extends State<ModernDashboard> {
   @override
   void initState() {
     super.initState();
+    _saveCurrentVehicleId(); // ✅ Save vehicle ID for PIN lock
     _loadLanguagePreference();
     _controller = DashboardController(widget.vehicleId);
     _controller.initialize();
@@ -40,6 +42,17 @@ class _ModernDashboardState extends State<ModernDashboard> {
         _showSafeZoneAlert(alertData);
       }
     });
+  }
+
+  /// ✅ Save current vehicle ID to SharedPreferences for PIN lock
+  Future<void> _saveCurrentVehicleId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('current_vehicle_id', widget.vehicleId);
+      debugPrint('🚗 Saved current vehicle ID for PIN lock: ${widget.vehicleId}');
+    } catch (e) {
+      debugPrint('⚠️ Error saving vehicle ID: $e');
+    }
   }
 
   Future<void> _loadLanguagePreference() async {
@@ -226,37 +239,240 @@ class _ModernDashboardState extends State<ModernDashboard> {
     );
   }
 
-  void _handleReportStolen() async {
-    final success = await _controller.reportStolen();
-
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
+  // 🆕 UPDATED: Report Stolen with Confirmation and Navigation
+  Future<void> _handleReportStolen() async {
+    // Show confirmation dialog first
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: Row(
           children: [
-            Icon(Icons.check_circle, color: AppColors.white, size: 20),
+            Icon(
+              Icons.warning_rounded,
+              color: AppColors.error,
+              size: 32,
+            ),
             SizedBox(width: AppSizes.spacingM),
-            Expanded(
-              child: Text(
-                success
-                    ? (_selectedLanguage == 'en'
-                    ? 'Vehicle reported stolen. Engine cut off.'
-                    : 'Véhicule signalé volé. Moteur coupé.')
-                    : (_selectedLanguage == 'en'
-                    ? 'Failed to report vehicle as stolen'
-                    : 'Échec du signalement du véhicule volé'),
-                style: AppTypography.body2.copyWith(color: AppColors.white),
+            Text(
+              _selectedLanguage == 'en' ? 'Report Stolen?' : 'Signaler Volé?',
+              style: AppTypography.h3,
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _selectedLanguage == 'en' ? 'This will:' : 'Cela va:',
+              style: AppTypography.body1.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            SizedBox(height: AppSizes.spacingS),
+            _buildConfirmationItem(
+              _selectedLanguage == 'en'
+                  ? 'Immediately disable the vehicle engine'
+                  : 'Désactiver immédiatement le moteur du véhicule',
+            ),
+            _buildConfirmationItem(
+              _selectedLanguage == 'en'
+                  ? 'Create a theft alert'
+                  : 'Créer une alerte de vol',
+            ),
+            _buildConfirmationItem(
+              _selectedLanguage == 'en'
+                  ? 'Show you the vehicle location'
+                  : 'Afficher l\'emplacement du véhicule',
+            ),
+            _buildConfirmationItem(
+              _selectedLanguage == 'en'
+                  ? 'Show nearby police stations'
+                  : 'Afficher les postes de police à proximité',
+            ),
+            SizedBox(height: AppSizes.spacingM),
+            Container(
+              padding: EdgeInsets.all(AppSizes.spacingM),
+              decoration: BoxDecoration(
+                color: AppColors.error.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                border: Border.all(
+                  color: AppColors.error.withOpacity(0.3),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    color: AppColors.error,
+                    size: 20,
+                  ),
+                  SizedBox(width: AppSizes.spacingS),
+                  Expanded(
+                    child: Text(
+                      _selectedLanguage == 'en'
+                          ? 'This action cannot be undone'
+                          : 'Cette action ne peut pas être annulée',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.error,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         ),
-        backgroundColor: success ? AppColors.error : AppColors.error,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(
+              _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
+              style: AppTypography.button.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(
+              _selectedLanguage == 'en' ? 'Report Stolen' : 'Signaler Volé',
+              style: AppTypography.button.copyWith(
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // Show loading
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Container(
+          padding: EdgeInsets.all(AppSizes.spacingXL),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(AppSizes.radiusL),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary),
+              SizedBox(height: AppSizes.spacingL),
+              Text(
+                _selectedLanguage == 'en'
+                    ? 'Reporting stolen vehicle...'
+                    : 'Signalement du véhicule volé...',
+                style: AppTypography.body1,
+              ),
+            ],
+          ),
         ),
-        margin: EdgeInsets.all(AppSizes.spacingM),
+      ),
+    );
+
+    // Report stolen
+    final success = await _controller.reportStolen();
+
+    // Close loading dialog
+    if (!mounted) return;
+    Navigator.pop(context);
+
+    if (success) {
+      // Navigate to Stolen Alert Screen
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => StolenAlertScreen(
+            vehicleId: _controller.selectedVehicleId,
+            vehicleLat: _controller.vehicleLat,
+            vehicleLng: _controller.vehicleLng,
+            vehicleName: _controller.selectedVehicle?.nickname.isNotEmpty == true
+                ? _controller.selectedVehicle!.nickname
+                : '${_controller.selectedVehicle?.brand ?? ''} ${_controller.selectedVehicle?.model ?? ''}'.trim(),
+          ),
+        ),
+      );
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.white),
+              SizedBox(width: AppSizes.spacingM),
+              Expanded(
+                child: Text(
+                  _selectedLanguage == 'en'
+                      ? 'Vehicle reported as stolen. Engine disabled.'
+                      : 'Véhicule signalé volé. Moteur désactivé.',
+                  style: AppTypography.body1.copyWith(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } else {
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.error_outline, color: Colors.white),
+              SizedBox(width: AppSizes.spacingM),
+              Expanded(
+                child: Text(
+                  _selectedLanguage == 'en'
+                      ? 'Failed to report stolen. Please try again.'
+                      : 'Échec du signalement. Veuillez réessayer.',
+                  style: AppTypography.body1.copyWith(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  // 🆕 Helper widget for confirmation items
+  Widget _buildConfirmationItem(String text) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: AppSizes.spacingS),
+      child: Row(
+        children: [
+          Icon(
+            Icons.check_circle_outline,
+            color: AppColors.success,
+            size: 20,
+          ),
+          SizedBox(width: AppSizes.spacingS),
+          Expanded(
+            child: Text(
+              text,
+              style: AppTypography.body2,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -329,7 +545,7 @@ class _ModernDashboardState extends State<ModernDashboard> {
                         GoogleMap(
                           initialCameraPosition: CameraPosition(
                             target: LatLng(controller.vehicleLat, controller.vehicleLng),
-                            zoom: 25,
+                            zoom: 16,
                           ),
                           markers: controller.createMarkers(),
                           mapType: controller.currentMapType,
@@ -339,6 +555,7 @@ class _ModernDashboardState extends State<ModernDashboard> {
                           myLocationButtonEnabled: false,
                           zoomControlsEnabled: false,
                           mapToolbarEnabled: false,
+                          minMaxZoomPreference: MinMaxZoomPreference(10, 20), // ✅ Limit zoom range
                         ),
 
                         // Floating Vehicle Selector

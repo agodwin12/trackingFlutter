@@ -22,7 +22,7 @@ import 'package:tracking/src/screens/lock screen/lock_screen.dart';
 // Services
 import 'package:tracking/src/services/env_config.dart';
 import 'package:tracking/src/services/notification_service.dart';
-import 'package:tracking/src/services/biometric_service.dart';
+import 'package:tracking/src/services/pin_service.dart';
 
 /// =====================================================
 /// 🔥 Firebase Background Notification Handler
@@ -87,13 +87,7 @@ void main() async {
     await NotificationService.initialize();
     debugPrint('✅ Notification service initialized');
 
-    // ✅ Step 4: Initialize Biometric Service
-    debugPrint('🔐 Initializing biometric service...');
-    final biometricService = BiometricService();
-    await biometricService.initialize();
-    debugPrint('✅ Biometric service initialized');
-
-    // ✅ Step 5: Check onboarding status
+    // ✅ Step 4: Check onboarding status
     debugPrint('📱 Checking onboarding status...');
     final prefs = await SharedPreferences.getInstance();
     final bool hasSeenOnboarding = prefs.getBool('hasSeenOnboarding') ?? false;
@@ -101,7 +95,7 @@ void main() async {
 
     debugPrint('🚀 ========== APP INITIALIZATION COMPLETE ==========\n');
 
-    // ✅ Step 6: Launch app
+    // ✅ Step 5: Launch app
     runApp(MyApp(hasSeenOnboarding: hasSeenOnboarding));
   } catch (error) {
     debugPrint('❌ ========== FATAL INITIALIZATION ERROR ==========');
@@ -127,111 +121,79 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
-  final BiometricService _biometricService = BiometricService();
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-  bool _isLocked = false;
-  bool _isOnLoginOrOnboarding = true;
-
-  // Route observer to track navigation - initialize inline
-  late final _RouteObserver _routeObserver = _RouteObserver(onRouteChanged: _updateRouteStatus);
+  final PinService _pinService = PinService();
+  bool _isAppInBackground = false;
 
   @override
   void initState() {
     super.initState();
+    // ✅ Register lifecycle observer
     WidgetsBinding.instance.addObserver(this);
-    _initializeBiometrics();
-
-    // Set initial route status based on whether user has seen onboarding
-    // If they've seen onboarding, they're on login screen initially
-    _isOnLoginOrOnboarding = true;
-  }
-
-  Future<void> _initializeBiometrics() async {
-    await _biometricService.initialize();
+    debugPrint('✅ App lifecycle observer registered');
   }
 
   @override
   void dispose() {
+    // ✅ Unregister lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
+    debugPrint('🗑️ App lifecycle observer removed');
     super.dispose();
   }
 
+  /// =====================================================
+  /// 🔄 App Lifecycle Management (PIN Lock on Resume)
+  /// =====================================================
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
+  void didChangeAppLifecycleState(AppLifecycleState state) async {
+    debugPrint('📱 App lifecycle state changed: $state');
 
-    debugPrint('🔄 App lifecycle changed: $state');
-    debugPrint('🔍 Current state - isOnLoginOrOnboarding: $_isOnLoginOrOnboarding, isLocked: $_isLocked');
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+      // App is going to background
+        _isAppInBackground = true;
+        debugPrint('🔒 App moved to background');
+        break;
 
-    // ✅ Handle BOTH paused AND inactive as background states
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      // App went to background
-      if (!_isOnLoginOrOnboarding) {
-        _biometricService.onAppPaused();
-        debugPrint('🔒 App paused/inactive - timer started');
-      } else {
-        debugPrint('⏭️ Skipping lock - user is on login/onboarding screen');
-      }
-    } else if (state == AppLifecycleState.resumed) {
-      // App came to foreground
-      debugPrint('🔓 App resumed');
+      case AppLifecycleState.resumed:
+      // App is coming back to foreground
+        if (_isAppInBackground) {
+          debugPrint('✅ App resumed from background');
+          _isAppInBackground = false;
 
-      if (!_isOnLoginOrOnboarding && !_isLocked) {
-        if (_biometricService.shouldAuthenticate()) {
-          debugPrint('🔐 Authentication required - showing lock screen');
-          _showLockScreen();
-        } else {
-          debugPrint('✅ No authentication needed');
-        }
-      } else {
-        if (_isOnLoginOrOnboarding) {
-          debugPrint('⏭️ Skipping lock - user is on login/onboarding screen');
-        }
-        if (_isLocked) {
-          debugPrint('⏭️ Already locked');
-        }
-      }
-    }
-  }
+          // Check if user has PIN set
+          final hasPinSet = await _pinService.hasPinSet();
 
-  void _showLockScreen() {
-    setState(() {
-      _isLocked = true;
-    });
-  }
+          if (hasPinSet) {
+            // Get stored vehicle ID
+            final prefs = await SharedPreferences.getInstance();
+            final vehicleId = prefs.getInt('current_vehicle_id');
 
-  void _onAuthenticated() {
-    debugPrint('✅ User authenticated - unlocking app');
-    setState(() {
-      _isLocked = false;
-    });
-  }
+            if (vehicleId != null) {
+              debugPrint('🔐 PIN required - navigating to PIN entry screen');
 
-  void _updateRouteStatus(String? routeName) {
-    final wasOnLoginOrOnboarding = _isOnLoginOrOnboarding;
-
-    final newStatus = routeName == '/login' ||
-        routeName == '/onboarding' ||
-        routeName == null;
-
-    debugPrint('🔍 Route update: $routeName → isOnLoginOrOnboarding: $newStatus');
-
-    if (wasOnLoginOrOnboarding != newStatus) {
-      // Defer setState to avoid calling it during build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          setState(() {
-            _isOnLoginOrOnboarding = newStatus;
-          });
-          debugPrint('✅ Route status changed: $wasOnLoginOrOnboarding → $_isOnLoginOrOnboarding');
-
-          // If we just moved to a protected screen, reset the timer
-          if (!_isOnLoginOrOnboarding) {
-            _biometricService.resetTimer();
-            debugPrint('🔓 Moved to protected screen - timer reset');
+              // Navigate to PIN entry screen
+              NotificationService.navigatorKey.currentState?.pushNamedAndRemoveUntil(
+                '/pin-entry',
+                    (route) => false,
+                arguments: vehicleId,
+              );
+            } else {
+              debugPrint('⚠️ No vehicle ID stored - user may need to login again');
+            }
+          } else {
+            debugPrint('ℹ️ No PIN set - user can continue without PIN');
           }
         }
-      });
+        break;
+
+      case AppLifecycleState.detached:
+        debugPrint('❌ App is being terminated');
+        break;
+
+      case AppLifecycleState.hidden:
+        debugPrint('👁️ App is hidden');
+        break;
     }
   }
 
@@ -240,8 +202,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'PROXYM TRACKING',
       debugShowCheckedModeBanner: false,
-      navigatorKey: _navigatorKey,
-      navigatorObservers: [_routeObserver],
+
+      // ✅ CRITICAL: Use NotificationService's navigator key for notification navigation
+      navigatorKey: NotificationService.navigatorKey,
 
       // ✅ Material 3 Theme with PROXYM Blue
       theme: ThemeData(
@@ -257,16 +220,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         ),
       ),
 
-      // ✅ Show lock screen overlay when locked
-      builder: (context, child) {
-        if (_isLocked) {
-          return LockScreen(
-            onAuthenticated: _onAuthenticated,
-          );
-        }
-        return child ?? SizedBox.shrink();
-      },
-
       // ✅ Initial route based on onboarding status
       home: widget.hasSeenOnboarding ? ModernLoginScreen() : OnboardingScreen(),
 
@@ -275,9 +228,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       /// =====================================================
       onGenerateRoute: (settings) {
         debugPrint('📍 Navigating to: ${settings.name}');
-
-        // Update login/onboarding status
-        _updateRouteStatus(settings.name);
 
         switch (settings.name) {
         // ============================================
@@ -390,6 +340,19 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             );
 
         // ============================================
+        // PIN Lock Screen Route
+        // ============================================
+          case '/pin-entry':
+            final vehicleId = settings.arguments as int?;
+            if (vehicleId == null) {
+              return _errorRoute("❌ Missing vehicleId for PIN Entry");
+            }
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => PinEntryScreen(vehicleId: vehicleId),
+            );
+
+        // ============================================
         // Error Route (Unknown Route)
         // ============================================
           default:
@@ -403,7 +366,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   MaterialPageRoute _errorRoute(String message) {
     debugPrint(message);
     return MaterialPageRoute(
-      builder: (_) => Scaffold(
+      builder: (context) => Scaffold(
         backgroundColor: Colors.white,
         appBar: AppBar(
           title: Text('Error'),
@@ -442,7 +405,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 SizedBox(height: 32),
                 ElevatedButton.icon(
                   onPressed: () {
-                    Navigator.of(_).pushReplacementNamed('/login');
+                    Navigator.of(context).pushReplacementNamed('/login');
                   },
                   icon: Icon(Icons.home),
                   label: Text('Go to Login'),
@@ -458,41 +421,5 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         ),
       ),
     );
-  }
-}
-
-/// =====================================================
-/// 📍 ROUTE OBSERVER
-/// Tracks all route changes including initial route
-/// =====================================================
-class _RouteObserver extends NavigatorObserver {
-  final Function(String?) onRouteChanged;
-
-  _RouteObserver({required this.onRouteChanged});
-
-  void _handleRouteChange(Route? route) {
-    if (route != null) {
-      final routeName = route.settings.name;
-      debugPrint('👀 RouteObserver: Route changed to "$routeName"');
-      onRouteChanged(routeName);
-    }
-  }
-
-  @override
-  void didPush(Route route, Route? previousRoute) {
-    super.didPush(route, previousRoute);
-    _handleRouteChange(route);
-  }
-
-  @override
-  void didReplace({Route? newRoute, Route? oldRoute}) {
-    super.didReplace(newRoute: newRoute, oldRoute: oldRoute);
-    _handleRouteChange(newRoute);
-  }
-
-  @override
-  void didPop(Route route, Route? previousRoute) {
-    super.didPop(route, previousRoute);
-    _handleRouteChange(previousRoute);
   }
 }

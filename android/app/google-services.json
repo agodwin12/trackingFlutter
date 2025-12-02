@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "698840441680",
+    "project_id": "tracking-d950c",
+    "storage_bucket": "tracking-d950c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:698840441680:android:ef898228b9c6c1315a8255",
+        "android_client_info": {
+          "package_name": "com.proxym.tracking"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA_589b5k8rYJUxh7x_93hMbzuIuXZNr_Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

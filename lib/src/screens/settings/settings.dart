@@ -528,6 +528,419 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // ========================================
+  // CHANGE PIN DIALOG
+  // ========================================
+  void _showChangePinDialog() {
+    final TextEditingController currentPinController = TextEditingController();
+    final TextEditingController newPinController = TextEditingController();
+    final TextEditingController confirmPinController = TextEditingController();
+
+    bool isCurrentPinVisible = false;
+    bool isNewPinVisible = false;
+    bool isConfirmPinVisible = false;
+    bool isLoading = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppSizes.radiusL),
+              ),
+              contentPadding: EdgeInsets.all(AppSizes.spacingL),
+              title: Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.lock_reset,
+                      color: AppColors.primary,
+                      size: 20,
+                    ),
+                  ),
+                  SizedBox(width: AppSizes.spacingM),
+                  Text(
+                    _selectedLanguage == 'en' ? 'Change PIN' : 'Changer le PIN',
+                    style: AppTypography.subtitle1.copyWith(fontSize: 16),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _selectedLanguage == 'en'
+                          ? 'Enter your current PIN and choose a new one'
+                          : 'Entrez votre PIN actuel et choisissez-en un nouveau',
+                      style: AppTypography.body2.copyWith(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingL),
+
+                    // Current PIN Field
+                    Text(
+                      _selectedLanguage == 'en' ? 'Current PIN' : 'PIN actuel',
+                      style: AppTypography.body2.copyWith(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingS),
+                    TextField(
+                      controller: currentPinController,
+                      keyboardType: TextInputType.number,
+                      maxLength: 4,
+                      obscureText: !isCurrentPinVisible,
+                      decoration: InputDecoration(
+                        hintText: '••••',
+                        counterText: '',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: AppSizes.spacingM,
+                          vertical: AppSizes.spacingS,
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            isCurrentPinVisible
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            setDialogState(() {
+                              isCurrentPinVisible = !isCurrentPinVisible;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingM),
+
+                    // New PIN Field
+                    Text(
+                      _selectedLanguage == 'en' ? 'New PIN' : 'Nouveau PIN',
+                      style: AppTypography.body2.copyWith(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingS),
+                    TextField(
+                      controller: newPinController,
+                      keyboardType: TextInputType.number,
+                      maxLength: 4,
+                      obscureText: !isNewPinVisible,
+                      decoration: InputDecoration(
+                        hintText: '••••',
+                        counterText: '',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: AppSizes.spacingM,
+                          vertical: AppSizes.spacingS,
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            isNewPinVisible
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            setDialogState(() {
+                              isNewPinVisible = !isNewPinVisible;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingM),
+
+                    // Confirm PIN Field
+                    Text(
+                      _selectedLanguage == 'en'
+                          ? 'Confirm New PIN'
+                          : 'Confirmer le nouveau PIN',
+                      style: AppTypography.body2.copyWith(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingS),
+                    TextField(
+                      controller: confirmPinController,
+                      keyboardType: TextInputType.number,
+                      maxLength: 4,
+                      obscureText: !isConfirmPinVisible,
+                      decoration: InputDecoration(
+                        hintText: '••••',
+                        counterText: '',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: AppSizes.spacingM,
+                          vertical: AppSizes.spacingS,
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            isConfirmPinVisible
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            setDialogState(() {
+                              isConfirmPinVisible = !isConfirmPinVisible;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading
+                      ? null
+                      : () => Navigator.pop(dialogContext),
+                  child: Text(
+                    _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
+                    style: AppTypography.body2.copyWith(
+                      color: AppColors.textSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                    // Validate inputs
+                    if (currentPinController.text.length != 4) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _selectedLanguage == 'en'
+                                ? 'Please enter your current PIN'
+                                : 'Veuillez entrer votre PIN actuel',
+                          ),
+                          backgroundColor: AppColors.error,
+                        ),
+                      );
+                      return;
+                    }
+
+                    if (newPinController.text.length != 4) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _selectedLanguage == 'en'
+                                ? 'New PIN must be 4 digits'
+                                : 'Le nouveau PIN doit contenir 4 chiffres',
+                          ),
+                          backgroundColor: AppColors.error,
+                        ),
+                      );
+                      return;
+                    }
+
+                    if (newPinController.text != confirmPinController.text) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _selectedLanguage == 'en'
+                                ? 'PINs do not match'
+                                : 'Les PINs ne correspondent pas',
+                          ),
+                          backgroundColor: AppColors.error,
+                        ),
+                      );
+                      return;
+                    }
+
+                    if (currentPinController.text == newPinController.text) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _selectedLanguage == 'en'
+                                ? 'New PIN must be different from current PIN'
+                                : 'Le nouveau PIN doit être différent du PIN actuel',
+                          ),
+                          backgroundColor: AppColors.error,
+                        ),
+                      );
+                      return;
+                    }
+
+                    setDialogState(() {
+                      isLoading = true;
+                    });
+
+                    try {
+                      await _changePin(
+                        currentPinController.text,
+                        newPinController.text,
+                      );
+
+                      Navigator.pop(dialogContext);
+
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Row(
+                              children: [
+                                Icon(Icons.check_circle, color: AppColors.white, size: 20),
+                                SizedBox(width: AppSizes.spacingM),
+                                Expanded(
+                                  child: Text(
+                                    _selectedLanguage == 'en'
+                                        ? 'PIN changed successfully'
+                                        : 'PIN changé avec succès',
+                                    style: AppTypography.body2.copyWith(color: AppColors.white),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            backgroundColor: AppColors.success,
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                            ),
+                            margin: EdgeInsets.all(AppSizes.spacingM),
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      setDialogState(() {
+                        isLoading = false;
+                      });
+
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Row(
+                              children: [
+                                Icon(Icons.error_outline, color: AppColors.white, size: 20),
+                                SizedBox(width: AppSizes.spacingM),
+                                Expanded(
+                                  child: Text(
+                                    e.toString(),
+                                    style: AppTypography.body2.copyWith(color: AppColors.white),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            backgroundColor: AppColors.error,
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                            ),
+                            margin: EdgeInsets.all(AppSizes.spacingM),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                    ),
+                    elevation: 0,
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  ),
+                  child: isLoading
+                      ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.white,
+                    ),
+                  )
+                      : Text(
+                    _selectedLanguage == 'en' ? 'Change' : 'Changer',
+                    style: AppTypography.body2.copyWith(
+                      color: AppColors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _changePin(String currentPin, String newPin) async {
+    try {
+      debugPrint('🔐 Changing PIN for user: $_userId');
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/pin/change'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'userId': _userId,
+          'oldPin': currentPin,
+          'newPin': newPin,
+        }),
+      );
+
+      debugPrint('📡 Change PIN Response status: ${response.statusCode}');
+      debugPrint('📡 Change PIN Response body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        if (data['success'] == true) {
+          debugPrint('✅ PIN changed successfully');
+          return;
+        } else {
+          throw Exception(
+            _selectedLanguage == 'en'
+                ? (data['message'] ?? 'Failed to change PIN')
+                : (data['message'] ?? 'Échec du changement de PIN'),
+          );
+        }
+      } else if (response.statusCode == 400 || response.statusCode == 401) {
+        final data = jsonDecode(response.body);
+        throw Exception(
+          _selectedLanguage == 'en'
+              ? 'Current PIN is incorrect'
+              : 'Le PIN actuel est incorrect',
+        );
+      } else {
+        throw Exception(
+          _selectedLanguage == 'en'
+              ? 'Failed to change PIN. Please try again.'
+              : 'Échec du changement de PIN. Veuillez réessayer.',
+        );
+      }
+    } catch (e) {
+      debugPrint('🔥 Error changing PIN: $e');
+      rethrow;
+    }
+  }
+
   Future<void> _handleLogout() async {
     final bool? confirm = await showDialog<bool>(
       context: context,
@@ -793,6 +1206,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         inactiveTrackColor: AppColors.error,
                       ),
                     ),
+                  ),
+
+                  SizedBox(height: AppSizes.spacingXL),
+
+                  // Security Section
+                  _buildSectionHeader(
+                    _selectedLanguage == 'en' ? 'SECURITY' : 'SÉCURITÉ',
+                  ),
+                  SizedBox(height: AppSizes.spacingM),
+                  _buildSettingsTile(
+                    icon: Icons.lock_reset,
+                    title: _selectedLanguage == 'en' ? 'Change PIN' : 'Changer le PIN',
+                    subtitle: _selectedLanguage == 'en'
+                        ? 'Update your app security PIN'
+                        : 'Mettre à jour votre PIN de sécurité',
+                    onTap: _showChangePinDialog,
                   ),
 
                   SizedBox(height: AppSizes.spacingXL),

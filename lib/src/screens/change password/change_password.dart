@@ -1,4 +1,4 @@
-// lib/screens/reset_password_screen.dart
+// lib/screens/change_password/change_password.dart
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
+import '../../services/pin_service.dart';
+import '../create_pin screen/create_pin.dart';
 import '../dashboard/dashboard.dart';
 
 
@@ -26,6 +28,7 @@ class ResetPasswordScreen extends StatefulWidget {
 class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController = TextEditingController();
+  final PinService _pinService = PinService();
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _isLoading = false;
@@ -95,8 +98,23 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
           if (!mounted) return;
 
-          // Fetch user's vehicles and navigate to dashboard
-          await _navigateToDashboard();
+          // ✅ Check if user has PIN set
+          final hasPinSet = await _pinService.hasPinSet();
+
+          if (!hasPinSet) {
+            // No PIN - navigate to Create PIN screen
+            debugPrint('🔐 No PIN found - navigating to Create PIN screen');
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => CreatePinScreen(userId: widget.userId), // ✅ Fixed: Pass widget.userId instead of null
+              ),
+            );
+          } else {
+            // PIN exists - navigate to dashboard
+            debugPrint('✅ PIN already exists - navigating to dashboard');
+            await _navigateToDashboard();
+          }
         } else {
           throw Exception(data['message'] ?? 'Failed to set password');
         }
@@ -451,7 +469,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       height: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
-                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.black),
+                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.white),
                       ),
                     )
                         : Row(

@@ -2,7 +2,12 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:convert' as ui;
+import 'dart:typed_data';
+import 'dart:ui';
+import 'dart:ui' as ui hide Codec;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -71,6 +76,7 @@ class DashboardController extends ChangeNotifier {
     _selectedVehicleId = vehicleId;
   }
 
+
   // Initialize Dashboard
   Future<void> initialize() async {
     try {
@@ -88,16 +94,48 @@ class DashboardController extends ChangeNotifier {
   // Load Custom Marker
   Future<void> loadCustomMarker() async {
     try {
-      _customCarIcon = await BitmapDescriptor.fromAssetImage(
-        const ImageConfiguration(size: Size(48, 48)),
-        'assets/carmarker.png',
+      final ByteData data = await rootBundle.load('assets/carmarker.png');
+      final codec = await ui.instantiateImageCodec(
+        data.buffer.asUint8List(),
+        targetWidth: 80, // ✅ Adjust this value (try 60, 80, 100, 120)
+        targetHeight: 80, // ✅ Keep same as width for proportional scaling
       );
-      debugPrint('✅ Custom car marker loaded');
+      final ui.FrameInfo frameInfo = await codec.getNextFrame();
+      final ByteData? resizedData = await frameInfo.image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+
+      if (resizedData != null) {
+        _customCarIcon = BitmapDescriptor.fromBytes(resizedData.buffer.asUint8List());
+        debugPrint('✅ Custom car marker loaded and resized to 80x80');
+      } else {
+        throw Exception('Failed to resize image');
+      }
     } catch (e) {
       debugPrint('⚠️ Failed to load custom marker: $e');
       _customCarIcon = BitmapDescriptor.defaultMarker;
     }
   }
+// Update the createMarkers function
+  Set<Marker> createMarkers() {
+    if (selectedVehicle == null || _customCarIcon == null) return {};
+
+    return {
+      Marker(
+        markerId: const MarkerId('vehicle'),
+        position: LatLng(_vehicleLat, _vehicleLng),
+        icon: _customCarIcon!,
+        anchor: const Offset(0.5, 0.5), // ✅ Center the marker
+        infoWindow: InfoWindow(
+          title: selectedVehicle!.nickname.isNotEmpty
+              ? selectedVehicle!.nickname
+              : '${selectedVehicle!.brand} ${selectedVehicle!.model}',
+          snippet: selectedVehicle!.immatriculation,
+        ),
+      ),
+    };
+  }
+
 
   // Initialize Dashboard Data
   Future<void> initializeDashboard() async {
@@ -126,6 +164,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
+
   // Pull to Refresh
   Future<void> refresh() async {
     _isRefreshing = true;
@@ -146,6 +185,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
+
   // Fetch Vehicles
   Future<void> fetchVehicles() async {
     final user = await DashboardService.loadUserData();
@@ -158,34 +198,56 @@ class DashboardController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Fetch Dashboard Data
+  /// Fetch Dashboard Data
   Future<void> fetchDashboardData() async {
     try {
+      debugPrint('📡 ========== FETCHING DASHBOARD DATA ==========');
+
       // Fetch Geofencing Status
+      debugPrint('📡 Step 1: Fetching geofencing status for vehicle $_selectedVehicleId...');
       final geofencingActive = await DashboardService.fetchGeofencingStatus(_selectedVehicleId);
-      _geofenceEnabled = geofencingActive ?? true;
-      debugPrint("✅ Geofence status: ${_geofenceEnabled ? 'ON' : 'OFF'}");
+
+      if (geofencingActive != null) {
+        _geofenceEnabled = geofencingActive;
+        debugPrint("✅ Geofence status fetched from backend: ${_geofenceEnabled ? 'ON (ACTIVE)' : 'OFF (INACTIVE)'}");
+      } else {
+        debugPrint("⚠️ Geofence status is null, defaulting to TRUE");
+        _geofenceEnabled = true;
+      }
 
       // Fetch Safe Zone Status
+      debugPrint('📡 Step 2: Fetching safe zone status for vehicle $_selectedVehicleId...');
       final safeZoneResult = await SafeZoneService.getSafeZone(_selectedVehicleId);
+
       if (safeZoneResult['needsLogin'] == true) {
         debugPrint("⚠️ Auth error detected - may need to re-login");
         _safeZoneEnabled = false;
       } else if (safeZoneResult['success']) {
         _safeZoneEnabled = safeZoneResult['safeZone']?['is_active'] ?? false;
-        debugPrint("✅ Safe zone status: ${_safeZoneEnabled ? 'ON' : 'OFF'}");
+        debugPrint("✅ Safe zone status fetched from backend: ${_safeZoneEnabled ? 'ON (ACTIVE)' : 'OFF (INACTIVE)'}");
       } else {
+        debugPrint("⚠️ Safe zone fetch failed, defaulting to FALSE");
         _safeZoneEnabled = false;
       }
 
+      debugPrint('📡 ========== DASHBOARD DATA FETCH COMPLETE ==========');
+      debugPrint('   🔵 Geofence: ${_geofenceEnabled ? "ENABLED" : "DISABLED"}');
+      debugPrint('   🟢 Safe Zone: ${_safeZoneEnabled ? "ENABLED" : "DISABLED"}');
+      debugPrint('========================================================\n');
+
       notifyListeners();
     } catch (e) {
-      debugPrint("🔥 _fetchDashboardData error: $e");
+      debugPrint("🔥 ========== ERROR FETCHING DASHBOARD DATA ==========");
+      debugPrint("🔥 Error: $e");
+      debugPrint("🔥 Setting default values - Geofence: TRUE, Safe Zone: FALSE");
+      debugPrint("🔥 ====================================================\n");
+
       _geofenceEnabled = true;
       _safeZoneEnabled = false;
       notifyListeners();
     }
   }
+
 
   // ✅ NEW: Fetch engine status from database (latest location record)
   Future<void> fetchEngineStatusFromDatabase() async {
@@ -509,15 +571,52 @@ class DashboardController extends ChangeNotifier {
   }
 
 
-  // Report Stolen
   Future<bool> reportStolen() async {
     _isReportingStolen = true;
     notifyListeners();
 
     try {
-      debugPrint("🚨 Reporting vehicle as stolen - sending CLOSERELAY");
+      debugPrint("🚨 Reporting vehicle as stolen");
 
-      final resp = await http.post(
+      // Step 1: Get current user ID
+      final prefs = await SharedPreferences.getInstance();
+      final userDataString = prefs.getString('user');
+
+      if (userDataString == null) {
+        debugPrint("❌ No user data found");
+        _isReportingStolen = false;
+        notifyListeners();
+        return false;
+      }
+
+      final userData = jsonDecode(userDataString);
+      final int userId = userData['id'];
+
+      // Step 2: Create stolen alert in database
+      debugPrint("📝 Creating stolen alert in database...");
+      final alertResponse = await http.post(
+        Uri.parse("${EnvConfig.baseUrl}/alerts/report-stolen"),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "vehicleId": _selectedVehicleId,
+          "userId": userId,
+          "latitude": _vehicleLat,
+          "longitude": _vehicleLng,
+        }),
+      );
+
+      debugPrint("📡 Alert creation response: ${alertResponse.statusCode}");
+
+      if (alertResponse.statusCode != 201) {
+        throw Exception('Failed to create stolen alert');
+      }
+
+      final alertData = jsonDecode(alertResponse.body);
+      debugPrint("✅ Stolen alert created: ${alertData['alert']['id']}");
+
+      // Step 3: Send CLOSERELAY command to disable engine
+      debugPrint("🔧 Sending CLOSERELAY command to disable engine...");
+      final commandResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
         headers: {"Content-Type": "application/json"},
         body: json.encode({
@@ -529,26 +628,30 @@ class DashboardController extends ChangeNotifier {
         }),
       );
 
-      debugPrint("📡 Report stolen response: ${resp.statusCode}");
+      debugPrint("📡 Engine disable response: ${commandResponse.statusCode}");
 
-      final data = jsonDecode(resp.body);
+      final commandData = jsonDecode(commandResponse.body);
+      final bool commandOk = commandData['success'] == true ||
+          (commandData['response'] is Map && commandData['response']['success'] == 'true');
 
-      final bool okTop = data['success'] == true;
-      final bool okNested = (data['response'] is Map) && (data['response']['success'] == 'true');
+      if (commandResponse.statusCode == 200 && commandOk) {
+        debugPrint('✅ Engine disabled successfully');
 
-      if (resp.statusCode == 200 && (okTop || okNested)) {
-        debugPrint('✅ Stolen report sent successfully');
+        // Update engine state
+        _engineOn = false;
 
-        // ✅ NEW: Wait and verify
-        await Future.delayed(Duration(seconds: 3));
+        // Wait and verify
+        await Future.delayed(Duration(seconds: 2));
         await fetchEngineStatusFromDatabase();
-
-        _isReportingStolen = false;
-        notifyListeners();
-        return true;
       } else {
-        throw Exception('Command failed');
+        debugPrint('⚠️ Engine disable command may have failed, but alert was created');
       }
+
+      _isReportingStolen = false;
+      notifyListeners();
+
+      return true;
+
     } catch (error) {
       debugPrint("🔥 Error reporting stolen: $error");
       _isReportingStolen = false;
@@ -618,24 +721,7 @@ class DashboardController extends ChangeNotifier {
     _mapController = controller;
   }
 
-  // Create Markers
-  Set<Marker> createMarkers() {
-    if (selectedVehicle == null || _customCarIcon == null) return {};
 
-    return {
-      Marker(
-        markerId: const MarkerId('vehicle'),
-        position: LatLng(_vehicleLat, _vehicleLng),
-        icon: _customCarIcon!,
-        infoWindow: InfoWindow(
-          title: selectedVehicle!.nickname.isNotEmpty
-              ? selectedVehicle!.nickname
-              : '${selectedVehicle!.brand} ${selectedVehicle!.model}',
-          snippet: selectedVehicle!.immatriculation,
-        ),
-      ),
-    };
-  }
 
   // Hex to Color Utility
   Color hexToColor(String hexString) {

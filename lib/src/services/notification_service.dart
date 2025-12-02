@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,6 +27,9 @@ class NotificationService {
   static bool _initialized = false;
   static String? _fcmToken;
   static bool _firebaseAvailable = false;
+
+  // ✅ Global navigator key for navigation from notifications
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
   /// ✅ Initialize Firebase and notification services
   static Future<void> initialize() async {
@@ -184,13 +188,28 @@ class NotificationService {
     debugPrint("📱 Notification type: $type");
 
     switch (type) {
+      case 'geofence_violation':
+        _handleGeofenceAlert(data);
+        debugPrint("🛡️ Navigate to safe zone details");
+        final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
+        if (vehicleId != null) {
+          _navigateToDashboard(vehicleId);
+        }
+        break;
       case 'geofence':
-        debugPrint("🗺️ Navigate to geofence details");
-        // TODO: Navigate to geofence screen
+        _handleGeofenceAlert(data);
+        debugPrint("🛡️ Navigate to safe zone details");
+        final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
+        if (vehicleId != null) {
+          _navigateToDashboard(vehicleId);
+        }
         break;
       case 'safe_zone':
         debugPrint("🛡️ Navigate to safe zone details");
-        // TODO: Navigate to safe zone screen
+        final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
+        if (vehicleId != null) {
+          _navigateToDashboard(vehicleId);
+        }
         break;
       case 'speeding':
         debugPrint("⚡ Navigate to speed alerts");
@@ -198,7 +217,10 @@ class NotificationService {
         break;
       case 'engine_control':
         debugPrint("🔧 Navigate to engine control");
-        // TODO: Navigate to dashboard
+        final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
+        if (vehicleId != null) {
+          _navigateToDashboard(vehicleId);
+        }
         break;
       case 'trip':
         debugPrint("🚗 Navigate to trip details");
@@ -210,7 +232,247 @@ class NotificationService {
         break;
       default:
         debugPrint("📱 Navigate to dashboard");
-    // TODO: Navigate to dashboard
+        final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
+        if (vehicleId != null) {
+          _navigateToDashboard(vehicleId);
+        }
+    }
+  }
+
+  /// ✅ Handle geofence violation alert
+  static void _handleGeofenceAlert(Map<String, dynamic> data) {
+    final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
+    final vehicleName = data['vehicleName'] ?? 'Your vehicle';
+    final latitude = double.tryParse(data['latitude']?.toString() ?? '');
+    final longitude = double.tryParse(data['longitude']?.toString() ?? '');
+
+    if (vehicleId == null || latitude == null || longitude == null) {
+      debugPrint('❌ Invalid geofence alert data');
+      return;
+    }
+
+    debugPrint('🚨 Handling geofence alert for vehicle $vehicleId');
+
+    // Navigate to dashboard
+    _navigateToDashboard(vehicleId);
+
+    // Show dialog after navigation
+    Future.delayed(const Duration(milliseconds: 800), () {
+      _showGeofenceAlertDialog(vehicleId, vehicleName, latitude, longitude);
+    });
+  }
+
+  /// ✅ Navigate to dashboard
+  static void _navigateToDashboard(int vehicleId) {
+    final context = navigatorKey.currentContext;
+    if (context != null) {
+      debugPrint('🧭 Navigating to dashboard for vehicle $vehicleId');
+      Navigator.of(context).pushReplacementNamed(
+        '/dashboard',
+        arguments: vehicleId,
+      );
+    } else {
+      debugPrint('⚠️ Navigator context not available');
+    }
+  }
+
+  /// ✅ Show geofence alert dialog with option to disable engine
+  static void _showGeofenceAlertDialog(
+      int vehicleId,
+      String vehicleName,
+      double latitude,
+      double longitude,
+      ) {
+    final context = navigatorKey.currentContext;
+    if (context == null) {
+      debugPrint('⚠️ Cannot show dialog - context not available');
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: Row(
+          children: [
+            Icon(
+              Icons.warning_rounded,
+              color: Colors.red,
+              size: 28,
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Geofence Alert',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$vehicleName has left your defined geofence area.',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.location_on, color: Colors.red, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Location: ${latitude.toStringAsFixed(6)}, ${longitude.toStringAsFixed(6)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.red[900],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
+            Text(
+              'Do you want to disable the engine?',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+            },
+            child: Text(
+              'Not Now',
+              style: TextStyle(color: Colors.grey[700]),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _disableEngine(vehicleId, vehicleName);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: Text('Disable Engine'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// ✅ Disable engine (send CLOSERELAY command)
+  static Future<void> _disableEngine(int vehicleId, String vehicleName) async {
+    final context = navigatorKey.currentContext;
+    if (context == null) return;
+
+    // Show loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Center(
+        child: Container(
+          padding: EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: Color(0xFF3B82F6)),
+              SizedBox(height: 16),
+              Text('Disabling engine...'),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      debugPrint('🔧 Sending CLOSERELAY command for vehicle $vehicleId');
+
+      final response = await http.post(
+        Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "vehicleId": vehicleId,
+          "command": "CLOSERELAY",
+          "params": "",
+          "password": "",
+          "sendTime": "",
+        }),
+      );
+
+      Navigator.of(context).pop(); // Close loading
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final bool success = data['success'] == true ||
+            (data['response'] is Map && data['response']['success'] == 'true');
+
+        if (success) {
+          debugPrint('✅ Engine disabled successfully');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.white),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text('Engine disabled successfully'),
+                  ),
+                ],
+              ),
+              backgroundColor: Colors.red,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          throw Exception('Command failed');
+        }
+      } else {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('❌ Error disabling engine: $e');
+
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop(); // Close loading if still open
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to disable engine: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -306,7 +568,6 @@ class NotificationService {
     debugPrint("📱 FCM Token received: ${token.substring(0, 50)}...");
     debugPrint("ℹ️ Will register after user login");
   }
-
 
   /// ✅ Unregister token (call on logout)
   static Future<void> unregisterToken() async {
@@ -450,7 +711,6 @@ class NotificationService {
       return false;
     }
   }
-
 
   /// ✅ Public method to show notification (for backward compatibility)
   static Future<void> showNotification({

@@ -49,11 +49,7 @@ class AppColors {
 }
 
 class AppTypography {
-  // ========== PROXYM MOBILITY FONTS (From Charte Graphique) ==========
 
-  /// Primary Font: TESLA (for large titles only)
-  /// Note: You need to add TESLA font to your project
-  /// For now, using Poppins as fallback with similar weight
   static TextStyle tesla({
     double fontSize = 24,
     FontWeight fontWeight = FontWeight.w800,
@@ -68,8 +64,7 @@ class AppTypography {
     );
   }
 
-  /// Secondary Font: Metropolis (for subtitles and paragraphs)
-  /// Note: Using Poppins as Metropolis is similar
+
   static TextStyle metropolis({
     double fontSize = 14,
     FontWeight fontWeight = FontWeight.w400,

@@ -260,25 +260,46 @@ class DashboardService {
   }
 
   /// Fetch geofencing status
-  static Future<bool> fetchGeofencingStatus(int vehicleId) async {
+  static Future<bool?> fetchGeofencingStatus(int vehicleId) async {
     try {
+      debugPrint("📡 Fetching geofencing status for vehicle $vehicleId...");
+
       final response = await http.get(
         Uri.parse("$baseUrl/vehicle/$vehicleId/security/status"),
       );
 
       debugPrint("📡 Geofencing status response: ${response.statusCode}");
+      debugPrint("📦 Response body: ${response.body}");
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
-        if (data['security'] != null) {
-          return data['security']['is_active'] ?? false;
+        if (data['success'] == true && data['security'] != null) {
+          // ✅ Parse is_active properly (handles both boolean and TINYINT)
+          final isActive = data['security']['is_active'];
+          bool status = false;
+
+          if (isActive is bool) {
+            status = isActive;
+          } else if (isActive is num) {
+            status = isActive != 0; // 1 = true, 0 = false
+          } else if (isActive is String) {
+            status = (isActive == '1' || isActive.toLowerCase() == 'true');
+          }
+
+          debugPrint("✅ Geofencing status parsed: ${status ? 'ACTIVE (ON)' : 'INACTIVE (OFF)'}");
+          return status;
+        } else {
+          debugPrint("⚠️ Invalid response structure or success=false");
+          return null;
         }
+      } else {
+        debugPrint("❌ HTTP error: ${response.statusCode}");
+        return null;
       }
-      return false;
     } catch (error) {
-      debugPrint("⚠️ Error fetching geofencing status: $error");
-      return false;
+      debugPrint("🔥 Error fetching geofencing status: $error");
+      return null;
     }
   }
 

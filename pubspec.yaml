@@ -36,6 +36,7 @@ dependencies:
   local_auth: ^2.1.7
   local_auth_android: ^1.0.34
   local_auth_ios: ^1.1.5
+  crypto: ^3.0.3
 
 flutter_icons:
   android: true
