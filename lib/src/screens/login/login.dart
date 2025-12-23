@@ -9,6 +9,7 @@ import '../../services/env_config.dart';
 import '../../services/notification_service.dart';
 import '../change password/change_password.dart';
 import '../dashboard/dashboard.dart';
+import '../forgot_password/forgot_password.dart';
 
 class Country {
   final String name;
@@ -757,7 +758,13 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
         // Forgot Password
         TextButton(
           onPressed: () {
-            // Handle forgot password
+            // Navigate to Forgot Password screen
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ForgotPasswordScreen(),
+              ),
+            );
           },
           style: TextButton.styleFrom(
             padding: EdgeInsets.zero,

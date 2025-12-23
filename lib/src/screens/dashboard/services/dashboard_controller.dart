@@ -39,6 +39,11 @@ class DashboardController extends ChangeNotifier {
   BitmapDescriptor? _customCarIcon;
   GoogleMapController? _mapController;
 
+  // ✅ NEW: Battery State Variables
+  int _batteryPercentage = 0;
+  double _batteryVoltage = 0.0;
+  bool _isLowBattery = false;
+
   // Socket Service
   final SocketService _socketService = SocketService();
   StreamSubscription<Map<String, dynamic>>? _alertSubscription;
@@ -63,6 +68,11 @@ class DashboardController extends ChangeNotifier {
   List<Vehicle> get vehicles => _vehicles;
   BitmapDescriptor? get customCarIcon => _customCarIcon;
   GoogleMapController? get mapController => _mapController;
+
+  //  Battery Getters
+  int get batteryPercentage => _batteryPercentage;
+  double get batteryVoltage => _batteryVoltage;
+  bool get isLowBattery => _isLowBattery;
 
   Vehicle? get selectedVehicle => _vehicles.isEmpty
       ? null
@@ -273,6 +283,12 @@ class DashboardController extends ChangeNotifier {
 
           // Update engine state
           _engineOn = newEngineState;
+
+          // ✅ NEW: Parse battery info from raw status if available
+          if (data['rawStatus'] != null && data['rawStatus'].isNotEmpty) {
+            _parseVehicleStatus(data['rawStatus']);
+          }
+
           notifyListeners();
         } else {
           debugPrint('⚠️ Engine status fetch unsuccessful');
@@ -282,6 +298,44 @@ class DashboardController extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('🔥 Error fetching engine status: $e');
+    }
+  }
+
+  void _parseVehicleStatus(String status) {
+    try {
+      // Status format: "mil,oil,weight,temp,batteryV,powerV,gpscount,gsmlevel,..."
+      final parts = status.split(',');
+
+      if (parts.length >= 5) {
+        final batteryValue = double.tryParse(parts[4]) ?? 0;
+
+        if (batteryValue > 0) {
+          if (batteryValue < 100) {
+            // It's a percentage
+            _batteryPercentage = batteryValue.round();
+            _batteryVoltage = 0.0;
+            _isLowBattery = _batteryPercentage < 20;
+          } else {
+            // It's voltage (subtract 100 to get actual voltage)
+            _batteryVoltage = batteryValue - 100;
+            _isLowBattery = _batteryVoltage < 3.6;
+
+            // Estimate percentage from voltage
+            // 4.2V = 100%, 3.7V = 50%, 3.3V = 0%
+            if (_batteryVoltage >= 3.3 && _batteryVoltage <= 4.2) {
+              _batteryPercentage = ((_batteryVoltage - 3.3) / (4.2 - 3.3) * 100).round();
+            } else if (_batteryVoltage > 4.2) {
+              _batteryPercentage = 100;
+            } else {
+              _batteryPercentage = 0;
+            }
+          }
+
+          debugPrint('🔋 Battery parsed: ${_batteryPercentage}% / ${_batteryVoltage}V (Low: $_isLowBattery)');
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error parsing battery status: $e');
     }
   }
 
@@ -344,10 +398,16 @@ class DashboardController extends ChangeNotifier {
       if (vehicleId == _selectedVehicleId) {
         final lat = data['latitude'];
         final lon = data['longitude'];
+        final status = data['status']; // ✅ NEW: Get status for battery parsing
 
         if (lat != null && lon != null) {
           _vehicleLat = lat is double ? lat : (lat as num).toDouble();
           _vehicleLng = lon is double ? lon : (lon as num).toDouble();
+
+          // ✅ NEW: Parse battery info from status if available
+          if (status != null && status is String && status.isNotEmpty) {
+            _parseVehicleStatus(status);
+          }
 
           _mapController?.animateCamera(
             CameraUpdate.newLatLng(LatLng(_vehicleLat, _vehicleLng)),
@@ -365,7 +425,7 @@ class DashboardController extends ChangeNotifier {
 
   // Start Cache Polling
   void startCachePolling() {
-    _cachePollingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+    _cachePollingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       fetchCurrentLocation(silent: true);
     });
   }

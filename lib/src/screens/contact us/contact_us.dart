@@ -7,8 +7,8 @@ class ContactScreen extends StatelessWidget {
   const ContactScreen({Key? key}) : super(key: key);
 
   // PROXYM TRACKING Contact Details
-  static const String phoneNumber = '+237123456789'; // Replace with actual number
-  static const String email = 'support@proxymtracking.com'; // Replace with actual email
+  static const String phoneNumber = '+237694587675'; // Replace with actual number
+  static const String email = 'accueil@proxymgroup.com'; // Replace with actual email
   static const String website = 'https://proxymtracking.com'; // Replace with actual website
 
   Future<void> _makePhoneCall(BuildContext context) async {

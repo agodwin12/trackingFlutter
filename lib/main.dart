@@ -5,6 +5,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 // Firebase
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:tracking/src/screens/change%20password%20in%20app/change_password.dart';
 
 // Screens
 import 'package:tracking/src/screens/login/login.dart';
@@ -268,6 +269,20 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               builder: (_) => ProfileScreen(vehicleId: vehicleId),
             );
 
+          case '/change-password':
+            final args = settings.arguments as Map<String, dynamic>?;
+            if (args == null || args['phone'] == null || args['userId'] == null) {
+              return _errorRoute("❌ Missing phone or userId for Change Password");
+            }
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => ChangePasswordScreen(
+                initialPhone: args['phone'] as String,
+                userId: args['userId'] as int,
+              ),
+            );
+
+
           case '/settings':
             final vehicleId = settings.arguments as int?;
             if (vehicleId == null) {
@@ -351,6 +366,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               settings: settings,
               builder: (_) => PinEntryScreen(vehicleId: vehicleId),
             );
+
+
 
         // ============================================
         // Error Route (Unknown Route)

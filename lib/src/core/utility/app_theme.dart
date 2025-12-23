@@ -56,7 +56,7 @@ class AppTypography {
     Color color = AppColors.black,
     double? letterSpacing,
   }) {
-    return GoogleFonts.poppins(
+    return GoogleFonts.orbitron(
       fontSize: fontSize,
       fontWeight: fontWeight,
       color: color,
@@ -71,7 +71,7 @@ class AppTypography {
     Color color = AppColors.black,
     double? height,
   }) {
-    return GoogleFonts.poppins(
+    return GoogleFonts.metrophobic(
       fontSize: fontSize,
       fontWeight: fontWeight,
       color: color,

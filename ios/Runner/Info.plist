@@ -49,5 +49,12 @@
     <string>This app needs access to your location to track delivery routes and provide real-time location updates while you're using the app.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>This app needs access to your location even when not in use to track delivery routes in the background and provide continuous location updates for accurate tracking.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>fetch</string>
+        <string>remote-notification</string>
+    </array>
+    <key>FirebaseAppDelegateProxyEnabled</key>
+    <false/>
 </dict>
 </plist>

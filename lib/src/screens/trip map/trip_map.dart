@@ -40,13 +40,13 @@ class _TripMapScreenState extends State<TripMapScreen> {
   LatLng? _startLocation;
   LatLng? _endLocation;
   List<LatLng> _routePoints = [];
-  List<LatLng> _snappedRoutePoints = [];
+  List<LatLng> _exactRoutePoints = [];
 
-  // 🆕 Map type control
+  // Map type control
   MapType _currentMapType = MapType.normal;
   bool _showMapTypeMenu = false;
 
-  // 🆕 Default zoom level
+  // Default zoom level
   static const double DEFAULT_ZOOM = 15.0;
 
   @override
@@ -110,8 +110,8 @@ class _TripMapScreenState extends State<TripMapScreen> {
             debugPrint("🗺️ Route points: ${_routePoints.length}");
           });
 
-          // Snap waypoints to roads
-          await _snapToRoads();
+          // Get exact route using Directions API
+          await _getActualRoute();
 
           setState(() {
             _buildMarkersAndPolylines();
@@ -138,7 +138,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  // 🆕 Pull to refresh
+  // Pull to refresh
   Future<void> _handleRefresh() async {
     setState(() => _isRefreshing = true);
 
@@ -171,58 +171,115 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  Future<void> _snapToRoads() async {
+  // Get exact route using Google Directions API
+  Future<void> _getActualRoute() async {
     if (_routePoints.isEmpty) return;
 
-    debugPrint("🛣️ Snapping ${_routePoints.length} points to roads...");
+    debugPrint("🛣️ Getting exact route for ${_routePoints.length} waypoints...");
+
+    List<LatLng> completeRoute = [];
 
     try {
-      List<LatLng> pointsToSnap = _routePoints;
+      // Sample waypoints if too many (to avoid too many API calls)
+      List<LatLng> sampledPoints = _routePoints;
 
-      if (_routePoints.length > 100) {
-        int step = (_routePoints.length / 100).ceil();
-        pointsToSnap = [];
+      if (_routePoints.length > 20) {
+        int step = (_routePoints.length / 20).ceil();
+        sampledPoints = [];
         for (int i = 0; i < _routePoints.length; i += step) {
-          pointsToSnap.add(_routePoints[i]);
+          sampledPoints.add(_routePoints[i]);
         }
-        debugPrint("📉 Sampled to ${pointsToSnap.length} points");
+        // Always include the last point
+        if (sampledPoints.last != _routePoints.last) {
+          sampledPoints.add(_routePoints.last);
+        }
+        debugPrint("📉 Sampled to ${sampledPoints.length} waypoints for route calculation");
       }
 
-      String path = pointsToSnap.map((p) => '${p.latitude},${p.longitude}').join('|');
+      // Get directions between each consecutive waypoint pair
+      for (int i = 0; i < sampledPoints.length - 1; i++) {
+        final origin = sampledPoints[i];
+        final destination = sampledPoints[i + 1];
 
-      final url = Uri.parse(
-          'https://roads.googleapis.com/v1/snapToRoads'
-              '?path=$path'
-              '&interpolate=true'
-              '&key=$GOOGLE_MAPS_API_KEY'
-      );
+        debugPrint("🔍 Getting route segment ${i + 1}/${sampledPoints.length - 1}");
 
-      final response = await http.get(url);
+        final url = Uri.parse(
+            'https://maps.googleapis.com/maps/api/directions/json'
+                '?origin=${origin.latitude},${origin.longitude}'
+                '&destination=${destination.latitude},${destination.longitude}'
+                '&mode=driving'
+                '&key=$GOOGLE_MAPS_API_KEY'
+        );
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+        final response = await http.get(url);
 
-        if (data['snappedPoints'] != null) {
-          _snappedRoutePoints = (data['snappedPoints'] as List).map((point) {
-            return LatLng(
-              point['location']['latitude'],
-              point['location']['longitude'],
-            );
-          }).toList();
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
 
-          debugPrint("✅ Snapped to ${_snappedRoutePoints.length} road points");
+          if (data['routes'] != null && data['routes'].isNotEmpty) {
+            final polylinePoints = data['routes'][0]['overview_polyline']['points'];
+            final decodedPoints = _decodePolyline(polylinePoints);
+
+            // Avoid duplicate points between segments
+            if (completeRoute.isNotEmpty && decodedPoints.isNotEmpty) {
+              if (completeRoute.last == decodedPoints.first) {
+                decodedPoints.removeAt(0);
+              }
+            }
+
+            completeRoute.addAll(decodedPoints);
+          } else {
+            debugPrint("⚠️ No route found for segment $i, using straight line");
+            completeRoute.add(destination);
+          }
         } else {
-          debugPrint("⚠️ No snapped points returned, using original points");
-          _snappedRoutePoints = _routePoints;
+          debugPrint("⚠️ Directions API error: ${response.statusCode}");
+          completeRoute.add(destination);
         }
-      } else {
-        debugPrint("⚠️ Roads API error: ${response.statusCode}, using original points");
-        _snappedRoutePoints = _routePoints;
+
+        // Avoid hitting API rate limits
+        await Future.delayed(Duration(milliseconds: 150));
       }
+
+      _exactRoutePoints = completeRoute;
+      debugPrint("✅ Got exact route with ${_exactRoutePoints.length} points");
+
     } catch (e) {
-      debugPrint("⚠️ Error snapping to roads: $e, using original points");
-      _snappedRoutePoints = _routePoints;
+      debugPrint("⚠️ Error getting exact route: $e, using waypoints");
+      _exactRoutePoints = _routePoints;
     }
+  }
+
+  // Decode Google's encoded polyline
+  List<LatLng> _decodePolyline(String encoded) {
+    List<LatLng> points = [];
+    int index = 0, len = encoded.length;
+    int lat = 0, lng = 0;
+
+    while (index < len) {
+      int b, shift = 0, result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
+
+      points.add(LatLng(lat / 1e5, lng / 1e5));
+    }
+
+    return points;
   }
 
   void _buildMarkersAndPolylines() {
@@ -257,8 +314,9 @@ class _TripMapScreenState extends State<TripMapScreen> {
       ),
     );
 
-    final pointsToUse = _snappedRoutePoints.isNotEmpty
-        ? _snappedRoutePoints
+    // Use exact route if available, otherwise use raw waypoints
+    final pointsToUse = _exactRoutePoints.isNotEmpty
+        ? _exactRoutePoints
         : _routePoints;
 
     if (pointsToUse.isNotEmpty) {
@@ -273,13 +331,13 @@ class _TripMapScreenState extends State<TripMapScreen> {
           jointType: JointType.round,
         ),
       );
-      debugPrint("✅ Drew polyline with ${pointsToUse.length} snapped points");
+      debugPrint("✅ Drew polyline with ${pointsToUse.length} points");
     }
   }
 
   Future<void> _fitMapToRoute() async {
-    final pointsToUse = _snappedRoutePoints.isNotEmpty
-        ? _snappedRoutePoints
+    final pointsToUse = _exactRoutePoints.isNotEmpty
+        ? _exactRoutePoints
         : _routePoints;
 
     if (pointsToUse.isEmpty) return;
@@ -312,19 +370,19 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  // 🆕 Zoom in
+  // Zoom in
   Future<void> _zoomIn() async {
     final controller = await _controller.future;
     controller.animateCamera(CameraUpdate.zoomIn());
   }
 
-  // 🆕 Zoom out
+  // Zoom out
   Future<void> _zoomOut() async {
     final controller = await _controller.future;
     controller.animateCamera(CameraUpdate.zoomOut());
   }
 
-  // 🆕 Change map type
+  // Change map type
   void _changeMapType(MapType type) {
     setState(() {
       _currentMapType = type;
@@ -359,11 +417,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
           GoogleMap(
             initialCameraPosition: CameraPosition(
               target: _startLocation ?? const LatLng(3.8480, 11.5021),
-              zoom: DEFAULT_ZOOM, // 🆕 Updated default zoom
+              zoom: DEFAULT_ZOOM,
             ),
             markers: _markers,
             polylines: _polylines,
-            mapType: _currentMapType, // 🆕 Dynamic map type
+            mapType: _currentMapType,
             onMapCreated: (GoogleMapController controller) {
               if (!_controller.isCompleted) {
                 _controller.complete(controller);
@@ -378,13 +436,13 @@ class _TripMapScreenState extends State<TripMapScreen> {
           // Top Bar
           _buildTopBar(),
 
-          // 🆕 Floating Controls (right side)
+          // Floating Controls
           _buildFloatingControls(),
 
           // Bottom Card
           _buildBottomCard(),
 
-          // 🆕 Loading overlay for refresh
+          // Loading overlay for refresh
           if (_isRefreshing)
             Positioned(
               top: 120,
@@ -560,7 +618,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
                   ],
                 ),
               ),
-              // 🆕 Refresh button
+              // Refresh button
               IconButton(
                 onPressed: _isRefreshing ? null : _handleRefresh,
                 icon: Icon(
@@ -589,7 +647,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
                     ),
                     SizedBox(width: AppSizes.spacingXS),
                     Text(
-                      '${_routePoints.length} pts',
+                      '${_exactRoutePoints.isNotEmpty ? _exactRoutePoints.length : _routePoints.length} pts',
                       style: AppTypography.caption.copyWith(
                         fontSize: 11,
                         color: AppColors.success,
@@ -606,7 +664,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
     );
   }
 
-  // 🆕 Floating controls (Map type, Zoom)
+  // Floating controls (Map type, Zoom)
   Widget _buildFloatingControls() {
     return Positioned(
       right: AppSizes.spacingM,
@@ -747,7 +805,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
     );
   }
 
-  // 🆕 Map type option widget
+  // Map type option widget
   Widget _buildMapTypeOption({
     required IconData icon,
     required String label,

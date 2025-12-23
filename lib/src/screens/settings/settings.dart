@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-
+import 'widgets/settings_skeleton.dart';
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
 import '../contact us/contact_us.dart';
@@ -481,7 +481,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       case 'Safe Zone Alerts':
         message = _selectedLanguage == 'en'
             ? (isEnabled ? 'Safe zone alerts enabled' : 'Safe zone alerts disabled')
-            : (isEnabled ? 'Alertes zone sûre activées' : 'Alertes zone sûre désactivées');
+            : (isEnabled ? 'Alertes Zone de sécurité activées' : 'Alertes Zone de sécurité désactivées');
         icon = Icons.shield_outlined;
         break;
       case 'Trip Tracking':
@@ -1042,12 +1042,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return Scaffold(
-        backgroundColor: AppColors.background,
-        body: Center(
-          child: CircularProgressIndicator(color: AppColors.primary),
-        ),
-      );
+      return const SettingsSkeleton();  // ✅ Use skeleton instead
     }
 
     return Scaffold(
@@ -1157,10 +1152,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   _buildSettingsTile(
                     icon: Icons.shield_outlined,
-                    title: _selectedLanguage == 'en' ? 'Safe Zone Alerts' : 'Alertes zone sûre',
+                    title: _selectedLanguage == 'en' ? 'Safe Zone Alerts' : 'Alertes Zone de sécurité',
                     subtitle: _selectedLanguage == 'en'
                         ? 'Get notified about safe zone activity'
-                        : 'Recevoir des notifications d\'activité de zone sûre',
+                        : 'Recevoir des notifications d\'activité de Zone de sécurité',
                     trailing: Transform.scale(
                       scale: 0.85,
                       child: Switch(
