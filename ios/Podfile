@@ -1,7 +1,7 @@
 platform :ios, '15.0'
 use_frameworks! :linkage => :static
 
-$FirebaseSDKVersion = '11.2.0'   # <--- ADD THIS
+$FirebaseSDKVersion = '11.2.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -30,13 +30,12 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 flutter_ios_podfile_setup
 
 target 'Runner' do
-  use_frameworks!
   use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
+  # Firebase Messaging for push notifications
   pod 'Firebase/Messaging'
-  pod 'FirebaseMessaging'
 end
 
 post_install do |installer|
