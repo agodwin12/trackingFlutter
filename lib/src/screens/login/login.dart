@@ -38,9 +38,11 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
   // ✅ Get base URL from environment config
   String get baseUrl => EnvConfig.baseUrl;
 
-  // Central African Countries
+  // ✅ Central African Countries + Togo + Nigeria
   final List<Country> _centralAfricanCountries = [
     Country(name: 'Cameroon', code: '+237', flag: '🇨🇲'),
+    Country(name: 'Nigeria', code: '+234', flag: '🇳🇬'), // ✅ ADDED
+    Country(name: 'Togo', code: '+228', flag: '🇹🇬'),    // ✅ ADDED
     Country(name: 'Central African Republic', code: '+236', flag: '🇨🇫'),
     Country(name: 'Chad', code: '+235', flag: '🇹🇩'),
     Country(name: 'Republic of the Congo', code: '+242', flag: '🇨🇬'),
@@ -232,7 +234,22 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
         setState(() {
           _isLoading = false;
         });
-        _showErrorSnackbar(responseData["message"] ?? "Login failed");
+
+        // ✅ IMPROVED ERROR HANDLING - Show backend validation errors
+        String errorMessage = "Login failed";
+
+        // Check if there are validation errors from backend
+        if (responseData["errors"] != null && responseData["errors"] is List) {
+          List errors = responseData["errors"];
+          if (errors.isNotEmpty) {
+            // Show the first validation error message
+            errorMessage = errors[0]["msg"] ?? errors[0]["message"] ?? errorMessage;
+          }
+        } else if (responseData["message"] != null) {
+          errorMessage = responseData["message"];
+        }
+
+        _showErrorSnackbar(errorMessage);
       }
     } catch (error) {
       setState(() {
@@ -547,21 +564,28 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
 
           SizedBox(height: AppSizes.spacingL),
 
-          // Help Text
-          Center(
-            child: TextButton(
-              onPressed: () {
-                // Handle contact support
-              },
-              child: Text(
-                'Need help? Contact support',
-                style: AppTypography.body2,
-              ),
-            ),
-          ),
+
+
+          // ✅ ADDED: Copyright Footer with Dynamic Year
+          _buildCopyrightFooter(),
 
           SizedBox(height: AppSizes.spacingL),
         ],
+      ),
+    );
+  }
+
+  // ✅ NEW: Copyright Footer Widget
+  Widget _buildCopyrightFooter() {
+    final currentYear = DateTime.now().year;
+
+    return Center(
+      child: Text(
+        '© $currentYear All rights reserved to PROXYM GROUP',
+        style: AppTypography.caption.copyWith(
+          color: AppColors.textSecondary,
+        ),
+        textAlign: TextAlign.center,
       ),
     );
   }

@@ -947,12 +947,19 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border.withOpacity(0.3)),
+            border: Border.all(color: AppColors.primary.withOpacity(0.2), width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.1),
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 20,
+                spreadRadius: 2,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: AppColors.primary.withOpacity(0.1),
                 blurRadius: 12,
-                offset: const Offset(0, 4),
+                spreadRadius: 0,
+                offset: const Offset(0, 2),
               ),
             ],
           ),
@@ -964,8 +971,8 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      AppColors.primary.withOpacity(0.1),
-                      AppColors.primary.withOpacity(0.05)
+                      AppColors.primary.withOpacity(0.15),
+                      AppColors.primary.withOpacity(0.08)
                     ],
                   ),
                   borderRadius: BorderRadius.circular(10),
@@ -1004,14 +1011,12 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               SnackBar(
                 content: Row(
                   children: [
-                    Icon(Icons.check_circle_rounded, color: Colors.white,
-                        size: 20),
+                    Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
                         _selectedLanguage == 'en' ? 'Refreshed' : 'Actualisé',
-                        style: AppTypography.body2.copyWith(
-                            color: Colors.white),
+                        style: AppTypography.body2.copyWith(color: Colors.white),
                       ),
                     ),
                   ],
@@ -1019,8 +1024,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                 backgroundColor: const Color(0xFF10B981),
                 behavior: SnackBarBehavior.floating,
                 duration: const Duration(seconds: 1),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 margin: const EdgeInsets.all(16),
               ),
             );
@@ -1035,12 +1039,19 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border.withOpacity(0.3)),
+            border: Border.all(color: AppColors.primary.withOpacity(0.2), width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.1),
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 20,
+                spreadRadius: 2,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: AppColors.primary.withOpacity(0.1),
                 blurRadius: 12,
-                offset: const Offset(0, 4),
+                spreadRadius: 0,
+                offset: const Offset(0, 2),
               ),
             ],
           ),
@@ -1053,6 +1064,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       ),
     );
   }
+
 
   Widget _buildModernEngineButton(DashboardController controller) {
     return Positioned(
@@ -1150,29 +1162,12 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       bottom: 0,
       left: 0,
       right: 0,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              AppColors.background,
-              AppColors.background.withOpacity(0.98),
-            ],
-            begin: Alignment.bottomCenter,
-            end: Alignment.topCenter,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 16,
-              offset: const Offset(0, -4),
-            ),
-          ],
-        ),
+      child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Geofence + Safe Zone
+            // Geofence + Safe Zone Row
             Row(
               children: [
                 Expanded(
@@ -1187,17 +1182,15 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                 Expanded(
                   child: _buildModernFeatureCard(
                     icon: Icons.shield_rounded,
-                    label: _selectedLanguage == 'en'
-                        ? 'Safe Zone'
-                        : 'Zone de sécurité',
+                    label: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone de sécurité',
                     isActive: controller.safeZoneEnabled,
                     onTap: _handleSafeZoneToggle,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 10), // ✅ Space between rows
-            // Quick Actions
+            const SizedBox(height: 10),
+            // Trips + Settings Row
             Row(
               children: [
                 Expanded(
@@ -1208,9 +1201,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) =>
-                              TripsScreen(
-                                  vehicleId: controller.selectedVehicleId),
+                          builder: (context) => TripsScreen(vehicleId: controller.selectedVehicleId),
                         ),
                       );
                     },
@@ -1220,15 +1211,12 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                 Expanded(
                   child: _buildModernQuickAction(
                     icon: Icons.settings_rounded,
-                    label: _selectedLanguage == 'en'
-                        ? 'Settings'
-                        : 'Paramètres',
+                    label: _selectedLanguage == 'en' ? 'Settings' : 'Paramètres',
                     onTap: () async {
                       final result = await Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) =>
-                              SettingsScreen(vehicleId: widget.vehicleId),
+                          builder: (context) => SettingsScreen(vehicleId: widget.vehicleId),
                         ),
                       );
                       if (result == 'language_changed') {

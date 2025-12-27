@@ -501,9 +501,9 @@
     },
     {
       "name": "shared_preferences",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/shared_preferences-2.5.3",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/shared_preferences-2.5.4",
       "packageUri": "lib/",
-      "languageVersion": "3.5"
+      "languageVersion": "3.9"
     },
     {
       "name": "shared_preferences_android",
@@ -540,6 +540,12 @@
       "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/shared_preferences_windows-2.4.1",
       "packageUri": "lib/",
       "languageVersion": "3.3"
+    },
+    {
+      "name": "shimmer",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/shimmer-3.0.0",
+      "packageUri": "lib/",
+      "languageVersion": "2.17"
     },
     {
       "name": "sky_engine",

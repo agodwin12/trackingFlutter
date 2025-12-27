@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "tracking",
-      "version": "1.0.0+2",
+      "version": "1.0.1+2",
       "dependencies": [
         "carousel_slider",
         "crypto",
@@ -26,6 +26,7 @@
         "local_auth_ios",
         "provider",
         "shared_preferences",
+        "shimmer",
         "socket_io_client",
         "url_launcher"
       ],
@@ -57,6 +58,13 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "shimmer",
+      "version": "3.0.0",
+      "dependencies": [
+        "flutter"
       ]
     },
     {
@@ -232,7 +240,7 @@
     },
     {
       "name": "shared_preferences",
-      "version": "2.5.3",
+      "version": "2.5.4",
       "dependencies": [
         "flutter",
         "shared_preferences_android",
