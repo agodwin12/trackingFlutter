@@ -661,7 +661,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
                 style: AppTypography.body1,
                 decoration: InputDecoration(
                   border: InputBorder.none,
-                  hintText: '659 34 56 78',
+                  hintText: '612 345 678',
                   hintStyle: AppTypography.body1.copyWith(
                     color: AppColors.textSecondary.withOpacity(0.6),
                     fontWeight: FontWeight.w400,
