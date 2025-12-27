@@ -1,7 +1,7 @@
 import UIKit
 import Flutter
 import GoogleMaps
-import Firebase
+import FirebaseCore
 import FirebaseMessaging
 
 @main
@@ -10,7 +10,9 @@ import FirebaseMessaging
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
-        GMSServices.provideAPIKey("AIzaSyAK1w6bxHvnwuNlOWRSHnhKKqL5MNRQQ9o")
+        // ✅ CORRECT API KEY
+        GMSServices.provideAPIKey("AIzaSyBn88TP5X-xaRCYo5gYxvGnVy_0WYotZWo")
+
         FirebaseApp.configure()
         Messaging.messaging().delegate = self
 
