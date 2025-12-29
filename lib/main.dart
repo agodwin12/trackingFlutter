@@ -6,9 +6,10 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:tracking/src/screens/change%20password%20in%20app/change_password.dart';
+import 'package:tracking/src/screens/login/login.dart';
 
 // Screens
-import 'package:tracking/src/screens/login/login.dart';
+import 'package:tracking/src/screens/splash/splash_screen.dart'; // ✅ NEW
 import 'package:tracking/src/screens/onBoarding/onBoardingScreen.dart';
 import 'package:tracking/src/screens/dashboard/dashboard.dart';
 import 'package:tracking/src/screens/profile/profile.dart';
@@ -83,29 +84,23 @@ void main() async {
       debugPrint('ℹ️ App will continue without Firebase push notifications');
     }
 
-    // ✅ Step 3: Initialize Notification Service (handles permissions internally)
+    // ✅ Step 3: Initialize Notification Service
     debugPrint('🔔 Initializing notification service...');
     await NotificationService.initialize();
     debugPrint('✅ Notification service initialized');
 
-    // ✅ Step 4: Check onboarding status
-    debugPrint('📱 Checking onboarding status...');
-    final prefs = await SharedPreferences.getInstance();
-    final bool hasSeenOnboarding = prefs.getBool('hasSeenOnboarding') ?? false;
-    debugPrint('✅ Onboarding status: ${hasSeenOnboarding ? "Completed" : "Not completed"}');
-
     debugPrint('🚀 ========== APP INITIALIZATION COMPLETE ==========\n');
 
-    // ✅ Step 5: Launch app
-    runApp(MyApp(hasSeenOnboarding: hasSeenOnboarding));
+    // ✅ Step 4: Launch app with Splash Screen
+    runApp(const MyApp());
   } catch (error) {
     debugPrint('❌ ========== FATAL INITIALIZATION ERROR ==========');
     debugPrint('❌ Error: $error');
     debugPrint('❌ App may not function correctly');
     debugPrint('❌ ================================================\n');
 
-    // Run app anyway with default state
-    runApp(MyApp(hasSeenOnboarding: false));
+    // Run app anyway
+    runApp(const MyApp());
   }
 }
 
@@ -113,9 +108,7 @@ void main() async {
 /// 🟦 MAIN APP WIDGET
 /// =====================================================
 class MyApp extends StatefulWidget {
-  final bool hasSeenOnboarding;
-
-  const MyApp({Key? key, required this.hasSeenOnboarding}) : super(key: key);
+  const MyApp({Key? key}) : super(key: key);
 
   @override
   State<MyApp> createState() => _MyAppState();
@@ -221,8 +214,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         ),
       ),
 
-      // ✅ Initial route based on onboarding status
-      home: widget.hasSeenOnboarding ? ModernLoginScreen() : OnboardingScreen(),
+      // ✅ Start with Splash Screen
+      home: const SplashScreen(),
 
       /// =====================================================
       /// 🛣️ Route Management
@@ -232,8 +225,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
         switch (settings.name) {
         // ============================================
-        // Authentication Routes
+        // Splash & Authentication Routes
         // ============================================
+          case '/splash':
+            return MaterialPageRoute(
+              settings: settings,
+              builder: (_) => const SplashScreen(),
+            );
+
           case '/login':
             return MaterialPageRoute(
               settings: settings,
@@ -281,7 +280,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 userId: args['userId'] as int,
               ),
             );
-
 
           case '/settings':
             final vehicleId = settings.arguments as int?;
@@ -367,8 +365,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               builder: (_) => PinEntryScreen(vehicleId: vehicleId),
             );
 
-
-
         // ============================================
         // Error Route (Unknown Route)
         // ============================================
@@ -422,10 +418,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 SizedBox(height: 32),
                 ElevatedButton.icon(
                   onPressed: () {
-                    Navigator.of(context).pushReplacementNamed('/login');
+                    Navigator.of(context).pushReplacementNamed('/splash');
                   },
-                  icon: Icon(Icons.home),
-                  label: Text('Go to Login'),
+                  icon: Icon(Icons.refresh),
+                  label: Text('Restart App'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Color(0xFF3B82F6),
                     foregroundColor: Colors.white,

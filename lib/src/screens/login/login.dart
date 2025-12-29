@@ -61,7 +61,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
   @override
   void initState() {
     super.initState();
-    _checkSession();
+
 
     // Setup animations
     _animationController = AnimationController(
@@ -97,43 +97,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
     super.dispose();
   }
 
-  void _checkSession() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    String? token = prefs.getString("accessToken");
-    String? userData = prefs.getString("user");
 
-    if (token != null && token.isNotEmpty && userData != null) {
-      // Get the first vehicle ID from user data
-      Map<String, dynamic> user = jsonDecode(userData);
-
-      // Fetch user's vehicles to get the first vehicle ID
-      int userId = user["id"];
-
-      try {
-        final response = await http.get(
-          Uri.parse("$baseUrl/voitures/user/$userId"),
-        );
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          List vehicles = data["vehicles"];
-
-          if (vehicles.isNotEmpty && mounted) {
-            int firstVehicleId = vehicles[0]["id"];
-
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => ModernDashboard(vehicleId: firstVehicleId),
-              ),
-            );
-          }
-        }
-      } catch (error) {
-        print("Error checking session: $error");
-      }
-    }
-  }
 
   void _login() async {
     if (_phoneController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {

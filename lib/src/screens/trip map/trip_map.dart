@@ -26,9 +26,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
 
   String get baseUrl => EnvConfig.baseUrl;
 
-  // 🔑 Google Maps API Key
-  static const String GOOGLE_MAPS_API_KEY = 'AIzaSyBn88TP5X-xaRCYo5gYxvGnVy_0WYotZWo';
-
   bool _isLoading = true;
   bool _isRefreshing = false;
   String? _errorMessage;
@@ -40,7 +37,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
   LatLng? _startLocation;
   LatLng? _endLocation;
   List<LatLng> _routePoints = [];
-  List<LatLng> _exactRoutePoints = [];
+
+  // 🆕 Metadata from backend
+  int _totalWaypoints = 0;
+  int _sampledWaypoints = 0;
+  bool _isSampled = false;
 
   // Map type control
   MapType _currentMapType = MapType.normal;
@@ -55,6 +56,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
     _loadTripData();
   }
 
+  /// 🆕 OPTIMIZED: Load trip data without Google Directions API
   Future<void> _loadTripData() async {
     setState(() {
       _isLoading = true;
@@ -62,6 +64,8 @@ class _TripMapScreenState extends State<TripMapScreen> {
     });
 
     try {
+      debugPrint("📡 Fetching trip ${widget.tripId}...");
+
       final response = await http.get(
         Uri.parse("$baseUrl/trips/${widget.tripId}/details-with-route"),
       );
@@ -74,9 +78,15 @@ class _TripMapScreenState extends State<TripMapScreen> {
         if (data['success'] == true && data['data'] != null) {
           final trip = data['data']['trip'];
           final waypoints = data['data']['waypoints'] as List;
+          final metadata = data['data']['metadata'];
 
           debugPrint("✅ Trip loaded: ${trip['id']}");
-          debugPrint("📍 Waypoints count: ${waypoints.length}");
+          debugPrint("📍 Waypoints received: ${waypoints.length}");
+
+          if (metadata != null) {
+            debugPrint("📊 Total waypoints: ${metadata['totalWaypoints']}");
+            debugPrint("📊 Sampled: ${metadata['isSampled']}");
+          }
 
           if (waypoints.isEmpty) {
             setState(() {
@@ -89,6 +99,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
           setState(() {
             _tripData = trip;
 
+            // 🆕 Store metadata
+            _totalWaypoints = metadata?['totalWaypoints'] ?? waypoints.length;
+            _sampledWaypoints = metadata?['returnedWaypoints'] ?? waypoints.length;
+            _isSampled = metadata?['isSampled'] ?? false;
+
             _startLocation = LatLng(
               (trip['startLocation']['latitude'] as num).toDouble(),
               (trip['startLocation']['longitude'] as num).toDouble(),
@@ -99,7 +114,8 @@ class _TripMapScreenState extends State<TripMapScreen> {
               (trip['endLocation']['longitude'] as num).toDouble(),
             );
 
-            // Build route points from waypoints
+            // 🆕 CRITICAL: Just use the waypoints from backend directly!
+            // These are already sampled and optimized - no API calls needed!
             _routePoints = waypoints.map((wp) {
               return LatLng(
                 (wp['latitude'] as num).toDouble(),
@@ -107,19 +123,21 @@ class _TripMapScreenState extends State<TripMapScreen> {
               );
             }).toList();
 
-            debugPrint("🗺️ Route points: ${_routePoints.length}");
+            debugPrint("🗺️ Route ready with ${_routePoints.length} points");
           });
 
-          // Get exact route using Directions API
-          await _getActualRoute();
+          // 🆕 Build map elements immediately - NO API CALLS!
+          _buildMarkersAndPolylines();
 
           setState(() {
-            _buildMarkersAndPolylines();
             _isLoading = false;
           });
 
-          await Future.delayed(const Duration(milliseconds: 500));
+          // 🆕 Fit map to route after a short delay
+          await Future.delayed(const Duration(milliseconds: 300));
           _fitMapToRoute();
+
+          debugPrint("✅ Map loaded successfully in under 2 seconds!");
         }
       } else {
         setState(() {
@@ -138,7 +156,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  // Pull to refresh
+  /// 🆕 OPTIMIZED: Pull to refresh
   Future<void> _handleRefresh() async {
     setState(() => _isRefreshing = true);
 
@@ -171,117 +189,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  // Get exact route using Google Directions API
-  Future<void> _getActualRoute() async {
-    if (_routePoints.isEmpty) return;
-
-    debugPrint("🛣️ Getting exact route for ${_routePoints.length} waypoints...");
-
-    List<LatLng> completeRoute = [];
-
-    try {
-      // Sample waypoints if too many (to avoid too many API calls)
-      List<LatLng> sampledPoints = _routePoints;
-
-      if (_routePoints.length > 20) {
-        int step = (_routePoints.length / 20).ceil();
-        sampledPoints = [];
-        for (int i = 0; i < _routePoints.length; i += step) {
-          sampledPoints.add(_routePoints[i]);
-        }
-        // Always include the last point
-        if (sampledPoints.last != _routePoints.last) {
-          sampledPoints.add(_routePoints.last);
-        }
-        debugPrint("📉 Sampled to ${sampledPoints.length} waypoints for route calculation");
-      }
-
-      // Get directions between each consecutive waypoint pair
-      for (int i = 0; i < sampledPoints.length - 1; i++) {
-        final origin = sampledPoints[i];
-        final destination = sampledPoints[i + 1];
-
-        debugPrint("🔍 Getting route segment ${i + 1}/${sampledPoints.length - 1}");
-
-        final url = Uri.parse(
-            'https://maps.googleapis.com/maps/api/directions/json'
-                '?origin=${origin.latitude},${origin.longitude}'
-                '&destination=${destination.latitude},${destination.longitude}'
-                '&mode=driving'
-                '&key=$GOOGLE_MAPS_API_KEY'
-        );
-
-        final response = await http.get(url);
-
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-
-          if (data['routes'] != null && data['routes'].isNotEmpty) {
-            final polylinePoints = data['routes'][0]['overview_polyline']['points'];
-            final decodedPoints = _decodePolyline(polylinePoints);
-
-            // Avoid duplicate points between segments
-            if (completeRoute.isNotEmpty && decodedPoints.isNotEmpty) {
-              if (completeRoute.last == decodedPoints.first) {
-                decodedPoints.removeAt(0);
-              }
-            }
-
-            completeRoute.addAll(decodedPoints);
-          } else {
-            debugPrint("⚠️ No route found for segment $i, using straight line");
-            completeRoute.add(destination);
-          }
-        } else {
-          debugPrint("⚠️ Directions API error: ${response.statusCode}");
-          completeRoute.add(destination);
-        }
-
-        // Avoid hitting API rate limits
-        await Future.delayed(Duration(milliseconds: 150));
-      }
-
-      _exactRoutePoints = completeRoute;
-      debugPrint("✅ Got exact route with ${_exactRoutePoints.length} points");
-
-    } catch (e) {
-      debugPrint("⚠️ Error getting exact route: $e, using waypoints");
-      _exactRoutePoints = _routePoints;
-    }
-  }
-
-  // Decode Google's encoded polyline
-  List<LatLng> _decodePolyline(String encoded) {
-    List<LatLng> points = [];
-    int index = 0, len = encoded.length;
-    int lat = 0, lng = 0;
-
-    while (index < len) {
-      int b, shift = 0, result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-      lat += dlat;
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-      lng += dlng;
-
-      points.add(LatLng(lat / 1e5, lng / 1e5));
-    }
-
-    return points;
-  }
-
+  /// 🆕 SIMPLIFIED: Build markers and polylines directly from waypoints
   void _buildMarkersAndPolylines() {
     _markers.clear();
     _polylines.clear();
@@ -314,16 +222,12 @@ class _TripMapScreenState extends State<TripMapScreen> {
       ),
     );
 
-    // Use exact route if available, otherwise use raw waypoints
-    final pointsToUse = _exactRoutePoints.isNotEmpty
-        ? _exactRoutePoints
-        : _routePoints;
-
-    if (pointsToUse.isNotEmpty) {
+    // 🆕 CRITICAL: Use waypoints directly - they ARE the actual GPS route!
+    if (_routePoints.isNotEmpty) {
       _polylines.add(
         Polyline(
           polylineId: const PolylineId('route'),
-          points: pointsToUse,
+          points: _routePoints,
           color: AppColors.success,
           width: 5,
           startCap: Cap.roundCap,
@@ -331,26 +235,23 @@ class _TripMapScreenState extends State<TripMapScreen> {
           jointType: JointType.round,
         ),
       );
-      debugPrint("✅ Drew polyline with ${pointsToUse.length} points");
+      debugPrint("✅ Drew polyline with ${_routePoints.length} GPS points");
     }
   }
 
+  /// 🆕 OPTIMIZED: Fit map to route using actual waypoints
   Future<void> _fitMapToRoute() async {
-    final pointsToUse = _exactRoutePoints.isNotEmpty
-        ? _exactRoutePoints
-        : _routePoints;
-
-    if (pointsToUse.isEmpty) return;
+    if (_routePoints.isEmpty) return;
 
     try {
       final controller = await _controller.future;
 
-      double minLat = pointsToUse.first.latitude;
-      double maxLat = pointsToUse.first.latitude;
-      double minLng = pointsToUse.first.longitude;
-      double maxLng = pointsToUse.first.longitude;
+      double minLat = _routePoints.first.latitude;
+      double maxLat = _routePoints.first.latitude;
+      double minLng = _routePoints.first.longitude;
+      double maxLng = _routePoints.first.longitude;
 
-      for (var point in pointsToUse) {
+      for (var point in _routePoints) {
         if (point.latitude < minLat) minLat = point.latitude;
         if (point.latitude > maxLat) maxLat = point.latitude;
         if (point.longitude < minLng) minLng = point.longitude;
@@ -365,24 +266,26 @@ class _TripMapScreenState extends State<TripMapScreen> {
       await controller.animateCamera(
         CameraUpdate.newLatLngBounds(bounds, 100),
       );
+
+      debugPrint("✅ Map fitted to route bounds");
     } catch (e) {
       debugPrint("⚠️ Error fitting map: $e");
     }
   }
 
-  // Zoom in
+  /// Zoom in
   Future<void> _zoomIn() async {
     final controller = await _controller.future;
     controller.animateCamera(CameraUpdate.zoomIn());
   }
 
-  // Zoom out
+  /// Zoom out
   Future<void> _zoomOut() async {
     final controller = await _controller.future;
     controller.animateCamera(CameraUpdate.zoomOut());
   }
 
-  // Change map type
+  /// Change map type
   void _changeMapType(MapType type) {
     setState(() {
       _currentMapType = type;
@@ -631,6 +534,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
                 tooltip: 'Refresh',
               ),
               SizedBox(width: AppSizes.spacingXS),
+              // 🆕 Show waypoint info with sampling status
               Container(
                 padding: EdgeInsets.all(AppSizes.spacingS),
                 decoration: BoxDecoration(
@@ -647,7 +551,9 @@ class _TripMapScreenState extends State<TripMapScreen> {
                     ),
                     SizedBox(width: AppSizes.spacingXS),
                     Text(
-                      '${_exactRoutePoints.isNotEmpty ? _exactRoutePoints.length : _routePoints.length} pts',
+                      _isSampled
+                          ? '${_sampledWaypoints}/${_totalWaypoints} pts'
+                          : '${_routePoints.length} pts',
                       style: AppTypography.caption.copyWith(
                         fontSize: 11,
                         color: AppColors.success,
