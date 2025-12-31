@@ -1,6 +1,7 @@
 // lib/src/screens/trips/trip_map_screen.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -37,8 +38,9 @@ class _TripMapScreenState extends State<TripMapScreen> {
   LatLng? _startLocation;
   LatLng? _endLocation;
   List<LatLng> _routePoints = [];
+  List<LatLng> _gpsWaypoints = [];
 
-  // 🆕 Metadata from backend
+  // Metadata
   int _totalWaypoints = 0;
   int _sampledWaypoints = 0;
   bool _isSampled = false;
@@ -56,7 +58,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
     _loadTripData();
   }
 
-  /// 🆕 OPTIMIZED: Load trip data without Google Directions API
+  /// ✅ OPTIMIZED: Load trip data and generate road-following route
   Future<void> _loadTripData() async {
     setState(() {
       _isLoading = true;
@@ -81,7 +83,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
           final metadata = data['data']['metadata'];
 
           debugPrint("✅ Trip loaded: ${trip['id']}");
-          debugPrint("📍 Waypoints received: ${waypoints.length}");
+          debugPrint("📍 GPS waypoints received: ${waypoints.length}");
 
           if (metadata != null) {
             debugPrint("📊 Total waypoints: ${metadata['totalWaypoints']}");
@@ -98,8 +100,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
 
           setState(() {
             _tripData = trip;
-
-            // 🆕 Store metadata
             _totalWaypoints = metadata?['totalWaypoints'] ?? waypoints.length;
             _sampledWaypoints = metadata?['returnedWaypoints'] ?? waypoints.length;
             _isSampled = metadata?['isSampled'] ?? false;
@@ -114,30 +114,29 @@ class _TripMapScreenState extends State<TripMapScreen> {
               (trip['endLocation']['longitude'] as num).toDouble(),
             );
 
-            // 🆕 CRITICAL: Just use the waypoints from backend directly!
-            // These are already sampled and optimized - no API calls needed!
-            _routePoints = waypoints.map((wp) {
+            // Store GPS waypoints
+            _gpsWaypoints = waypoints.map((wp) {
               return LatLng(
                 (wp['latitude'] as num).toDouble(),
                 (wp['longitude'] as num).toDouble(),
               );
             }).toList();
 
-            debugPrint("🗺️ Route ready with ${_routePoints.length} points");
+            debugPrint("🗺️ GPS waypoints: ${_gpsWaypoints.length} points");
           });
 
-          // 🆕 Build map elements immediately - NO API CALLS!
-          _buildMarkersAndPolylines();
+          // 🔥 NEW: Generate road-following route using OSRM
+          await _generateRoadFollowingRoute();
 
           setState(() {
             _isLoading = false;
           });
 
-          // 🆕 Fit map to route after a short delay
+          // Fit map to route
           await Future.delayed(const Duration(milliseconds: 300));
           _fitMapToRoute();
 
-          debugPrint("✅ Map loaded successfully in under 2 seconds!");
+          debugPrint("✅ Professional route map loaded!");
         }
       } else {
         setState(() {
@@ -156,15 +155,140 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  /// 🆕 OPTIMIZED: Pull to refresh
+  /// 🔥 NEW: Generate road-following route using OSRM (FREE routing API)
+  Future<void> _generateRoadFollowingRoute() async {
+    try {
+      debugPrint("🛣️ Generating road-following route...");
+
+      // Sample GPS waypoints intelligently (max 25 points for OSRM)
+      final sampledWaypoints = _sampleWaypointsForRouting(_gpsWaypoints, 25);
+
+      debugPrint("🛣️ Using ${sampledWaypoints.length} waypoints for routing");
+
+      // Build OSRM API URL
+      final coordinates = sampledWaypoints
+          .map((point) => '${point.longitude},${point.latitude}')
+          .join(';');
+
+      final osrmUrl = 'https://router.project-osrm.org/route/v1/driving/$coordinates?overview=full&geometries=polyline';
+
+      debugPrint("🛣️ Calling OSRM API...");
+
+      final response = await http.get(Uri.parse(osrmUrl)).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint("⚠️ OSRM API timeout - falling back to GPS waypoints");
+          return http.Response('{"error": "timeout"}', 408);
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        if (data['code'] == 'Ok' && data['routes'] != null && data['routes'].isNotEmpty) {
+          final route = data['routes'][0];
+          final encodedPolyline = route['geometry'];
+
+          // Decode polyline
+          final decodedPoints = _decodePolyline(encodedPolyline);
+
+          setState(() {
+            _routePoints = decodedPoints;
+          });
+
+          debugPrint("✅ Road-following route generated: ${_routePoints.length} points");
+          debugPrint("📏 Route distance from OSRM: ${(route['distance'] / 1000).toStringAsFixed(2)} km");
+
+          _buildMarkersAndPolylines();
+          return;
+        }
+      }
+
+      // Fallback: use GPS waypoints directly
+      debugPrint("⚠️ OSRM failed - using GPS waypoints as fallback");
+      setState(() {
+        _routePoints = _gpsWaypoints;
+      });
+      _buildMarkersAndPolylines();
+
+    } catch (error) {
+      debugPrint("🔥 Error generating road route: $error");
+      // Fallback to GPS waypoints
+      setState(() {
+        _routePoints = _gpsWaypoints;
+      });
+      _buildMarkersAndPolylines();
+    }
+  }
+
+  /// 🔥 Smart sampling for routing API (keeps start, end, and evenly distributed points)
+  List<LatLng> _sampleWaypointsForRouting(List<LatLng> waypoints, int maxPoints) {
+    if (waypoints.length <= maxPoints) return waypoints;
+
+    final sampled = <LatLng>[];
+
+    // Always keep first point
+    sampled.add(waypoints.first);
+
+    // Sample middle points evenly
+    final step = (waypoints.length - 2) / (maxPoints - 2);
+    for (int i = 1; i < maxPoints - 1; i++) {
+      final index = 1 + (step * (i - 1)).round();
+      if (index < waypoints.length - 1) {
+        sampled.add(waypoints[index]);
+      }
+    }
+
+    // Always keep last point
+    sampled.add(waypoints.last);
+
+    return sampled;
+  }
+
+  /// 🔥 Decode polyline from OSRM (Encoded Polyline Algorithm Format)
+  List<LatLng> _decodePolyline(String encoded) {
+    List<LatLng> points = [];
+    int index = 0;
+    int len = encoded.length;
+    int lat = 0;
+    int lng = 0;
+
+    while (index < len) {
+      int b;
+      int shift = 0;
+      int result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
+
+      double latitude = lat / 1E5;
+      double longitude = lng / 1E5;
+      points.add(LatLng(latitude, longitude));
+    }
+
+    return points;
+  }
+
+  /// ✅ Pull to refresh
   Future<void> _handleRefresh() async {
     setState(() => _isRefreshing = true);
-
     await _loadTripData();
-
     if (mounted) {
       setState(() => _isRefreshing = false);
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(
@@ -189,14 +313,14 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  /// 🆕 SIMPLIFIED: Build markers and polylines directly from waypoints
+  /// 🔥 Build markers and polylines with professional styling
   void _buildMarkersAndPolylines() {
     _markers.clear();
     _polylines.clear();
 
     if (_startLocation == null || _endLocation == null) return;
 
-    // Add start marker (green)
+    // Start marker (green)
     _markers.add(
       Marker(
         markerId: const MarkerId('start'),
@@ -209,7 +333,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
       ),
     );
 
-    // Add end marker (red)
+    // End marker (red)
     _markers.add(
       Marker(
         markerId: const MarkerId('end'),
@@ -222,24 +346,27 @@ class _TripMapScreenState extends State<TripMapScreen> {
       ),
     );
 
-    // 🆕 CRITICAL: Use waypoints directly - they ARE the actual GPS route!
+    // 🔥 Professional polyline with road-following curves
     if (_routePoints.isNotEmpty) {
       _polylines.add(
         Polyline(
           polylineId: const PolylineId('route'),
           points: _routePoints,
           color: AppColors.success,
-          width: 5,
+          width: 6, // Slightly thicker for better visibility
+          geodesic: false, // Use actual route points, not great circle
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
         ),
       );
-      debugPrint("✅ Drew polyline with ${_routePoints.length} GPS points");
+      debugPrint("✅ Drew professional polyline with ${_routePoints.length} road-following points");
     }
+
+    setState(() {});
   }
 
-  /// 🆕 OPTIMIZED: Fit map to route using actual waypoints
+  /// Fit map to route
   Future<void> _fitMapToRoute() async {
     if (_routePoints.isEmpty) return;
 
@@ -264,7 +391,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
       );
 
       await controller.animateCamera(
-        CameraUpdate.newLatLngBounds(bounds, 100),
+        CameraUpdate.newLatLngBounds(bounds, 80), // 80px padding
       );
 
       debugPrint("✅ Map fitted to route bounds");
@@ -407,7 +534,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
           ),
           SizedBox(height: AppSizes.spacingM),
           Text(
-            "Loading trip map...",
+            "Loading professional route...",
             style: AppTypography.body2,
           ),
         ],
@@ -521,7 +648,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
                   ],
                 ),
               ),
-              // Refresh button
               IconButton(
                 onPressed: _isRefreshing ? null : _handleRefresh,
                 icon: Icon(
@@ -534,7 +660,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
                 tooltip: 'Refresh',
               ),
               SizedBox(width: AppSizes.spacingXS),
-              // 🆕 Show waypoint info with sampling status
               Container(
                 padding: EdgeInsets.all(AppSizes.spacingS),
                 decoration: BoxDecoration(
@@ -551,9 +676,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
                     ),
                     SizedBox(width: AppSizes.spacingXS),
                     Text(
-                      _isSampled
-                          ? '${_sampledWaypoints}/${_totalWaypoints} pts'
-                          : '${_routePoints.length} pts',
+                      '${_routePoints.length} pts',
                       style: AppTypography.caption.copyWith(
                         fontSize: 11,
                         color: AppColors.success,
@@ -570,7 +693,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
     );
   }
 
-  // Floating controls (Map type, Zoom)
   Widget _buildFloatingControls() {
     return Positioned(
       right: AppSizes.spacingM,
@@ -578,7 +700,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
       child: SafeArea(
         child: Column(
           children: [
-            // Map Type Selector
             GestureDetector(
               onTap: () {
                 setState(() {
@@ -606,8 +727,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
                 ),
               ),
             ),
-
-            // Map Type Menu
             if (_showMapTypeMenu) ...[
               SizedBox(height: AppSizes.spacingS),
               Container(
@@ -651,10 +770,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
                 ),
               ),
             ],
-
             SizedBox(height: AppSizes.spacingL),
-
-            // Zoom Controls
             Container(
               decoration: BoxDecoration(
                 color: AppColors.white,
@@ -669,7 +785,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
               ),
               child: Column(
                 children: [
-                  // Zoom In
                   InkWell(
                     onTap: _zoomIn,
                     borderRadius: BorderRadius.vertical(
@@ -686,7 +801,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
                     ),
                   ),
                   Divider(height: 1, thickness: 1),
-                  // Zoom Out
                   InkWell(
                     onTap: _zoomOut,
                     borderRadius: BorderRadius.vertical(
@@ -711,7 +825,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
     );
   }
 
-  // Map type option widget
   Widget _buildMapTypeOption({
     required IconData icon,
     required String label,

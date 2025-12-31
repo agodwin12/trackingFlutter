@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "tracking",
-      "version": "1.1.1+5",
+      "version": "1.1.1+6",
       "dependencies": [
         "carousel_slider",
         "crypto",

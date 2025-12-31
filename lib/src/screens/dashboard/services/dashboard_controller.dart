@@ -50,6 +50,11 @@ class DashboardController extends ChangeNotifier {
   Timer? _cachePollingTimer;
   Timer? _engineVerificationTimer;
 
+  // ✅ NEW: Background polling for engine state verification
+  Timer? _engineStatePollingTimer;
+  int _pollAttempts = 0;
+  static const int MAX_POLL_ATTEMPTS = 6; // 6 attempts × 5 seconds = 30 seconds max
+
   // Getters
   bool get isLoading => _isLoading;
   bool get isRefreshing => _isRefreshing;
@@ -115,7 +120,7 @@ class DashboardController extends ChangeNotifier {
       final ByteData data = await rootBundle.load('assets/carmarker.png');
       final codec = await ui.instantiateImageCodec(
         data.buffer.asUint8List(),
-        targetWidth: 60, // Smaller = faster
+        targetWidth: 60,
         targetHeight: 60,
       );
       final ui.FrameInfo frameInfo = await codec.getNextFrame();
@@ -197,7 +202,6 @@ class DashboardController extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint("⚠️ Error fetching initial location: $e");
-      // Use default location
       _vehicleLat = 4.0511;
       _vehicleLng = 9.7679;
     }
@@ -206,10 +210,9 @@ class DashboardController extends ChangeNotifier {
   // ✅ NEW: Load non-critical data in background
   Future<void> _loadBackgroundData() async {
     try {
-      // Run all these in parallel - don't wait for them!
       await Future.wait([
         fetchDashboardData(),
-        fetchEngineStatusFromDatabase(),
+        fetchRealtimeEngineStatus(),
         fetchUnreadNotifications(),
       ]);
 
@@ -217,7 +220,6 @@ class DashboardController extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('⚠️ Error loading background data: $e');
-      // Non-critical, just use defaults
       notifyListeners();
     }
   }
@@ -229,7 +231,7 @@ class DashboardController extends ChangeNotifier {
 
     try {
       await fetchDashboardData();
-      await fetchEngineStatusFromDatabase();
+      await fetchRealtimeEngineStatus();
       await fetchCurrentLocation();
       await fetchUnreadNotifications();
 
@@ -312,7 +314,53 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Fetch engine status from database (latest location record)
+  // ✅ UPDATED: Fetch REALTIME engine status from GPS device
+  Future<void> fetchRealtimeEngineStatus() async {
+    try {
+      debugPrint('🔍 Fetching REALTIME engine status from GPS device...');
+
+      final url =
+          '${EnvConfig.baseUrl}/gps/vehicle/$_selectedVehicleId/realtime-status';
+
+      final response = await http.get(Uri.parse(url));
+
+      debugPrint('📡 Realtime engine status response: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        if (data['success'] == true) {
+          final bool newEngineState = data['engineOn'] ?? false;
+          final String source = data['source'] ?? 'unknown';
+
+          debugPrint(
+              '✅ Engine status from GPS: ${newEngineState ? "ON (UNLOCKED)" : "OFF (LOCKED)"}');
+          debugPrint('   📊 Source: $source');
+          debugPrint('   📡 GPS Status: ${data['gpsStatus']}');
+          debugPrint('   🚗 Speed: ${data['speed']} km/h');
+
+          // Update engine state
+          _engineOn = newEngineState;
+
+          // Parse battery info from raw status if available
+          if (data['rawStatus'] != null && data['rawStatus'].isNotEmpty) {
+            _parseVehicleStatus(data['rawStatus']);
+          }
+
+          notifyListeners();
+        } else {
+          debugPrint('⚠️ Realtime engine status fetch unsuccessful');
+        }
+      } else {
+        debugPrint(
+            '❌ Failed to fetch realtime engine status: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('🔥 Error fetching realtime engine status: $e');
+    }
+  }
+
+  // ✅ KEPT FOR BACKWARD COMPATIBILITY: Fetch engine status from database
   Future<void> fetchEngineStatusFromDatabase() async {
     try {
       debugPrint('🔍 Fetching engine status from database...');
@@ -336,10 +384,8 @@ class DashboardController extends ChangeNotifier {
           debugPrint('   ⏰ Data age: $dataAge seconds');
           debugPrint('   📊 Raw status: ${data['rawStatus']}');
 
-          // Update engine state
           _engineOn = newEngineState;
 
-          // Parse battery info from raw status if available
           if (data['rawStatus'] != null && data['rawStatus'].isNotEmpty) {
             _parseVehicleStatus(data['rawStatus']);
           }
@@ -358,7 +404,6 @@ class DashboardController extends ChangeNotifier {
 
   void _parseVehicleStatus(String status) {
     try {
-      // Status format: "mil,oil,weight,temp,batteryV,powerV,gpscount,gsmlevel,..."
       final parts = status.split(',');
 
       if (parts.length >= 5) {
@@ -366,17 +411,13 @@ class DashboardController extends ChangeNotifier {
 
         if (batteryValue > 0) {
           if (batteryValue < 100) {
-            // It's a percentage
             _batteryPercentage = batteryValue.round();
             _batteryVoltage = 0.0;
             _isLowBattery = _batteryPercentage < 20;
           } else {
-            // It's voltage (subtract 100 to get actual voltage)
             _batteryVoltage = batteryValue - 100;
             _isLowBattery = _batteryVoltage < 3.6;
 
-            // Estimate percentage from voltage
-            // 4.2V = 100%, 3.7V = 50%, 3.3V = 0%
             if (_batteryVoltage >= 3.3 && _batteryVoltage <= 4.2) {
               _batteryPercentage =
                   ((_batteryVoltage - 3.3) / (4.2 - 3.3) * 100).round();
@@ -449,37 +490,35 @@ class DashboardController extends ChangeNotifier {
 
     _alertSubscription = _socketService.safeZoneAlertStream.listen((alertData) {
       debugPrint('🚨 Safe Zone Alert received: $alertData');
-      // Alert will be handled by the UI
     });
 
-    _locationSubscription =
-        _socketService.locationUpdateStream.listen((data) {
-          debugPrint('📍 Real-time location update received: $data');
+    _locationSubscription = _socketService.locationUpdateStream.listen((data) {
+      debugPrint('📍 Real-time location update received: $data');
 
-          final vehicleId = data['vehicleId'];
-          if (vehicleId == _selectedVehicleId) {
-            final lat = data['latitude'];
-            final lon = data['longitude'];
-            final status = data['status'];
+      final vehicleId = data['vehicleId'];
+      if (vehicleId == _selectedVehicleId) {
+        final lat = data['latitude'];
+        final lon = data['longitude'];
+        final status = data['status'];
 
-            if (lat != null && lon != null) {
-              _vehicleLat = lat is double ? lat : (lat as num).toDouble();
-              _vehicleLng = lon is double ? lon : (lon as num).toDouble();
+        if (lat != null && lon != null) {
+          _vehicleLat = lat is double ? lat : (lat as num).toDouble();
+          _vehicleLng = lon is double ? lon : (lon as num).toDouble();
 
-              // Parse battery info from status if available
-              if (status != null && status is String && status.isNotEmpty) {
-                _parseVehicleStatus(status);
-              }
-
-              _mapController?.animateCamera(
-                CameraUpdate.newLatLng(LatLng(_vehicleLat, _vehicleLng)),
-              );
-
-              debugPrint('✅ Map updated with new position: $_vehicleLat, $_vehicleLng');
-              notifyListeners();
-            }
+          if (status != null && status is String && status.isNotEmpty) {
+            _parseVehicleStatus(status);
           }
-        });
+
+          _mapController?.animateCamera(
+            CameraUpdate.newLatLng(LatLng(_vehicleLat, _vehicleLng)),
+          );
+
+          debugPrint(
+              '✅ Map updated with new position: $_vehicleLat, $_vehicleLng');
+          notifyListeners();
+        }
+      }
+    });
   }
 
   // Get Safe Zone Alert Stream
@@ -573,7 +612,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ OPTIMIZED: Toggle Engine with optimistic UI + aggressive polling
+  // ✅ IMPROVED: Toggle Engine with optimistic UI + background polling
   Future<bool> toggleEngine() async {
     _isTogglingEngine = true;
     notifyListeners();
@@ -582,10 +621,12 @@ class DashboardController extends ChangeNotifier {
       final String command = _engineOn ? 'CLOSERELAY' : 'OPENRELAY';
       final bool expectedNewState = !_engineOn;
 
+      debugPrint("🔧 ========== ENGINE TOGGLE STARTED ==========");
       debugPrint("🔧 Current engine state: ${_engineOn ? 'ON' : 'OFF'}");
       debugPrint("📤 Sending command: $command");
       debugPrint("🎯 Expected new state: ${expectedNewState ? 'ON' : 'OFF'}");
 
+      // ✅ STEP 1: Send command to GPS device
       final resp = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
         headers: {"Content-Type": "application/json"},
@@ -608,15 +649,18 @@ class DashboardController extends ChangeNotifier {
       if (resp.statusCode == 200 && (okTop || okNested)) {
         debugPrint('✅ Command sent successfully to GPS device');
 
-        // ✅ STEP 1: OPTIMISTIC UI UPDATE (INSTANT FEEDBACK!)
+        // ✅ STEP 2: Immediate optimistic UI update (instant feedback)
         _engineOn = expectedNewState;
         _isTogglingEngine = false;
         notifyListeners();
+        debugPrint('⚡ UI updated optimistically to: ${_engineOn ? "ON" : "OFF"}');
 
-        debugPrint('⚡ UI updated optimistically - showing new state immediately');
+        // ✅ STEP 3: Start background polling to verify actual GPS state
+        _startEngineStatePolling(expectedNewState);
 
-        // ✅ STEP 2: Start aggressive background verification
-        _startEngineVerification(expectedNewState);
+        debugPrint("🔧 ========== ENGINE TOGGLE COMPLETED ==========");
+        debugPrint("✅ UI state: ${_engineOn ? 'ON' : 'OFF'} (will verify in background)");
+        debugPrint("================================================\n");
 
         return true;
       } else {
@@ -630,78 +674,79 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ NEW: Aggressive polling to verify engine state in background
-  void _startEngineVerification(bool expectedState) async {
-    debugPrint(
-        '🔄 Starting engine state verification (polling every 2s for 30s)...');
+  // ✅ NEW: Start background polling to verify engine state
+  void _startEngineStatePolling(bool expectedState) {
+    // Cancel any existing polling
+    _engineStatePollingTimer?.cancel();
+    _pollAttempts = 0;
 
-    // Cancel any existing verification timer
-    _engineVerificationTimer?.cancel();
+    debugPrint("🔄 Starting background engine state polling...");
+    debugPrint("   Expected state: ${expectedState ? 'ON' : 'OFF'}");
+    debugPrint("   Will poll every 5 seconds (max 30 seconds)");
 
-    int attempts = 0;
-    const int maxAttempts = 15; // 15 attempts × 2 seconds = 30 seconds
-    const int pollInterval = 2; // 2 seconds between checks
+    _engineStatePollingTimer =
+        Timer.periodic(Duration(seconds: 5), (timer) async {
+          _pollAttempts++;
 
-    _engineVerificationTimer =
-        Timer.periodic(Duration(seconds: pollInterval), (timer) async {
-          attempts++;
-          debugPrint('🔍 Verification attempt $attempts/$maxAttempts');
+          debugPrint("🔍 Poll attempt $_pollAttempts/$MAX_POLL_ATTEMPTS...");
 
           try {
+            // Fetch realtime status
             final response = await http.get(
               Uri.parse(
-                  '${EnvConfig.baseUrl}/vehicle/$_selectedVehicleId/engine-status'),
+                  '${EnvConfig.baseUrl}/gps/vehicle/$_selectedVehicleId/realtime-status'),
             );
 
             if (response.statusCode == 200) {
-              final statusData = jsonDecode(response.body);
+              final data = jsonDecode(response.body);
 
-              if (statusData['success'] == true) {
-                final bool actualState = statusData['engineOn'] ?? false;
-                final int dataAge = statusData['dataAgeSeconds'] ?? 999;
+              if (data['success'] == true) {
+                final bool actualState = data['engineOn'] ?? false;
+                final String source = data['source'] ?? 'unknown';
+                final int dataAge = data['dataAgeSeconds'] ?? 9999;
 
-                debugPrint('   📊 DB State: ${actualState ? "ON" : "OFF"} | Age: ${dataAge}s');
+                debugPrint(
+                    "📊 Poll result: Engine ${actualState ? 'ON' : 'OFF'} (source: $source, age: ${dataAge}s)");
 
-                // ✅ Status verified if it matches AND data is fresh
-                if (actualState == expectedState && dataAge < 60) {
-                  debugPrint('✅ Engine state VERIFIED from database!');
+                // ✅ Check if actual state matches expected state
+                if (actualState == expectedState) {
                   debugPrint(
-                      '   Final state: ${actualState ? "ON (UNLOCKED)" : "OFF (LOCKED)"}');
+                      "✅ SUCCESS! GPS confirmed engine is ${actualState ? 'ON' : 'OFF'}");
 
                   // Update UI with confirmed state
-                  if (_engineOn != actualState) {
-                    _engineOn = actualState;
-                    notifyListeners();
-                  }
+                  _engineOn = actualState;
+                  notifyListeners();
 
+                  // Stop polling - we got confirmation!
                   timer.cancel();
+                  _engineStatePollingTimer = null;
+                  debugPrint("🛑 Stopped polling - state confirmed!");
                   return;
+                } else {
+                  debugPrint(
+                      "⏳ Waiting... GPS still shows ${actualState ? 'ON' : 'OFF'}, expected ${expectedState ? 'ON' : 'OFF'}");
                 }
 
-                // State mismatch - keep polling
-                else if (actualState != expectedState) {
+                // ✅ If data is fresh (< 10 seconds) but wrong, update UI anyway
+                if (dataAge < 10 && actualState != _engineOn) {
                   debugPrint(
-                      '⚠️ State mismatch - Expected: $expectedState, Got: $actualState');
-
-                  // Update UI with actual state from database
-                  if (_engineOn != actualState) {
-                    debugPrint('🔄 Correcting UI to match database state');
-                    _engineOn = actualState;
-                    notifyListeners();
-                  }
+                      "⚠️ Fresh GPS data shows different state - updating UI");
+                  _engineOn = actualState;
+                  notifyListeners();
                 }
               }
             }
           } catch (e) {
-            debugPrint('⚠️ Verification request failed: $e');
+            debugPrint("⚠️ Poll error: $e");
           }
 
-          // Stop after max attempts
-          if (attempts >= maxAttempts) {
-            debugPrint(
-                '⏹️ Verification stopped after ${maxAttempts * pollInterval} seconds');
-            debugPrint('   Device may be slow to respond or offline');
+          // ✅ Stop after max attempts
+          if (_pollAttempts >= MAX_POLL_ATTEMPTS) {
+            debugPrint("⏱️ Max polling attempts reached (30 seconds)");
+            debugPrint("   Final UI state: ${_engineOn ? 'ON' : 'OFF'}");
             timer.cancel();
+            _engineStatePollingTimer = null;
+            debugPrint("🛑 Stopped polling - timeout");
           }
         });
   }
@@ -713,7 +758,6 @@ class DashboardController extends ChangeNotifier {
     try {
       debugPrint("🚨 Reporting vehicle as stolen");
 
-      // Step 1: Get current user ID
       final prefs = await SharedPreferences.getInstance();
       final userDataString = prefs.getString('user');
 
@@ -727,7 +771,6 @@ class DashboardController extends ChangeNotifier {
       final userData = jsonDecode(userDataString);
       final int userId = userData['id'];
 
-      // Step 2: Create stolen alert in database
       debugPrint("📝 Creating stolen alert in database...");
       final alertResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/alerts/report-stolen"),
@@ -749,7 +792,6 @@ class DashboardController extends ChangeNotifier {
       final alertData = jsonDecode(alertResponse.body);
       debugPrint("✅ Stolen alert created: ${alertData['alert']['id']}");
 
-      // Step 3: Send CLOSERELAY command to disable engine
       debugPrint("🔧 Sending CLOSERELAY command to disable engine...");
       final commandResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
@@ -772,13 +814,10 @@ class DashboardController extends ChangeNotifier {
 
       if (commandResponse.statusCode == 200 && commandOk) {
         debugPrint('✅ Engine disabled successfully');
-
-        // Update engine state
         _engineOn = false;
 
-        // Wait and verify
-        await Future.delayed(Duration(seconds: 2));
-        await fetchEngineStatusFromDatabase();
+        // Start background polling for stolen report
+        _startEngineStatePolling(false);
       } else {
         debugPrint(
             '⚠️ Engine disable command may have failed, but alert was created');
@@ -808,7 +847,7 @@ class DashboardController extends ChangeNotifier {
       _socketService.joinVehicleTracking(vehicleId);
 
       fetchDashboardData();
-      fetchEngineStatusFromDatabase();
+      fetchRealtimeEngineStatus();
       fetchCurrentLocation();
       fetchUnreadNotifications();
 
@@ -874,6 +913,7 @@ class DashboardController extends ChangeNotifier {
   void dispose() {
     _cachePollingTimer?.cancel();
     _engineVerificationTimer?.cancel();
+    _engineStatePollingTimer?.cancel(); // ✅ ADD THIS
     _alertSubscription?.cancel();
     _locationSubscription?.cancel();
     _socketService.leaveVehicleTracking(_selectedVehicleId);
