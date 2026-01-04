@@ -497,6 +497,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                     ? _controller.selectedVehicle!.nickname
                     : '${_controller.selectedVehicle?.brand ?? ''} ${_controller
                     .selectedVehicle?.model ?? ''}'.trim(),
+                nearbyPolice: _controller.nearbyPolice,
               ),
         ),
       );

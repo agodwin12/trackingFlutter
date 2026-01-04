@@ -73,6 +73,8 @@ class DashboardController extends ChangeNotifier {
   List<Vehicle> get vehicles => _vehicles;
   BitmapDescriptor? get customCarIcon => _customCarIcon;
   GoogleMapController? get mapController => _mapController;
+  List<dynamic> _nearbyPolice = [];
+  List<dynamic> get nearbyPolice => _nearbyPolice;
 
   // Battery Getters
   int get batteryPercentage => _batteryPercentage;
@@ -751,6 +753,9 @@ class DashboardController extends ChangeNotifier {
         });
   }
 
+
+  // In dashboard_controller.dart - update reportStolen()
+
   Future<bool> reportStolen() async {
     _isReportingStolen = true;
     notifyListeners();
@@ -772,59 +777,86 @@ class DashboardController extends ChangeNotifier {
       final int userId = userData['id'];
 
       debugPrint("📝 Creating stolen alert in database...");
+
+      final requestBody = {
+        "vehicleId": _selectedVehicleId,
+        "userId": userId,
+        "latitude": _vehicleLat,
+        "longitude": _vehicleLng,
+      };
+
       final alertResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/alerts/report-stolen"),
         headers: {"Content-Type": "application/json"},
-        body: json.encode({
-          "vehicleId": _selectedVehicleId,
-          "userId": userId,
-          "latitude": _vehicleLat,
-          "longitude": _vehicleLng,
-        }),
+        body: json.encode(requestBody),
       );
 
       debugPrint("📡 Alert creation response: ${alertResponse.statusCode}");
 
-      if (alertResponse.statusCode != 201) {
-        throw Exception('Failed to create stolen alert');
+      // ✅ Accept both 200 and 201 status codes
+      if (alertResponse.statusCode != 200 && alertResponse.statusCode != 201) {
+        try {
+          final errorData = jsonDecode(alertResponse.body);
+          debugPrint("❌ Backend error: ${errorData['message']}");
+        } catch (e) {
+          debugPrint("❌ Could not parse error response: ${alertResponse.body}");
+        }
+
+        _isReportingStolen = false;
+        notifyListeners();
+        return false;
       }
 
       final alertData = jsonDecode(alertResponse.body);
-      debugPrint("✅ Stolen alert created: ${alertData['alert']['id']}");
 
-      debugPrint("🔧 Sending CLOSERELAY command to disable engine...");
-      final commandResponse = await http.post(
-        Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
-        headers: {"Content-Type": "application/json"},
-        body: json.encode({
-          "vehicleId": _selectedVehicleId,
-          "command": "CLOSERELAY",
-          "params": "",
-          "password": "",
-          "sendTime": "",
-        }),
-      );
+      // ✅ Check if it was already reported
+      final bool alreadyReported = alertData['alreadyReported'] ?? false;
 
-      debugPrint("📡 Engine disable response: ${commandResponse.statusCode}");
-
-      final commandData = jsonDecode(commandResponse.body);
-      final bool commandOk = commandData['success'] == true ||
-          (commandData['response'] is Map &&
-              commandData['response']['success'] == 'true');
-
-      if (commandResponse.statusCode == 200 && commandOk) {
-        debugPrint('✅ Engine disabled successfully');
-        _engineOn = false;
-
-        // Start background polling for stolen report
-        _startEngineStatePolling(false);
+      if (alreadyReported) {
+        debugPrint("⚠️ Vehicle was already reported stolen");
+        debugPrint("✅ Fetched existing alert: ${alertData['alert']['id']}");
       } else {
-        debugPrint(
-            '⚠️ Engine disable command may have failed, but alert was created');
+        debugPrint("✅ New stolen alert created: ${alertData['alert']['id']}");
+      }
+
+      final List<dynamic> nearbyPolice = alertData['nearbyPolice'] ?? [];
+      debugPrint("🚔 Received ${nearbyPolice.length} nearby police stations");
+
+      // Only send engine disable command if this is a NEW report
+      if (!alreadyReported) {
+        debugPrint("🔧 Sending CLOSERELAY command to disable engine...");
+        final commandResponse = await http.post(
+          Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
+          headers: {"Content-Type": "application/json"},
+          body: json.encode({
+            "vehicleId": _selectedVehicleId,
+            "command": "CLOSERELAY",
+            "params": "",
+            "password": "",
+            "sendTime": "",
+          }),
+        );
+
+        debugPrint("📡 Engine disable response: ${commandResponse.statusCode}");
+
+        final commandData = jsonDecode(commandResponse.body);
+        final bool commandOk = commandData['success'] == true ||
+            (commandData['response'] is Map &&
+                commandData['response']['success'] == 'true');
+
+        if (commandResponse.statusCode == 200 && commandOk) {
+          debugPrint('✅ Engine disabled successfully');
+          _engineOn = false;
+          _startEngineStatePolling(false);
+        }
+      } else {
+        debugPrint('ℹ️ Skipping engine disable - already reported');
       }
 
       _isReportingStolen = false;
       notifyListeners();
+
+      _nearbyPolice = nearbyPolice;
 
       return true;
     } catch (error) {
@@ -834,6 +866,8 @@ class DashboardController extends ChangeNotifier {
       return false;
     }
   }
+
+
 
   // Change Vehicle
   void onVehicleSelected(int vehicleId) {
