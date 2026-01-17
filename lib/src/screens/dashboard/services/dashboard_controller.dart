@@ -15,10 +15,17 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:tracking/src/screens/dashboard/services/safe_zone_service.dart';
 import '../../../services/env_config.dart';
 import '../../../services/socket_service.dart';
+import '../../../services/connectivity_service.dart'; // ✅ NEW
+import '../../../services/cache_service.dart'; // ✅ NEW
 import '../models/vehicle_model.dart';
 import 'dashboard_service.dart';
 
 class DashboardController extends ChangeNotifier {
+  // Services
+  final ConnectivityService _connectivityService = ConnectivityService(); // ✅ NEW
+  final CacheService _cacheService = CacheService(); // ✅ NEW
+  final SocketService _socketService = SocketService();
+
   // State Variables
   bool _isLoading = true;
   bool _isRefreshing = false;
@@ -37,23 +44,21 @@ class DashboardController extends ChangeNotifier {
   List<Vehicle> _vehicles = [];
   BitmapDescriptor? _customCarIcon;
   GoogleMapController? _mapController;
+  DateTime? _lastLocationUpdate; // ✅ NEW - Track when location was last updated
 
   // Battery State Variables
   int _batteryPercentage = 0;
   double _batteryVoltage = 0.0;
   bool _isLowBattery = false;
 
-  // Socket Service
-  final SocketService _socketService = SocketService();
+  // Timers
   StreamSubscription<Map<String, dynamic>>? _alertSubscription;
   StreamSubscription<Map<String, dynamic>>? _locationSubscription;
   Timer? _cachePollingTimer;
   Timer? _engineVerificationTimer;
-
-  // ✅ NEW: Background polling for engine state verification
   Timer? _engineStatePollingTimer;
   int _pollAttempts = 0;
-  static const int MAX_POLL_ATTEMPTS = 6; // 6 attempts × 5 seconds = 30 seconds max
+  static const int MAX_POLL_ATTEMPTS = 6;
 
   // Getters
   bool get isLoading => _isLoading;
@@ -75,11 +80,16 @@ class DashboardController extends ChangeNotifier {
   GoogleMapController? get mapController => _mapController;
   List<dynamic> _nearbyPolice = [];
   List<dynamic> get nearbyPolice => _nearbyPolice;
+  DateTime? get lastLocationUpdate => _lastLocationUpdate; // ✅ NEW
 
   // Battery Getters
   int get batteryPercentage => _batteryPercentage;
   double get batteryVoltage => _batteryVoltage;
   bool get isLowBattery => _isLowBattery;
+
+  // ✅ NEW: Check if we're online
+  bool get isOnline => _connectivityService.isOnline;
+  bool get isOffline => _connectivityService.isOffline;
 
   Vehicle? get selectedVehicle => _vehicles.isEmpty
       ? null
@@ -93,22 +103,30 @@ class DashboardController extends ChangeNotifier {
     _selectedVehicleId = vehicleId;
   }
 
-  // ✅ OPTIMIZED: Initialize Dashboard with parallel loading
+  // ✅ UPDATED: Initialize with offline support
   Future<void> initialize() async {
     try {
-      debugPrint('⚡ Starting FAST dashboard initialization...');
+      debugPrint('⚡ Starting dashboard initialization...');
+      debugPrint('🌐 Connection status: ${isOnline ? "ONLINE" : "OFFLINE"}');
 
-      // ✅ Load marker and critical data in parallel
-      await Future.wait([
-        loadCustomMarker(),
-        initializeDashboard(),
-      ]);
+      // Load marker first (works offline)
+      await loadCustomMarker();
 
-      // ✅ These can start without waiting
-      connectSocketAndListenForUpdates();
-      startCachePolling();
+      if (isOffline) {
+        // ✅ OFFLINE MODE: Load from cache
+        debugPrint('📱 OFFLINE MODE - Loading from cache...');
+        await _loadFromCache();
+      } else {
+        // ✅ ONLINE MODE: Load from API and cache it
+        debugPrint('🌐 ONLINE MODE - Loading from API...');
+        await initializeDashboard();
 
-      debugPrint('✅ Dashboard fully initialized!');
+        // Connect to real-time updates only when online
+        connectSocketAndListenForUpdates();
+        startCachePolling();
+      }
+
+      debugPrint('✅ Dashboard initialized!');
     } catch (error) {
       debugPrint("🔥 Error initializing dashboard: $error");
       _isLoading = false;
@@ -116,7 +134,50 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ FASTER: Load marker asynchronously without blocking
+  // ✅ NEW: Load data from cache (offline mode)
+  Future<void> _loadFromCache() async {
+    try {
+      debugPrint('📦 Loading cached data...');
+
+      // Load vehicles from cache
+      final cachedVehicles = await _cacheService.getCachedVehicleList();
+      if (cachedVehicles != null && cachedVehicles.isNotEmpty) {
+        _vehicles = cachedVehicles.map((v) => Vehicle.fromJson(v)).toList();
+        debugPrint('✅ Loaded ${_vehicles.length} vehicles from cache');
+      }
+
+      // Load vehicle details from cache
+      final cachedDetails = await _cacheService.getCachedVehicleDetails(_selectedVehicleId);
+      if (cachedDetails != null) {
+        _geofenceEnabled = cachedDetails['geofenceEnabled'] ?? true;
+        _safeZoneEnabled = cachedDetails['safeZoneEnabled'] ?? false;
+        _engineOn = cachedDetails['engineOn'] ?? true;
+        debugPrint('✅ Loaded vehicle details from cache');
+      }
+
+      // Load last known location from cache
+      final cachedLocation = await _cacheService.getCachedLastLocation(_selectedVehicleId);
+      if (cachedLocation != null) {
+        _vehicleLat = cachedLocation['lat'];
+        _vehicleLng = cachedLocation['lng'];
+        _lastLocationUpdate = DateTime.parse(cachedLocation['timestamp']);
+
+        final minutesAgo = DateTime.now().difference(_lastLocationUpdate!).inMinutes;
+        debugPrint('✅ Loaded location from cache (${minutesAgo} minutes ago)');
+      }
+
+      _isLoading = false;
+      notifyListeners();
+
+      debugPrint('✅ Offline data loaded successfully');
+    } catch (e) {
+      debugPrint('❌ Error loading from cache: $e');
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // Load custom marker
   Future<void> loadCustomMarker() async {
     try {
       final ByteData data = await rootBundle.load('assets/carmarker.png');
@@ -163,12 +224,12 @@ class DashboardController extends ChangeNotifier {
     };
   }
 
-  // ✅ OPTIMIZED: Fast initialization with progressive loading
+  // ✅ UPDATED: Initialize dashboard with caching
   Future<void> initializeDashboard() async {
     try {
-      debugPrint('⚡ Starting FAST dashboard initialization...');
+      debugPrint('⚡ Starting dashboard initialization...');
 
-      // ✅ STEP 1: Load ONLY critical data (vehicles + location) in parallel
+      // Load critical data in parallel
       await Future.wait([
         fetchVehicles(),
         _fetchInitialLocation(),
@@ -176,13 +237,12 @@ class DashboardController extends ChangeNotifier {
 
       debugPrint('✅ Critical data loaded! Showing map now...');
 
-      // ✅ STEP 2: Show map immediately (under 3 seconds!)
       _isLoading = false;
       notifyListeners();
 
       debugPrint('🗺️ Map displayed! Loading remaining data in background...');
 
-      // ✅ STEP 3: Load non-critical data in parallel (background)
+      // Load non-critical data in background
       _loadBackgroundData();
     } catch (error) {
       debugPrint("🔥 Error initializing dashboard: $error");
@@ -191,15 +251,29 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ NEW: Fetch initial location without camera animation
+  // Fetch initial location
   Future<void> _fetchInitialLocation() async {
     try {
-      final result =
-      await DashboardService.fetchCurrentLocation(_selectedVehicleId);
+      if (isOffline) {
+        debugPrint('📱 Offline - using cached location');
+        return;
+      }
+
+      final result = await DashboardService.fetchCurrentLocation(_selectedVehicleId);
 
       if (result['success'] == true) {
         _vehicleLat = result['latitude'] ?? 4.0511;
         _vehicleLng = result['longitude'] ?? 9.7679;
+        _lastLocationUpdate = DateTime.now();
+
+        // ✅ Cache the location
+        await _cacheService.cacheLastLocation(
+          _selectedVehicleId,
+          _vehicleLat,
+          _vehicleLng,
+          _lastLocationUpdate!,
+        );
+
         debugPrint("📍 Initial location loaded: $_vehicleLat, $_vehicleLng");
       }
     } catch (e) {
@@ -209,7 +283,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ NEW: Load non-critical data in background
+  // Load background data
   Future<void> _loadBackgroundData() async {
     try {
       await Future.wait([
@@ -226,8 +300,13 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Pull to Refresh
+  // ✅ UPDATED: Refresh with offline check
   Future<void> refresh() async {
+    if (isOffline) {
+      debugPrint('📱 Cannot refresh while offline');
+      return;
+    }
+
     _isRefreshing = true;
     notifyListeners();
 
@@ -246,161 +325,115 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Fetch Vehicles
+  // ✅ UPDATED: Fetch vehicles with caching
   Future<void> fetchVehicles() async {
+    if (isOffline) {
+      debugPrint('📱 Offline - using cached vehicles');
+      return;
+    }
+
     final user = await DashboardService.loadUserData();
     if (user == null) return;
 
     final vehiclesData = await DashboardService.fetchVehicles(user["id"]);
 
     _vehicles = vehiclesData.map((v) => Vehicle.fromJson(v)).toList();
-    debugPrint("✅ Loaded ${_vehicles.length} vehicles");
+
+    // ✅ Cache the vehicle list with proper casting
+    await _cacheService.cacheVehicleList(
+        vehiclesData.map((v) => v as Map<String, dynamic>).toList()  // ✅ FIXED
+    );
+
+    debugPrint("✅ Loaded ${_vehicles.length} vehicles and cached them");
     notifyListeners();
   }
 
-  /// Fetch Dashboard Data
+  // ✅ UPDATED: Fetch dashboard data with caching
   Future<void> fetchDashboardData() async {
     try {
+      if (isOffline) {
+        debugPrint('📱 Offline - using cached dashboard data');
+        return;
+      }
+
       debugPrint('📡 ========== FETCHING DASHBOARD DATA ==========');
 
-      // Fetch Geofencing Status
-      debugPrint(
-          '📡 Step 1: Fetching geofencing status for vehicle $_selectedVehicleId...');
+      // Fetch geofencing status
       final geofencingActive =
       await DashboardService.fetchGeofencingStatus(_selectedVehicleId);
 
       if (geofencingActive != null) {
         _geofenceEnabled = geofencingActive;
-        debugPrint(
-            "✅ Geofence status fetched from backend: ${_geofenceEnabled ? 'ON (ACTIVE)' : 'OFF (INACTIVE)'}");
+        debugPrint("✅ Geofence status: ${_geofenceEnabled ? 'ON' : 'OFF'}");
       } else {
-        debugPrint("⚠️ Geofence status is null, defaulting to TRUE");
         _geofenceEnabled = true;
       }
 
-      // Fetch Safe Zone Status
-      debugPrint(
-          '📡 Step 2: Fetching safe zone status for vehicle $_selectedVehicleId...');
-      final safeZoneResult =
-      await SafeZoneService.getSafeZone(_selectedVehicleId);
+      // Fetch safe zone status
+      final safeZoneResult = await SafeZoneService.getSafeZone(_selectedVehicleId);
 
-      if (safeZoneResult['needsLogin'] == true) {
-        debugPrint("⚠️ Auth error detected - may need to re-login");
-        _safeZoneEnabled = false;
-      } else if (safeZoneResult['success']) {
+      if (safeZoneResult['success']) {
         _safeZoneEnabled = safeZoneResult['safeZone']?['is_active'] ?? false;
-        debugPrint(
-            "✅ Safe zone status fetched from backend: ${_safeZoneEnabled ? 'ON (ACTIVE)' : 'OFF (INACTIVE)'}");
+        debugPrint("✅ Safe zone status: ${_safeZoneEnabled ? 'ON' : 'OFF'}");
       } else {
-        debugPrint("⚠️ Safe zone fetch failed, defaulting to FALSE");
         _safeZoneEnabled = false;
       }
 
-      debugPrint('📡 ========== DASHBOARD DATA FETCH COMPLETE ==========');
-      debugPrint('   🔵 Geofence: ${_geofenceEnabled ? "ENABLED" : "DISABLED"}');
-      debugPrint(
-          '   🟢 Safe Zone: ${_safeZoneEnabled ? "ENABLED" : "DISABLED"}');
-      debugPrint('========================================================\n');
+      // ✅ Cache vehicle details
+      await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
+        'geofenceEnabled': _geofenceEnabled,
+        'safeZoneEnabled': _safeZoneEnabled,
+        'engineOn': _engineOn,
+      });
 
       notifyListeners();
     } catch (e) {
-      debugPrint("🔥 ========== ERROR FETCHING DASHBOARD DATA ==========");
-      debugPrint("🔥 Error: $e");
-      debugPrint(
-          "🔥 Setting default values - Geofence: TRUE, Safe Zone: FALSE");
-      debugPrint("🔥 ====================================================\n");
-
+      debugPrint("🔥 Error fetching dashboard data: $e");
       _geofenceEnabled = true;
       _safeZoneEnabled = false;
       notifyListeners();
     }
   }
 
-  // ✅ UPDATED: Fetch REALTIME engine status from GPS device
+  // ✅ UPDATED: Fetch engine status with offline check
   Future<void> fetchRealtimeEngineStatus() async {
     try {
+      if (isOffline) {
+        debugPrint('📱 Offline - using cached engine status');
+        return;
+      }
+
       debugPrint('🔍 Fetching REALTIME engine status from GPS device...');
 
-      final url =
-          '${EnvConfig.baseUrl}/gps/vehicle/$_selectedVehicleId/realtime-status';
-
+      final url = '${EnvConfig.baseUrl}/gps/vehicle/$_selectedVehicleId/realtime-status';
       final response = await http.get(Uri.parse(url));
-
-      debugPrint('📡 Realtime engine status response: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
         if (data['success'] == true) {
           final bool newEngineState = data['engineOn'] ?? false;
-          final String source = data['source'] ?? 'unknown';
 
-          debugPrint(
-              '✅ Engine status from GPS: ${newEngineState ? "ON (UNLOCKED)" : "OFF (LOCKED)"}');
-          debugPrint('   📊 Source: $source');
-          debugPrint('   📡 GPS Status: ${data['gpsStatus']}');
-          debugPrint('   🚗 Speed: ${data['speed']} km/h');
+          debugPrint('✅ Engine status: ${newEngineState ? "ON" : "OFF"}');
 
-          // Update engine state
           _engineOn = newEngineState;
 
-          // Parse battery info from raw status if available
           if (data['rawStatus'] != null && data['rawStatus'].isNotEmpty) {
             _parseVehicleStatus(data['rawStatus']);
           }
 
+          // ✅ Update cache
+          await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
+            'geofenceEnabled': _geofenceEnabled,
+            'safeZoneEnabled': _safeZoneEnabled,
+            'engineOn': _engineOn,
+          });
+
           notifyListeners();
-        } else {
-          debugPrint('⚠️ Realtime engine status fetch unsuccessful');
         }
-      } else {
-        debugPrint(
-            '❌ Failed to fetch realtime engine status: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('🔥 Error fetching realtime engine status: $e');
-    }
-  }
-
-  // ✅ KEPT FOR BACKWARD COMPATIBILITY: Fetch engine status from database
-  Future<void> fetchEngineStatusFromDatabase() async {
-    try {
-      debugPrint('🔍 Fetching engine status from database...');
-
-      final response = await http.get(
-        Uri.parse(
-            '${EnvConfig.baseUrl}/vehicle/$_selectedVehicleId/engine-status'),
-      );
-
-      debugPrint('📡 Engine status response: ${response.statusCode}');
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (data['success'] == true) {
-          final bool newEngineState = data['engineOn'] ?? false;
-          final int dataAge = data['dataAgeSeconds'] ?? 0;
-
-          debugPrint(
-              '✅ Engine status from DB: ${newEngineState ? "ON (UNLOCKED)" : "OFF (LOCKED)"}');
-          debugPrint('   ⏰ Data age: $dataAge seconds');
-          debugPrint('   📊 Raw status: ${data['rawStatus']}');
-
-          _engineOn = newEngineState;
-
-          if (data['rawStatus'] != null && data['rawStatus'].isNotEmpty) {
-            _parseVehicleStatus(data['rawStatus']);
-          }
-
-          notifyListeners();
-        } else {
-          debugPrint('⚠️ Engine status fetch unsuccessful');
-        }
-      } else {
-        debugPrint('❌ Failed to fetch engine status: ${response.statusCode}');
-      }
-    } catch (e) {
-      debugPrint('🔥 Error fetching engine status: $e');
     }
   }
 
@@ -430,8 +463,7 @@ class DashboardController extends ChangeNotifier {
             }
           }
 
-          debugPrint(
-              '🔋 Battery parsed: ${_batteryPercentage}% / ${_batteryVoltage}V (Low: $_isLowBattery)');
+          debugPrint('🔋 Battery: ${_batteryPercentage}% / ${_batteryVoltage}V');
         }
       }
     } catch (e) {
@@ -439,14 +471,27 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Fetch Current Location
+  // ✅ UPDATED: Fetch location with caching
   Future<void> fetchCurrentLocation({bool silent = false}) async {
-    final result =
-    await DashboardService.fetchCurrentLocation(_selectedVehicleId);
+    if (isOffline) {
+      if (!silent) debugPrint('📱 Offline - using cached location');
+      return;
+    }
+
+    final result = await DashboardService.fetchCurrentLocation(_selectedVehicleId);
 
     if (result['success'] == true) {
       _vehicleLat = result['latitude'] ?? 4.0511;
       _vehicleLng = result['longitude'] ?? 9.7679;
+      _lastLocationUpdate = DateTime.now();
+
+      // ✅ Cache the location
+      await _cacheService.cacheLastLocation(
+        _selectedVehicleId,
+        _vehicleLat,
+        _vehicleLng,
+        _lastLocationUpdate!,
+      );
 
       _mapController?.animateCamera(
         CameraUpdate.newLatLng(LatLng(_vehicleLat, _vehicleLng)),
@@ -459,10 +504,11 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Fetch Unread Notifications
+  // Fetch unread notifications
   Future<void> fetchUnreadNotifications() async {
-    final result =
-    await DashboardService.fetchUnreadNotifications(_selectedVehicleId);
+    if (isOffline) return;
+
+    final result = await DashboardService.fetchUnreadNotifications(_selectedVehicleId);
 
     if (result['success'] == true) {
       _notificationCount = result['unreadCount'];
@@ -471,19 +517,22 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Connect Socket and Listen for Updates
+  // Connect socket
   void connectSocketAndListenForUpdates() {
-    final String socketUrl =
-        dotenv.env['SOCKET_URL'] ?? 'http://10.0.2.2:5000';
+    if (isOffline) {
+      debugPrint('📱 Offline - skipping socket connection');
+      return;
+    }
 
-    debugPrint(
-        '🔌 Connecting to Socket.IO at $socketUrl for vehicle $_selectedVehicleId');
+    final String socketUrl = dotenv.env['SOCKET_URL'] ?? 'http://10.0.2.2:5000';
+
+    debugPrint('🔌 Connecting to Socket.IO at $socketUrl');
 
     _socketService.connect(socketUrl);
 
     _socketService.connectionStatusStream.listen((isConnected) {
       if (isConnected) {
-        debugPrint('✅ Socket connected! Now joining vehicle tracking room...');
+        debugPrint('✅ Socket connected!');
         _socketService.joinVehicleTracking(_selectedVehicleId);
       } else {
         debugPrint('❌ Socket disconnected');
@@ -491,12 +540,10 @@ class DashboardController extends ChangeNotifier {
     });
 
     _alertSubscription = _socketService.safeZoneAlertStream.listen((alertData) {
-      debugPrint('🚨 Safe Zone Alert received: $alertData');
+      debugPrint('🚨 Safe Zone Alert: $alertData');
     });
 
     _locationSubscription = _socketService.locationUpdateStream.listen((data) {
-      debugPrint('📍 Real-time location update received: $data');
-
       final vehicleId = data['vehicleId'];
       if (vehicleId == _selectedVehicleId) {
         final lat = data['latitude'];
@@ -506,6 +553,15 @@ class DashboardController extends ChangeNotifier {
         if (lat != null && lon != null) {
           _vehicleLat = lat is double ? lat : (lat as num).toDouble();
           _vehicleLng = lon is double ? lon : (lon as num).toDouble();
+          _lastLocationUpdate = DateTime.now();
+
+          // ✅ Cache real-time location
+          _cacheService.cacheLastLocation(
+            _selectedVehicleId,
+            _vehicleLat,
+            _vehicleLng,
+            _lastLocationUpdate!,
+          );
 
           if (status != null && status is String && status.isNotEmpty) {
             _parseVehicleStatus(status);
@@ -515,41 +571,49 @@ class DashboardController extends ChangeNotifier {
             CameraUpdate.newLatLng(LatLng(_vehicleLat, _vehicleLng)),
           );
 
-          debugPrint(
-              '✅ Map updated with new position: $_vehicleLat, $_vehicleLng');
           notifyListeners();
         }
       }
     });
   }
 
-  // Get Safe Zone Alert Stream
   Stream<Map<String, dynamic>> get safeZoneAlertStream =>
       _socketService.safeZoneAlertStream;
 
-  // Start Cache Polling
   void startCachePolling() {
+    if (isOffline) return;
+
     _cachePollingTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       fetchCurrentLocation(silent: true);
     });
   }
 
-  // Toggle Geofence
+  // ✅ UPDATED: Toggle geofence with offline check
   Future<bool> toggleGeofence() async {
+    if (isOffline) {
+      debugPrint('❌ Cannot toggle geofence while offline');
+      return false;
+    }
+
     _isTogglingGeofence = true;
     notifyListeners();
 
     try {
       final response = await http.post(
-        Uri.parse(
-            "${EnvConfig.baseUrl}/vehicle/$_selectedVehicleId/security/toggle"),
+        Uri.parse("${EnvConfig.baseUrl}/vehicle/$_selectedVehicleId/security/toggle"),
         headers: {"Content-Type": "application/json"},
       );
 
-      debugPrint("📡 Geofencing toggle response: ${response.statusCode}");
-
       if (response.statusCode == 200 || response.statusCode == 201) {
         _geofenceEnabled = !_geofenceEnabled;
+
+        // ✅ Update cache
+        await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
+          'geofenceEnabled': _geofenceEnabled,
+          'safeZoneEnabled': _safeZoneEnabled,
+          'engineOn': _engineOn,
+        });
+
         _isTogglingGeofence = false;
         notifyListeners();
         return true;
@@ -563,18 +627,20 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Toggle Safe Zone
+  // ✅ UPDATED: Toggle safe zone with offline check
   Future<Map<String, dynamic>> toggleSafeZone() async {
+    if (isOffline) {
+      debugPrint('❌ Cannot toggle safe zone while offline');
+      return {'success': false, 'message': 'No internet connection'};
+    }
+
     _isTogglingSafeZone = true;
     notifyListeners();
 
     try {
-      final safeZoneResult =
-      await SafeZoneService.getSafeZone(_selectedVehicleId);
+      final safeZoneResult = await SafeZoneService.getSafeZone(_selectedVehicleId);
 
       if (!safeZoneResult['success'] || safeZoneResult['safeZone'] == null) {
-        debugPrint('📍 No safe zone found. Creating new safe zone...');
-
         final createResult = await SafeZoneService.createSafeZone(
           vehicleId: _selectedVehicleId,
           latitude: _vehicleLat,
@@ -587,13 +653,19 @@ class DashboardController extends ChangeNotifier {
 
         if (createResult['success']) {
           _safeZoneEnabled = true;
+
+          // ✅ Update cache
+          await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
+            'geofenceEnabled': _geofenceEnabled,
+            'safeZoneEnabled': _safeZoneEnabled,
+            'engineOn': _engineOn,
+          });
+
           notifyListeners();
         }
 
         return createResult;
       } else {
-        debugPrint('📍 Safe zone exists. Deleting safe zone...');
-
         final safeZoneId = safeZoneResult['safeZone']['id'];
         final deleteResult = await SafeZoneService.deleteSafeZone(safeZoneId);
 
@@ -601,6 +673,14 @@ class DashboardController extends ChangeNotifier {
 
         if (deleteResult['success']) {
           _safeZoneEnabled = false;
+
+          // ✅ Update cache
+          await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
+            'geofenceEnabled': _geofenceEnabled,
+            'safeZoneEnabled': _safeZoneEnabled,
+            'engineOn': _engineOn,
+          });
+
           notifyListeners();
         }
 
@@ -614,8 +694,13 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ IMPROVED: Toggle Engine with optimistic UI + background polling
+  // ✅ UPDATED: Toggle engine with offline check
   Future<bool> toggleEngine() async {
+    if (isOffline) {
+      debugPrint('❌ Cannot control engine while offline');
+      return false;
+    }
+
     _isTogglingEngine = true;
     notifyListeners();
 
@@ -623,12 +708,8 @@ class DashboardController extends ChangeNotifier {
       final String command = _engineOn ? 'CLOSERELAY' : 'OPENRELAY';
       final bool expectedNewState = !_engineOn;
 
-      debugPrint("🔧 ========== ENGINE TOGGLE STARTED ==========");
-      debugPrint("🔧 Current engine state: ${_engineOn ? 'ON' : 'OFF'}");
-      debugPrint("📤 Sending command: $command");
-      debugPrint("🎯 Expected new state: ${expectedNewState ? 'ON' : 'OFF'}");
+      debugPrint("🔧 Sending command: $command");
 
-      // ✅ STEP 1: Send command to GPS device
       final resp = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
         headers: {"Content-Type": "application/json"},
@@ -641,32 +722,28 @@ class DashboardController extends ChangeNotifier {
         }),
       );
 
-      debugPrint("📡 Engine control response: ${resp.statusCode}");
-
       final data = jsonDecode(resp.body);
       final bool okTop = data['success'] == true;
-      final bool okNested =
-          (data['response'] is Map) && (data['response']['success'] == 'true');
+      final bool okNested = (data['response'] is Map) && (data['response']['success'] == 'true');
 
       if (resp.statusCode == 200 && (okTop || okNested)) {
-        debugPrint('✅ Command sent successfully to GPS device');
-
-        // ✅ STEP 2: Immediate optimistic UI update (instant feedback)
         _engineOn = expectedNewState;
         _isTogglingEngine = false;
+
+        // ✅ Update cache
+        await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
+          'geofenceEnabled': _geofenceEnabled,
+          'safeZoneEnabled': _safeZoneEnabled,
+          'engineOn': _engineOn,
+        });
+
         notifyListeners();
-        debugPrint('⚡ UI updated optimistically to: ${_engineOn ? "ON" : "OFF"}');
 
-        // ✅ STEP 3: Start background polling to verify actual GPS state
         _startEngineStatePolling(expectedNewState);
-
-        debugPrint("🔧 ========== ENGINE TOGGLE COMPLETED ==========");
-        debugPrint("✅ UI state: ${_engineOn ? 'ON' : 'OFF'} (will verify in background)");
-        debugPrint("================================================\n");
 
         return true;
       } else {
-        throw Exception('Command failed - device may be offline');
+        throw Exception('Command failed');
       }
     } catch (error) {
       debugPrint("🔥 Error toggling engine: $error");
@@ -676,98 +753,65 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ NEW: Start background polling to verify engine state
   void _startEngineStatePolling(bool expectedState) {
-    // Cancel any existing polling
     _engineStatePollingTimer?.cancel();
     _pollAttempts = 0;
 
-    debugPrint("🔄 Starting background engine state polling...");
-    debugPrint("   Expected state: ${expectedState ? 'ON' : 'OFF'}");
-    debugPrint("   Will poll every 5 seconds (max 30 seconds)");
+    _engineStatePollingTimer = Timer.periodic(Duration(seconds: 5), (timer) async {
+      _pollAttempts++;
 
-    _engineStatePollingTimer =
-        Timer.periodic(Duration(seconds: 5), (timer) async {
-          _pollAttempts++;
+      try {
+        final response = await http.get(
+          Uri.parse('${EnvConfig.baseUrl}/gps/vehicle/$_selectedVehicleId/realtime-status'),
+        );
 
-          debugPrint("🔍 Poll attempt $_pollAttempts/$MAX_POLL_ATTEMPTS...");
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
 
-          try {
-            // Fetch realtime status
-            final response = await http.get(
-              Uri.parse(
-                  '${EnvConfig.baseUrl}/gps/vehicle/$_selectedVehicleId/realtime-status'),
-            );
+          if (data['success'] == true) {
+            final bool actualState = data['engineOn'] ?? false;
 
-            if (response.statusCode == 200) {
-              final data = jsonDecode(response.body);
+            if (actualState == expectedState) {
+              _engineOn = actualState;
 
-              if (data['success'] == true) {
-                final bool actualState = data['engineOn'] ?? false;
-                final String source = data['source'] ?? 'unknown';
-                final int dataAge = data['dataAgeSeconds'] ?? 9999;
+              // ✅ Update cache
+              _cacheService.cacheVehicleDetails(_selectedVehicleId, {
+                'geofenceEnabled': _geofenceEnabled,
+                'safeZoneEnabled': _safeZoneEnabled,
+                'engineOn': _engineOn,
+              });
 
-                debugPrint(
-                    "📊 Poll result: Engine ${actualState ? 'ON' : 'OFF'} (source: $source, age: ${dataAge}s)");
-
-                // ✅ Check if actual state matches expected state
-                if (actualState == expectedState) {
-                  debugPrint(
-                      "✅ SUCCESS! GPS confirmed engine is ${actualState ? 'ON' : 'OFF'}");
-
-                  // Update UI with confirmed state
-                  _engineOn = actualState;
-                  notifyListeners();
-
-                  // Stop polling - we got confirmation!
-                  timer.cancel();
-                  _engineStatePollingTimer = null;
-                  debugPrint("🛑 Stopped polling - state confirmed!");
-                  return;
-                } else {
-                  debugPrint(
-                      "⏳ Waiting... GPS still shows ${actualState ? 'ON' : 'OFF'}, expected ${expectedState ? 'ON' : 'OFF'}");
-                }
-
-                // ✅ If data is fresh (< 10 seconds) but wrong, update UI anyway
-                if (dataAge < 10 && actualState != _engineOn) {
-                  debugPrint(
-                      "⚠️ Fresh GPS data shows different state - updating UI");
-                  _engineOn = actualState;
-                  notifyListeners();
-                }
-              }
+              notifyListeners();
+              timer.cancel();
+              return;
             }
-          } catch (e) {
-            debugPrint("⚠️ Poll error: $e");
           }
+        }
+      } catch (e) {
+        debugPrint("⚠️ Poll error: $e");
+      }
 
-          // ✅ Stop after max attempts
-          if (_pollAttempts >= MAX_POLL_ATTEMPTS) {
-            debugPrint("⏱️ Max polling attempts reached (30 seconds)");
-            debugPrint("   Final UI state: ${_engineOn ? 'ON' : 'OFF'}");
-            timer.cancel();
-            _engineStatePollingTimer = null;
-            debugPrint("🛑 Stopped polling - timeout");
-          }
-        });
+      if (_pollAttempts >= MAX_POLL_ATTEMPTS) {
+        timer.cancel();
+      }
+    });
   }
 
-
-  // In dashboard_controller.dart - update reportStolen()
-
+  // ✅ UPDATED: Report stolen with offline check
   Future<bool> reportStolen() async {
+    if (isOffline) {
+      debugPrint('❌ Cannot report stolen while offline');
+      return false;
+    }
+
     _isReportingStolen = true;
     notifyListeners();
 
     try {
-      debugPrint("🚨 Reporting vehicle as stolen");
-
       final prefs = await SharedPreferences.getInstance();
       final userDataString = prefs.getString('user');
 
       if (userDataString == null) {
-        debugPrint("❌ No user data found");
         _isReportingStolen = false;
         notifyListeners();
         return false;
@@ -775,8 +819,6 @@ class DashboardController extends ChangeNotifier {
 
       final userData = jsonDecode(userDataString);
       final int userId = userData['id'];
-
-      debugPrint("📝 Creating stolen alert in database...");
 
       final requestBody = {
         "vehicleId": _selectedVehicleId,
@@ -791,40 +833,17 @@ class DashboardController extends ChangeNotifier {
         body: json.encode(requestBody),
       );
 
-      debugPrint("📡 Alert creation response: ${alertResponse.statusCode}");
-
-      // ✅ Accept both 200 and 201 status codes
       if (alertResponse.statusCode != 200 && alertResponse.statusCode != 201) {
-        try {
-          final errorData = jsonDecode(alertResponse.body);
-          debugPrint("❌ Backend error: ${errorData['message']}");
-        } catch (e) {
-          debugPrint("❌ Could not parse error response: ${alertResponse.body}");
-        }
-
         _isReportingStolen = false;
         notifyListeners();
         return false;
       }
 
       final alertData = jsonDecode(alertResponse.body);
-
-      // ✅ Check if it was already reported
       final bool alreadyReported = alertData['alreadyReported'] ?? false;
-
-      if (alreadyReported) {
-        debugPrint("⚠️ Vehicle was already reported stolen");
-        debugPrint("✅ Fetched existing alert: ${alertData['alert']['id']}");
-      } else {
-        debugPrint("✅ New stolen alert created: ${alertData['alert']['id']}");
-      }
-
       final List<dynamic> nearbyPolice = alertData['nearbyPolice'] ?? [];
-      debugPrint("🚔 Received ${nearbyPolice.length} nearby police stations");
 
-      // Only send engine disable command if this is a NEW report
       if (!alreadyReported) {
-        debugPrint("🔧 Sending CLOSERELAY command to disable engine...");
         final commandResponse = await http.post(
           Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
           headers: {"Content-Type": "application/json"},
@@ -837,20 +856,14 @@ class DashboardController extends ChangeNotifier {
           }),
         );
 
-        debugPrint("📡 Engine disable response: ${commandResponse.statusCode}");
-
         final commandData = jsonDecode(commandResponse.body);
         final bool commandOk = commandData['success'] == true ||
-            (commandData['response'] is Map &&
-                commandData['response']['success'] == 'true');
+            (commandData['response'] is Map && commandData['response']['success'] == 'true');
 
         if (commandResponse.statusCode == 200 && commandOk) {
-          debugPrint('✅ Engine disabled successfully');
           _engineOn = false;
           _startEngineStatePolling(false);
         }
-      } else {
-        debugPrint('ℹ️ Skipping engine disable - already reported');
       }
 
       _isReportingStolen = false;
@@ -867,9 +880,6 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-
-
-  // Change Vehicle
   void onVehicleSelected(int vehicleId) {
     if (_selectedVehicleId != vehicleId) {
       _socketService.leaveVehicleTracking(_selectedVehicleId);
@@ -880,17 +890,20 @@ class DashboardController extends ChangeNotifier {
 
       _socketService.joinVehicleTracking(vehicleId);
 
-      fetchDashboardData();
-      fetchRealtimeEngineStatus();
-      fetchCurrentLocation();
-      fetchUnreadNotifications();
+      if (isOnline) {
+        fetchDashboardData();
+        fetchRealtimeEngineStatus();
+        fetchCurrentLocation();
+        fetchUnreadNotifications();
+      } else {
+        _loadFromCache();
+      }
 
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  // Cycle Map Type
   void cycleMapType() {
     switch (_currentMapType) {
       case MapType.normal:
@@ -911,7 +924,6 @@ class DashboardController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Get Map Type Label
   String getMapTypeLabel() {
     switch (_currentMapType) {
       case MapType.satellite:
@@ -921,33 +933,29 @@ class DashboardController extends ChangeNotifier {
       case MapType.terrain:
         return 'Terrain';
       default:
-        return 'Default';
+        return '';
     }
   }
 
-  // Set Map Controller
   void setMapController(GoogleMapController controller) {
     _mapController = controller;
   }
 
-  // Hex to Color Utility
   Color hexToColor(String hexString) {
     if (hexString.isEmpty) return Colors.blue;
     hexString = hexString.replaceAll('#', '');
     final validHex = RegExp(r'^[0-9a-fA-F]{6}$');
     if (!validHex.hasMatch(hexString)) {
-      debugPrint('⚠️ Invalid color string: $hexString. Using fallback.');
       hexString = '3B82F6';
     }
     return Color(int.parse('ff$hexString', radix: 16));
   }
 
-  // Dispose
   @override
   void dispose() {
     _cachePollingTimer?.cancel();
     _engineVerificationTimer?.cancel();
-    _engineStatePollingTimer?.cancel(); // ✅ ADD THIS
+    _engineStatePollingTimer?.cancel();
     _alertSubscription?.cancel();
     _locationSubscription?.cancel();
     _socketService.leaveVehicleTracking(_selectedVehicleId);

@@ -161,18 +161,56 @@ class NotificationService {
     }
   }
 
-  /// ✅ Handle foreground messages (when app is open)
+  /// ✅ Handle foreground messages (when app is open) - ENHANCED DEBUG
   static Future<void> _handleForegroundMessage(RemoteMessage message) async {
-    debugPrint("📩 Foreground message received: ${message.notification?.title}");
+    print("========================================");
+    print("📩 FOREGROUND NOTIFICATION RECEIVED!");
+    print("========================================");
+    print("🔔 Title: ${message.notification?.title}");
+    print("🔔 Body: ${message.notification?.body}");
+    print("📦 Data payload: ${message.data}");
+    print("🆔 Message ID: ${message.messageId}");
+    print("⏰ Sent at: ${message.sentTime}");
+
+    // ✅ Check notification type
+    final String? type = message.data['type'];
+    print("📱 Notification Type: $type");
+
+    if (type == 'safe_zone') {
+      print("========================================");
+      print("🛡️ SAFE ZONE ALERT DETECTED!");
+      print("Vehicle: ${message.data['vehicle']}");
+      print("Zone: ${message.data['zone']}");
+      print("Event: ${message.data['event'] ?? 'exit'}");
+      print("Timestamp: ${message.data['timestamp']}");
+      print("========================================");
+    } else if (type == 'geofence' || type == 'geofence_violation') {
+      print("========================================");
+      print("📍 GEOFENCE ALERT DETECTED!");
+      print("Vehicle ID: ${message.data['vehicleId']}");
+      print("Vehicle Name: ${message.data['vehicleName']}");
+      print("Location: ${message.data['locationName']}");
+      print("Latitude: ${message.data['latitude']}");
+      print("Longitude: ${message.data['longitude']}");
+      print("========================================");
+    }
+
+    print("========================================");
 
     // Show local notification
     if (message.notification != null) {
+      print("📱 Showing local notification...");
       await _showLocalNotification(
         title: message.notification!.title ?? 'Notification',
         body: message.notification!.body ?? '',
         payload: jsonEncode(message.data),
       );
+      print("✅ Local notification shown!");
+    } else {
+      print("⚠️ No notification payload in message - data only notification");
     }
+
+    print("========================================\n");
   }
 
   /// ✅ Handle notification tap from Firebase (when user taps on notification)
@@ -181,62 +219,91 @@ class NotificationService {
     _handleLocalNotificationTap(message.data);
   }
 
-  /// ✅ Handle notification tap routing
+  /// ✅ Handle notification tap routing - ENHANCED DEBUG
   static void _handleLocalNotificationTap(Map<String, dynamic> data) {
-    final String? type = data['type'];
+    print("\n========================================");
+    print("👆 NOTIFICATION TAPPED!");
+    print("========================================");
+    print("📦 Full data: $data");
 
-    debugPrint("📱 Notification type: $type");
+    final String? type = data['type'];
+    print("📱 Notification type: $type");
 
     switch (type) {
       case 'geofence_violation':
+        print("========================================");
+        print("🚨 GEOFENCE VIOLATION TAP DETECTED");
+        print("Vehicle ID: ${data['vehicleId']}");
+        print("Vehicle Name: ${data['vehicleName']}");
+        print("Location: ${data['locationName']}");
+        print("Coordinates: [${data['latitude']}, ${data['longitude']}]");
+        print("========================================");
+
         _handleGeofenceAlert(data);
-        debugPrint("🛡️ Navigate to safe zone details");
         final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
         if (vehicleId != null) {
           _navigateToDashboard(vehicleId);
         }
         break;
+
       case 'geofence':
+        print("========================================");
+        print("📍 GEOFENCE TAP DETECTED");
+        print("Vehicle ID: ${data['vehicleId']}");
+        print("Vehicle Name: ${data['vehicleName']}");
+        print("========================================");
+
         _handleGeofenceAlert(data);
-        debugPrint("🛡️ Navigate to safe zone details");
         final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
         if (vehicleId != null) {
           _navigateToDashboard(vehicleId);
         }
         break;
+
       case 'safe_zone':
-        debugPrint("🛡️ Navigate to safe zone details");
+        print("========================================");
+        print("🛡️ SAFE ZONE TAP DETECTED");
+        print("Vehicle ID: ${data['vehicleId']}");
+        print("Vehicle Name: ${data['vehicleName']}");
+        print("Zone: ${data['zone_name']}");
+        print("Event: ${data['event'] ?? 'exit'}");
+        print("========================================");
+
         final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
         if (vehicleId != null) {
           _navigateToDashboard(vehicleId);
         }
         break;
+
       case 'speeding':
-        debugPrint("⚡ Navigate to speed alerts");
-        // TODO: Navigate to alerts screen
+        print("⚡ SPEEDING ALERT TAP");
         break;
+
       case 'engine_control':
-        debugPrint("🔧 Navigate to engine control");
+        print("🔧 ENGINE CONTROL TAP");
         final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
         if (vehicleId != null) {
           _navigateToDashboard(vehicleId);
         }
         break;
+
       case 'trip':
-        debugPrint("🚗 Navigate to trip details");
-        // TODO: Navigate to trips screen
+        print("🚗 TRIP TAP");
         break;
+
       case 'battery':
-        debugPrint("🔋 Navigate to vehicle details");
-        // TODO: Navigate to vehicle screen
+        print("🔋 BATTERY TAP");
         break;
+
       default:
-        debugPrint("📱 Navigate to dashboard");
+        print("📱 DEFAULT TAP - Navigating to dashboard");
         final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
         if (vehicleId != null) {
           _navigateToDashboard(vehicleId);
         }
     }
+
+    print("========================================\n");
   }
 
   /// ✅ Handle geofence violation alert

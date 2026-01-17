@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
+import '../../services/notification_service.dart'; // ✅ ADDED
 import '../dashboard/dashboard.dart';
 import '../login/login.dart';
 
@@ -73,6 +74,11 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
         _navigateToLogin();
         return;
       }
+
+      // ✅ CRITICAL FIX: Register FCM token for logged-in users
+      debugPrint('📱 Registering FCM token for already logged-in user...');
+      await NotificationService.registerToken();
+      debugPrint('✅ FCM token registered on app startup');
 
       // Session exists - fetch vehicles and navigate to dashboard
       Map<String, dynamic> user = jsonDecode(userData);

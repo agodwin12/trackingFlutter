@@ -9,7 +9,7 @@ import 'package:tracking/src/screens/change%20password%20in%20app/change_passwor
 import 'package:tracking/src/screens/login/login.dart';
 
 // Screens
-import 'package:tracking/src/screens/splash/splash_screen.dart'; // ✅ NEW
+import 'package:tracking/src/screens/splash/splash_screen.dart';
 import 'package:tracking/src/screens/onBoarding/onBoardingScreen.dart';
 import 'package:tracking/src/screens/dashboard/dashboard.dart';
 import 'package:tracking/src/screens/profile/profile.dart';
@@ -25,9 +25,11 @@ import 'package:tracking/src/screens/lock screen/lock_screen.dart';
 import 'package:tracking/src/services/env_config.dart';
 import 'package:tracking/src/services/notification_service.dart';
 import 'package:tracking/src/services/pin_service.dart';
+import 'package:tracking/src/services/connectivity_service.dart';
+import 'package:tracking/src/services/app_lifecycle_service.dart';
 
 /// =====================================================
-/// 🔥 Firebase Background Notification Handler
+///  Firebase Background Notification Handler
 /// Must be top-level function (not inside a class)
 /// =====================================================
 @pragma('vm:entry-point')
@@ -89,9 +91,19 @@ void main() async {
     await NotificationService.initialize();
     debugPrint('✅ Notification service initialized');
 
+    // ✅ Step 4: Initialize Connectivity Service
+    debugPrint('🌐 Initializing connectivity service...');
+    await ConnectivityService().initialize();
+    debugPrint('✅ Connectivity service initialized');
+
+    // ✅ Step 5: Initialize App Lifecycle Service
+    debugPrint('🔄 Initializing lifecycle service...');
+    AppLifecycleService().initialize();
+    debugPrint('✅ Lifecycle service initialized');
+
     debugPrint('🚀 ========== APP INITIALIZATION COMPLETE ==========\n');
 
-    // ✅ Step 4: Launch app with Splash Screen
+    // ✅ Step 6: Launch app with Splash Screen
     runApp(const MyApp());
   } catch (error) {
     debugPrint('❌ ========== FATAL INITIALIZATION ERROR ==========');
@@ -116,7 +128,6 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   final PinService _pinService = PinService();
-  bool _isAppInBackground = false;
 
   @override
   void initState() {
@@ -141,53 +152,39 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     debugPrint('📱 App lifecycle state changed: $state');
 
-    switch (state) {
-      case AppLifecycleState.paused:
-      case AppLifecycleState.inactive:
-      // App is going to background
-        _isAppInBackground = true;
-        debugPrint('🔒 App moved to background');
-        break;
+    // ✅ Only check on RESUMED (when coming back to app)
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('🔓 App resumed - checking if PIN required...');
 
-      case AppLifecycleState.resumed:
-      // App is coming back to foreground
-        if (_isAppInBackground) {
-          debugPrint('✅ App resumed from background');
-          _isAppInBackground = false;
+      // Check if enough time has passed to require PIN
+      final shouldLock = await AppLifecycleService().shouldRequirePin();
 
-          // Check if user has PIN set
-          final hasPinSet = await _pinService.hasPinSet();
+      if (shouldLock) {
+        // Check if user has PIN set
+        final hasPinSet = await _pinService.hasPinSet();
 
-          if (hasPinSet) {
-            // Get stored vehicle ID
-            final prefs = await SharedPreferences.getInstance();
-            final vehicleId = prefs.getInt('current_vehicle_id');
+        if (hasPinSet) {
+          final prefs = await SharedPreferences.getInstance();
+          final vehicleId = prefs.getInt('current_vehicle_id');
 
-            if (vehicleId != null) {
-              debugPrint('🔐 PIN required - navigating to PIN entry screen');
+          if (vehicleId != null) {
+            debugPrint('🔐 Showing PIN screen...');
 
-              // Navigate to PIN entry screen
-              NotificationService.navigatorKey.currentState?.pushNamedAndRemoveUntil(
-                '/pin-entry',
-                    (route) => false,
-                arguments: vehicleId,
-              );
-            } else {
-              debugPrint('⚠️ No vehicle ID stored - user may need to login again');
-            }
+            // Show PIN screen
+            NotificationService.navigatorKey.currentState?.pushNamedAndRemoveUntil(
+              '/pin-entry',
+                  (route) => false,
+              arguments: vehicleId,
+            );
           } else {
-            debugPrint('ℹ️ No PIN set - user can continue without PIN');
+            debugPrint('⚠️ No vehicle ID stored');
           }
+        } else {
+          debugPrint('ℹ️ No PIN set - user can continue');
         }
-        break;
-
-      case AppLifecycleState.detached:
-        debugPrint('❌ App is being terminated');
-        break;
-
-      case AppLifecycleState.hidden:
-        debugPrint('👁️ App is hidden');
-        break;
+      } else {
+        debugPrint('✅ PIN not required - user returned quickly');
+      }
     }
   }
 

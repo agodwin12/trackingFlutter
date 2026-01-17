@@ -57,5 +57,13 @@
     </array>
     <key>FirebaseAppDelegateProxyEnabled</key>
     <false/>
+
+    <!-- ✅ Firebase Messaging Auto-Init -->
+    <key>FirebaseMessagingAutoInitEnabled</key>
+    <true/>
+
+    <!-- ✅ User Notification Permission Description -->
+    <key>NSUserNotificationUsageDescription</key>
+    <string>This app sends you notifications about vehicle alerts, geofence violations, and security events.</string>
 </dict>
 </plist>

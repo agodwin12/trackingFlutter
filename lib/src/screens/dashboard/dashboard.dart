@@ -9,7 +9,7 @@ import 'package:tracking/src/screens/dashboard/services/dashboard_controller.dar
 import 'package:tracking/src/screens/dashboard/widgets/dashboard_widget.dart';
 import 'package:tracking/src/screens/dashboard/widgets/dashboard_skeleton.dart';
 import '../../core/utility/app_theme.dart';
-
+import '../../widgets/offline_barner.dart';
 import '../settings/settings.dart';
 import '../stoeln vehicle/stolen_alert.dart';
 import '../trip/trip_screen.dart';
@@ -44,8 +44,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
-    )
-      ..repeat(reverse: true);
+    )..repeat(reverse: true);
 
     _pulseAnimation = Tween<double>(begin: 0.8, end: 1.2).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
@@ -58,12 +57,31 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     });
   }
 
+  String _getLastSeenText(DateTime lastUpdate) {
+    final difference = DateTime.now().difference(lastUpdate);
+
+    if (difference.inMinutes < 1) {
+      return _selectedLanguage == 'en' ? 'Just now' : 'À l\'instant';
+    } else if (difference.inMinutes < 60) {
+      return _selectedLanguage == 'en'
+          ? 'Last seen ${difference.inMinutes} min ago'
+          : 'Vu il y a ${difference.inMinutes} min';
+    } else if (difference.inHours < 24) {
+      return _selectedLanguage == 'en'
+          ? 'Last seen ${difference.inHours}h ago'
+          : 'Vu il y a ${difference.inHours}h';
+    } else {
+      return _selectedLanguage == 'en'
+          ? 'Last seen ${difference.inDays}d ago'
+          : 'Vu il y a ${difference.inDays}j';
+    }
+  }
+
   Future<void> _saveCurrentVehicleId() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt('current_vehicle_id', widget.vehicleId);
-      debugPrint(
-          '🚗 Saved current vehicle ID for PIN lock: ${widget.vehicleId}');
+      debugPrint('🚗 Saved current vehicle ID for PIN lock: ${widget.vehicleId}');
     } catch (e) {
       debugPrint('⚠️ Error saving vehicle ID: $e');
     }
@@ -134,8 +152,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
             const SizedBox(height: 4),
             Text(
               message,
-              style: AppTypography.body2.copyWith(
-                  color: textColor.withOpacity(0.95)),
+              style: AppTypography.body2.copyWith(color: textColor.withOpacity(0.95)),
             ),
           ],
         ),
@@ -169,6 +186,8 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   }
 
   void _handleGeofenceToggle() async {
+    if (_controller.isTogglingGeofence) return;
+
     final success = await _controller.toggleGeofence();
 
     if (!mounted) return;
@@ -178,8 +197,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
         content: Row(
           children: [
             Icon(
-              success ? Icons.check_circle_rounded : Icons
-                  .error_outline_rounded,
+              success ? Icons.check_circle_rounded : Icons.error_outline_rounded,
               color: Colors.white,
               size: 20,
             ),
@@ -188,24 +206,16 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               child: Text(
                 success
                     ? (_controller.geofenceEnabled
-                    ? (_selectedLanguage == 'en'
-                    ? 'Geofencing enabled'
-                    : 'Géofence activée')
-                    : (_selectedLanguage == 'en'
-                    ? 'Geofencing disabled'
-                    : 'Géofence désactivée'))
-                    : (_selectedLanguage == 'en'
-                    ? 'Failed to toggle geofencing'
-                    : 'Échec'),
+                    ? (_selectedLanguage == 'en' ? 'Geofencing enabled' : 'Géofence activée')
+                    : (_selectedLanguage == 'en' ? 'Geofencing disabled' : 'Géofence désactivée'))
+                    : (_selectedLanguage == 'en' ? 'Failed to toggle geofencing' : 'Échec'),
                 style: AppTypography.body2.copyWith(color: Colors.white),
               ),
             ),
           ],
         ),
         backgroundColor: success
-            ? (_controller.geofenceEnabled
-            ? const Color(0xFF10B981)
-            : const Color(0xFF64748B))
+            ? (_controller.geofenceEnabled ? const Color(0xFF10B981) : const Color(0xFF64748B))
             : AppColors.error,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
@@ -216,6 +226,8 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   }
 
   void _handleSafeZoneToggle() async {
+    if (_controller.isTogglingSafeZone) return;
+
     final result = await _controller.toggleSafeZone();
 
     if (!mounted) return;
@@ -232,37 +244,28 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               Expanded(
                 child: Text(
                   wasCreated
-                      ? (_selectedLanguage == 'en'
-                      ? 'Safe Zone created!'
-                      : 'Zone sécurisée créée!')
-                      : (_selectedLanguage == 'en'
-                      ? 'Safe Zone deleted'
-                      : 'Zone supprimée'),
+                      ? (_selectedLanguage == 'en' ? 'Safe Zone created!' : 'Zone sécurisée créée!')
+                      : (_selectedLanguage == 'en' ? 'Safe Zone deleted' : 'Zone supprimée'),
                   style: AppTypography.body2.copyWith(color: Colors.white),
                 ),
               ),
             ],
           ),
-          backgroundColor: wasCreated ? const Color(0xFF10B981) : const Color(
-              0xFF64748B),
+          backgroundColor: wasCreated ? const Color(0xFF10B981) : const Color(0xFF64748B),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.all(16),
         ),
       );
     } else {
-      final errorMessage = result['message'] ?? (_selectedLanguage == 'en'
-          ? 'Failed to toggle safe zone'
-          : 'Échec');
+      final errorMessage = result['message'] ?? (_selectedLanguage == 'en' ? 'Failed to toggle safe zone' : 'Échec');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(errorMessage),
           backgroundColor: AppColors.error,
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 2),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.all(16),
         ),
       );
@@ -279,8 +282,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
         content: Row(
           children: [
             Icon(
-              success ? Icons.check_circle_rounded : Icons
-                  .error_outline_rounded,
+              success ? Icons.check_circle_rounded : Icons.error_outline_rounded,
               color: Colors.white,
               size: 20,
             ),
@@ -289,15 +291,9 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               child: Text(
                 success
                     ? (_controller.engineOn
-                    ? (_selectedLanguage == 'en'
-                    ? 'Engine unlocked'
-                    : 'Moteur déverrouillé')
-                    : (_selectedLanguage == 'en'
-                    ? 'Engine locked'
-                    : 'Moteur verrouillé'))
-                    : (_selectedLanguage == 'en'
-                    ? 'Failed to toggle engine'
-                    : 'Échec'),
+                    ? (_selectedLanguage == 'en' ? 'Engine unlocked' : 'Moteur déverrouillé')
+                    : (_selectedLanguage == 'en' ? 'Engine locked' : 'Moteur verrouillé'))
+                    : (_selectedLanguage == 'en' ? 'Failed to toggle engine' : 'Échec'),
                 style: AppTypography.body2.copyWith(color: Colors.white),
               ),
             ),
@@ -318,128 +314,108 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (context) =>
-          AlertDialog(
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20)),
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.error.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.warning_amber_rounded,
-                    color: AppColors.error,
-                    size: 28,
-                  ),
-                ),
-                SizedBox(width: AppSizes.spacingM),
-                Expanded(
-                  child: Text(
-                    _selectedLanguage == 'en'
-                        ? 'Report Stolen?'
-                        : 'Signaler Volé?',
-                    style: AppTypography.h3,
-                  ),
-                ),
-              ],
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.error.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.warning_amber_rounded,
+                color: AppColors.error,
+                size: 28,
+              ),
             ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _selectedLanguage == 'en' ? 'This will:' : 'Cela va:',
-                  style: AppTypography.body1.copyWith(
-                      fontWeight: FontWeight.w600),
-                ),
-                SizedBox(height: AppSizes.spacingM),
-                _buildConfirmationItem(
-                  Icons.power_settings_new_rounded,
-                  _selectedLanguage == 'en'
-                      ? 'Disable engine immediately'
-                      : 'Désactiver le moteur',
-                ),
-                _buildConfirmationItem(
-                  Icons.notification_add_rounded,
-                  _selectedLanguage == 'en'
-                      ? 'Create theft alert'
-                      : 'Créer alerte de vol',
-                ),
-                _buildConfirmationItem(
-                  Icons.my_location_rounded,
-                  _selectedLanguage == 'en'
-                      ? 'Show vehicle location'
-                      : 'Afficher localisation',
-                ),
-                _buildConfirmationItem(
-                  Icons.local_police_rounded,
-                  _selectedLanguage == 'en'
-                      ? 'Show nearby police'
-                      : 'Afficher police',
-                ),
-                SizedBox(height: AppSizes.spacingM),
-                Container(
-                  padding: EdgeInsets.all(AppSizes.spacingM),
-                  decoration: BoxDecoration(
-                    color: AppColors.error.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.error.withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline_rounded, color: AppColors.error,
-                          size: 20),
-                      SizedBox(width: AppSizes.spacingS),
-                      Expanded(
-                        child: Text(
-                          _selectedLanguage == 'en'
-                              ? 'This action cannot be undone'
-                              : 'Action irréversible',
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.error,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+            SizedBox(width: AppSizes.spacingM),
+            Expanded(
+              child: Text(
+                _selectedLanguage == 'en' ? 'Report Stolen?' : 'Signaler Volé?',
+                style: AppTypography.h3,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _selectedLanguage == 'en' ? 'This will:' : 'Cela va:',
+              style: AppTypography.body1.copyWith(fontWeight: FontWeight.w600),
+            ),
+            SizedBox(height: AppSizes.spacingM),
+            _buildConfirmationItem(
+              Icons.power_settings_new_rounded,
+              _selectedLanguage == 'en' ? 'Disable engine immediately' : 'Désactiver le moteur',
+            ),
+            _buildConfirmationItem(
+              Icons.notification_add_rounded,
+              _selectedLanguage == 'en' ? 'Create theft alert' : 'Créer alerte de vol',
+            ),
+            _buildConfirmationItem(
+              Icons.my_location_rounded,
+              _selectedLanguage == 'en' ? 'Show vehicle location' : 'Afficher localisation',
+            ),
+            _buildConfirmationItem(
+              Icons.local_police_rounded,
+              _selectedLanguage == 'en' ? 'Show nearby police' : 'Afficher police',
+            ),
+            SizedBox(height: AppSizes.spacingM),
+            Container(
+              padding: EdgeInsets.all(AppSizes.spacingM),
+              decoration: BoxDecoration(
+                color: AppColors.error.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.error.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline_rounded, color: AppColors.error, size: 20),
+                  SizedBox(width: AppSizes.spacingS),
+                  Expanded(
+                    child: Text(
+                      _selectedLanguage == 'en' ? 'This action cannot be undone' : 'Action irréversible',
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.error,
+                        fontWeight: FontWeight.w600,
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 12),
-                ),
-                child: Text(
-                  _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
-                  style: AppTypography.button.copyWith(
-                      color: AppColors.textSecondary),
-                ),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.error,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                child: Text(
-                  _selectedLanguage == 'en' ? 'Report Stolen' : 'Signaler',
-                  style: AppTypography.button.copyWith(color: Colors.white),
-                ),
-              ),
-            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+            child: Text(
+              _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
+              style: AppTypography.button.copyWith(color: AppColors.textSecondary),
+            ),
           ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: Text(
+              _selectedLanguage == 'en' ? 'Report Stolen' : 'Signaler',
+              style: AppTypography.button.copyWith(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
     );
 
     if (confirmed != true) return;
@@ -449,33 +425,28 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) =>
-          Center(
-            child: Container(
-              margin: const EdgeInsets.all(32),
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(
-                      color: AppColors.primary, strokeWidth: 3),
-                  const SizedBox(height: 24),
-                  Text(
-                    _selectedLanguage == 'en'
-                        ? 'Reporting stolen vehicle...'
-                        : 'Signalement en cours...',
-                    style: AppTypography.body1.copyWith(
-                        fontWeight: FontWeight.w600),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
+      builder: (context) => Center(
+        child: Container(
+          margin: const EdgeInsets.all(32),
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
           ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary, strokeWidth: 3),
+              const SizedBox(height: 24),
+              Text(
+                _selectedLanguage == 'en' ? 'Reporting stolen vehicle...' : 'Signalement en cours...',
+                style: AppTypography.body1.copyWith(fontWeight: FontWeight.w600),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
 
     final success = await _controller.reportStolen();
@@ -487,18 +458,15 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) =>
-              StolenAlertScreen(
-                vehicleId: _controller.selectedVehicleId,
-                vehicleLat: _controller.vehicleLat,
-                vehicleLng: _controller.vehicleLng,
-                vehicleName: _controller.selectedVehicle?.nickname.isNotEmpty ==
-                    true
-                    ? _controller.selectedVehicle!.nickname
-                    : '${_controller.selectedVehicle?.brand ?? ''} ${_controller
-                    .selectedVehicle?.model ?? ''}'.trim(),
-                nearbyPolice: _controller.nearbyPolice,
-              ),
+          builder: (context) => StolenAlertScreen(
+            vehicleId: _controller.selectedVehicleId,
+            vehicleLat: _controller.vehicleLat,
+            vehicleLng: _controller.vehicleLng,
+            vehicleName: _controller.selectedVehicle?.nickname.isNotEmpty == true
+                ? _controller.selectedVehicle!.nickname
+                : '${_controller.selectedVehicle?.brand ?? ''} ${_controller.selectedVehicle?.model ?? ''}'.trim(),
+            nearbyPolice: _controller.nearbyPolice,
+          ),
         ),
       );
 
@@ -510,9 +478,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  _selectedLanguage == 'en'
-                      ? 'Vehicle reported as stolen'
-                      : 'Véhicule signalé volé',
+                  _selectedLanguage == 'en' ? 'Vehicle reported as stolen' : 'Véhicule signalé volé',
                   style: AppTypography.body1.copyWith(color: Colors.white),
                 ),
               ),
@@ -521,8 +487,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
           backgroundColor: AppColors.error,
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 5),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.all(16),
         ),
       );
@@ -535,9 +500,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  _selectedLanguage == 'en'
-                      ? 'Failed to report. Try again.'
-                      : 'Échec. Réessayez.',
+                  _selectedLanguage == 'en' ? 'Failed to report. Try again.' : 'Échec. Réessayez.',
                   style: AppTypography.body1.copyWith(color: Colors.white),
                 ),
               ),
@@ -545,8 +508,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
           ),
           backgroundColor: AppColors.error,
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           margin: const EdgeInsets.all(16),
         ),
       );
@@ -580,38 +542,35 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) =>
-          VehicleSelectorModal(
-            controller: _controller,
-            onVehicleSelected: (vehicleId) {
-              _controller.onVehicleSelected(vehicleId);
-            },
-            selectedLanguage: _selectedLanguage,
-          ),
+      builder: (context) => VehicleSelectorModal(
+        controller: _controller,
+        onVehicleSelected: (vehicleId) {
+          _controller.onVehicleSelected(vehicleId);
+        },
+        selectedLanguage: _selectedLanguage,
+      ),
     );
   }
 
   void _showEngineConfirmDialog() {
     showDialog(
       context: context,
-      builder: (context) =>
-          EngineConfirmDialog(
-            controller: _controller,
-            onConfirm: _handleEngineToggle,
-            selectedLanguage: _selectedLanguage,
-          ),
+      builder: (context) => EngineConfirmDialog(
+        controller: _controller,
+        onConfirm: _handleEngineToggle,
+        selectedLanguage: _selectedLanguage,
+      ),
     );
   }
 
   void _showReportStolenDialog() {
     showDialog(
       context: context,
-      builder: (context) =>
-          ReportStolenDialog(
-            controller: _controller,
-            onConfirm: _handleReportStolen,
-            selectedLanguage: _selectedLanguage,
-          ),
+      builder: (context) => ReportStolenDialog(
+        controller: _controller,
+        onConfirm: _handleReportStolen,
+        selectedLanguage: _selectedLanguage,
+      ),
     );
   }
 
@@ -631,14 +590,14 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               child: Column(
                 children: [
                   _buildModernHeader(controller),
+                  const OfflineBanner(),
                   Expanded(
                     child: Stack(
                       children: [
                         // Google Map
                         GoogleMap(
                           initialCameraPosition: CameraPosition(
-                            target: LatLng(
-                                controller.vehicleLat, controller.vehicleLng),
+                            target: LatLng(controller.vehicleLat, controller.vehicleLng),
                             zoom: 16,
                           ),
                           markers: controller.createMarkers(),
@@ -649,14 +608,12 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                           myLocationButtonEnabled: false,
                           zoomControlsEnabled: false,
                           mapToolbarEnabled: false,
-                          minMaxZoomPreference: const MinMaxZoomPreference(
-                              10, 20),
+                          minMaxZoomPreference: const MinMaxZoomPreference(10, 20),
                         ),
 
                         // Modern Floating Elements
                         _buildModernVehicleSelector(controller),
                         _buildModernMapTypeButton(controller),
-                        _buildModernRefreshButton(controller),
                         _buildModernEngineButton(controller),
                         _buildModernReportStolenButton(controller),
                         _buildModernBottomControls(controller),
@@ -690,26 +647,14 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
         children: [
           // Logo with gradient
           ShaderMask(
-            shaderCallback: (bounds) =>
-                LinearGradient(
-                  colors: [
-                    AppColors.primary,
-                    AppColors.primary.withOpacity(0.7)
-                  ],
-                ).createShader(bounds),
+            shaderCallback: (bounds) => LinearGradient(
+              colors: [AppColors.primary, AppColors.primary.withOpacity(0.7)],
+            ).createShader(bounds),
             child: RichText(
               text: TextSpan(
                 children: [
                   TextSpan(
-                    text: 'PROXYM ',
-                    style: AppTypography.h3.copyWith(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                    ),
-                  ),
-                  TextSpan(
-                    text: 'TRACKING',
+                    text: 'FLEETRA',
                     style: AppTypography.h3.copyWith(
                       fontSize: 18,
                       fontWeight: FontWeight.w900,
@@ -723,35 +668,95 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
 
           Row(
             children: [
+              // Refresh Button
+              GestureDetector(
+                onTap: controller.isOffline || controller.isRefreshing
+                    ? null
+                    : () async {
+                  await controller.refresh();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Row(
+                          children: [
+                            Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                _selectedLanguage == 'en' ? 'Refreshed' : 'Actualisé',
+                                style: AppTypography.body2.copyWith(color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ),
+                        backgroundColor: const Color(0xFF10B981),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 1),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        margin: const EdgeInsets.all(16),
+                      ),
+                    );
+                  }
+                },
+                child: Opacity(
+                  opacity: controller.isOffline ? 0.5 : 1.0,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.background,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: controller.isRefreshing
+                            ? AppColors.primary.withOpacity(0.5)
+                            : AppColors.border.withOpacity(0.5),
+                        width: controller.isRefreshing ? 2 : 1,
+                      ),
+                    ),
+                    child: IconButton(
+                      onPressed: null,
+                      icon: controller.isRefreshing
+                          ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: AppColors.primary,
+                        ),
+                      )
+                          : Icon(
+                        Icons.refresh_rounded,
+                        size: 22,
+                        color: controller.isOffline ? Colors.grey : AppColors.primary,
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      constraints: const BoxConstraints(),
+                    ),
+                  ),
+                ),
+              ),
 
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
 
-              // Modern Notification Button
+              // Notification Button
               Stack(
                 children: [
                   Container(
                     decoration: BoxDecoration(
                       color: AppColors.background,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                          color: AppColors.border.withOpacity(0.5)),
+                      border: Border.all(color: AppColors.border.withOpacity(0.5)),
                     ),
                     child: IconButton(
                       onPressed: () {
                         Navigator.pushNamed(
                           context,
                           '/notifications',
-                          arguments: {
-                            'vehicleId': controller.selectedVehicleId
-                          },
+                          arguments: {'vehicleId': controller.selectedVehicleId},
                         ).then((_) => controller.fetchUnreadNotifications());
                       },
                       icon: Icon(
                         Icons.notifications_rounded,
                         size: 22,
-                        color: controller.notificationCount > 0
-                            ? AppColors.primary
-                            : AppColors.textSecondary,
+                        color: controller.notificationCount > 0 ? AppColors.primary : AppColors.textSecondary,
                       ),
                       padding: const EdgeInsets.all(8),
                       constraints: const BoxConstraints(),
@@ -765,9 +770,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                         padding: const EdgeInsets.all(4),
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
-                            colors: [AppColors.error, AppColors.error
-                                .withOpacity(0.8)
-                            ],
+                            colors: [AppColors.error, AppColors.error.withOpacity(0.8)],
                           ),
                           shape: BoxShape.circle,
                           boxShadow: [
@@ -778,12 +781,9 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                             ),
                           ],
                         ),
-                        constraints: const BoxConstraints(
-                            minWidth: 16, minHeight: 16),
+                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
                         child: Text(
-                          controller.notificationCount > 9
-                              ? '9+'
-                              : '${controller.notificationCount}',
+                          controller.notificationCount > 9 ? '9+' : '${controller.notificationCount}',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 9,
@@ -794,6 +794,37 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                       ),
                     ),
                 ],
+              ),
+
+              const SizedBox(width: 12),
+
+              // Settings Button
+              Container(
+                decoration: BoxDecoration(
+                  color: AppColors.background,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border.withOpacity(0.5)),
+                ),
+                child: IconButton(
+                  onPressed: () async {
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => SettingsScreen(vehicleId: widget.vehicleId),
+                      ),
+                    );
+                    if (result == 'language_changed') {
+                      await _loadLanguagePreference();
+                    }
+                  },
+                  icon: Icon(
+                    Icons.settings_rounded,
+                    size: 22,
+                    color: AppColors.textSecondary,
+                  ),
+                  padding: const EdgeInsets.all(8),
+                  constraints: const BoxConstraints(),
+                ),
               ),
             ],
           ),
@@ -814,10 +845,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  Colors.white,
-                  Colors.white.withOpacity(0.95),
-                ],
+                colors: [Colors.white, Colors.white.withOpacity(0.95)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -842,20 +870,16 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Vehicle color indicator
                 Container(
                   width: 20,
                   height: 20,
                   decoration: BoxDecoration(
-                    color: controller.hexToColor(
-                        controller.selectedVehicle!.color),
+                    color: controller.hexToColor(controller.selectedVehicle!.color),
                     shape: BoxShape.circle,
                     border: Border.all(color: Colors.white, width: 2.5),
                     boxShadow: [
                       BoxShadow(
-                        color: controller
-                            .hexToColor(controller.selectedVehicle!.color)
-                            .withOpacity(0.4),
+                        color: controller.hexToColor(controller.selectedVehicle!.color).withOpacity(0.4),
                         blurRadius: 8,
                         spreadRadius: 1,
                       ),
@@ -864,40 +888,48 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                 ),
                 const SizedBox(width: 12),
 
-                // Car icon with gradient
                 Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [
                         AppColors.primary.withOpacity(0.1),
-                        AppColors.primary.withOpacity(0.05)
+                        AppColors.primary.withOpacity(0.05),
                       ],
                     ),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(
-                    Icons.directions_car_rounded,
-                    color: AppColors.primary,
-                    size: 18,
-                  ),
+                  child: Icon(Icons.directions_car_rounded, color: AppColors.primary, size: 18),
                 ),
                 const SizedBox(width: 10),
 
-                // Vehicle name
-                Text(
-                  controller.selectedVehicle!.nickname.isNotEmpty
-                      ? controller.selectedVehicle!.nickname
-                      : controller.selectedVehicle!.immatriculation,
-                  style: AppTypography.body1.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.black,
-                    fontSize: 14,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      controller.selectedVehicle!.nickname.isNotEmpty
+                          ? controller.selectedVehicle!.nickname
+                          : controller.selectedVehicle!.immatriculation,
+                      style: AppTypography.body1.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.black,
+                        fontSize: 14,
+                      ),
+                    ),
+                    if (controller.isOffline && controller.lastLocationUpdate != null)
+                      Text(
+                        _getLastSeenText(controller.lastLocationUpdate!),
+                        style: AppTypography.caption.copyWith(
+                          fontSize: 10,
+                          color: const Color(0xFFF59E0B),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(width: 10),
 
-                // Online indicator with pulse animation
                 if (controller.selectedVehicle!.isOnline)
                   ScaleTransition(
                     scale: _pulseAnimation,
@@ -919,12 +951,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                   ),
                 const SizedBox(width: 8),
 
-                // Dropdown arrow
-                Icon(
-                  Icons.keyboard_arrow_down_rounded,
-                  color: AppColors.primary,
-                  size: 20,
-                ),
+                Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.primary, size: 20),
               ],
             ),
           ),
@@ -971,18 +998,11 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [
-                      AppColors.primary.withOpacity(0.15),
-                      AppColors.primary.withOpacity(0.08)
-                    ],
+                    colors: [AppColors.primary.withOpacity(0.15), AppColors.primary.withOpacity(0.08)],
                   ),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(
-                  Icons.layers_rounded,
-                  color: AppColors.primary,
-                  size: 20,
-                ),
+                child: Icon(Icons.layers_rounded, color: AppColors.primary, size: 20),
               ),
               const SizedBox(height: 6),
               Text(
@@ -1000,115 +1020,71 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  Widget _buildModernRefreshButton(DashboardController controller) {
-    return Positioned(
-      top: 88,
-      left: 16,
-      child: GestureDetector(
-        onTap: () async {
-          await controller.refresh();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Row(
-                  children: [
-                    Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _selectedLanguage == 'en' ? 'Refreshed' : 'Actualisé',
-                        style: AppTypography.body2.copyWith(color: Colors.white),
-                      ),
-                    ),
-                  ],
-                ),
-                backgroundColor: const Color(0xFF10B981),
-                behavior: SnackBarBehavior.floating,
-                duration: const Duration(seconds: 1),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                margin: const EdgeInsets.all(16),
-              ),
-            );
-          }
-        },
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.white, Colors.white.withOpacity(0.95)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.primary.withOpacity(0.2), width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.15),
-                blurRadius: 20,
-                spreadRadius: 2,
-                offset: const Offset(0, 6),
-              ),
-              BoxShadow(
-                color: AppColors.primary.withOpacity(0.1),
-                blurRadius: 12,
-                spreadRadius: 0,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Icon(
-            Icons.refresh_rounded,
-            color: AppColors.primary,
-            size: 22,
-          ),
-        ),
-      ),
-    );
-  }
-
-
   Widget _buildModernEngineButton(DashboardController controller) {
+    final bool isDisabled = controller.isOffline || controller.isTogglingEngine;
+
     return Positioned(
       top: 16,
       right: 16,
       child: GestureDetector(
-        onTap: controller.isTogglingEngine ? null : _showEngineConfirmDialog,
-        child: Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: controller.engineOn
-                  ? [const Color(0xFF10B981), const Color(0xFF059669)]
-                  : [const Color(0xFFEF4444), const Color(0xFFDC2626)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: (controller.engineOn
-                    ? const Color(0xFF10B981)
-                    : const Color(0xFFEF4444))
-                    .withOpacity(0.4),
-                blurRadius: 16,
-                spreadRadius: 2,
-                offset: const Offset(0, 4),
+        onTap: isDisabled ? null : _showEngineConfirmDialog,
+        child: Opacity(
+          opacity: controller.isOffline ? 0.5 : 1.0,
+          child: Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: controller.engineOn
+                    ? [const Color(0xFF10B981), const Color(0xFF059669)]
+                    : [const Color(0xFFEF4444), const Color(0xFFDC2626)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-            ],
-          ),
-          child: controller.isTogglingEngine
-              ? Padding(
-            padding: const EdgeInsets.all(14.0),
-            child: CircularProgressIndicator(
-              color: Colors.white,
-              strokeWidth: 3,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: (controller.engineOn ? const Color(0xFF10B981) : const Color(0xFFEF4444)).withOpacity(0.4),
+                  blurRadius: 16,
+                  spreadRadius: 2,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
-          )
-              : Icon(
-            controller.engineOn ? Icons.lock_open_rounded : Icons.lock_rounded,
-            color: Colors.white,
-            size: 26,
+            child: controller.isTogglingEngine
+                ? Padding(
+              padding: const EdgeInsets.all(14.0),
+              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+            )
+                : Stack(
+              alignment: Alignment.center,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: Image.asset(
+                    controller.engineOn ? 'assets/open.ico' : 'assets/lock.ico',
+                    width: 32,
+                    height: 32,
+                    fit: BoxFit.contain,
+                    color: Colors.white,
+                    colorBlendMode: BlendMode.srcIn,
+                  ),
+                ),
+                if (controller.isOffline)
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.cloud_off_rounded, color: Colors.red, size: 12),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1116,117 +1092,135 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   }
 
   Widget _buildModernReportStolenButton(DashboardController controller) {
+    final bool isDisabled = controller.isOffline || controller.isReportingStolen;
+
     return Positioned(
       top: 88,
       right: 16,
       child: GestureDetector(
-        onTap: controller.isReportingStolen ? null : _showReportStolenDialog,
-        child: Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFEF4444).withOpacity(0.4),
-                blurRadius: 16,
-                spreadRadius: 2,
-                offset: const Offset(0, 4),
+        onTap: isDisabled ? null : _showReportStolenDialog,
+        child: Opacity(
+          opacity: controller.isOffline ? 0.5 : 1.0,
+          child: Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-            ],
-          ),
-          child: controller.isReportingStolen
-              ? Padding(
-            padding: const EdgeInsets.all(14.0),
-            child: CircularProgressIndicator(
-              color: Colors.white,
-              strokeWidth: 3,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFEF4444).withOpacity(0.4),
+                  blurRadius: 16,
+                  spreadRadius: 2,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
-          )
-              : Icon(
-            Icons.shield_rounded,
-            color: Colors.white,
-            size: 26,
+            child: controller.isReportingStolen
+                ? Padding(
+              padding: const EdgeInsets.all(14.0),
+              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+            )
+                : Stack(
+              alignment: Alignment.center,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(28),
+                  child: Image.asset(
+                    'assets/stolen.png',
+                    width: 32,
+                    height: 32,
+                    fit: BoxFit.cover,
+                    color: Colors.white,
+                    colorBlendMode: BlendMode.srcIn,
+                  ),
+                ),
+                if (controller.isOffline)
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.cloud_off_rounded, color: Colors.red, size: 12),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
+  // ✅ COMPACT & CLEAN: Bottom controls with clear labels - NO OVERFLOW
   Widget _buildModernBottomControls(DashboardController controller) {
     return Positioned(
       bottom: 0,
       left: 0,
       right: 0,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Geofence + Safe Zone Row
-            Row(
-              children: [
-                Expanded(
-                  child: _buildModernFeatureCard(
-                    icon: Icons.fence_rounded,
-                    label: _selectedLanguage == 'en' ? 'Geofence' : 'Géofence',
-                    isActive: controller.geofenceEnabled,
-                    onTap: _handleGeofenceToggle,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _buildModernFeatureCard(
-                    icon: Icons.shield_rounded,
-                    label: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone de sécurité',
-                    isActive: controller.safeZoneEnabled,
-                    onTap: _handleSafeZoneToggle,
-                  ),
-                ),
-              ],
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 12,
+              offset: const Offset(0, -2),
             ),
-            const SizedBox(height: 10),
-            // Trips + Settings Row
-            Row(
-              children: [
-                Expanded(
-                  child: _buildModernQuickAction(
-                    icon: Icons.route_rounded,
-                    label: _selectedLanguage == 'en' ? 'Trips' : 'Trajets',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => TripsScreen(vehicleId: controller.selectedVehicleId),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _buildModernQuickAction(
-                    icon: Icons.settings_rounded,
-                    label: _selectedLanguage == 'en' ? 'Settings' : 'Paramètres',
-                    onTap: () async {
-                      final result = await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => SettingsScreen(vehicleId: widget.vehicleId),
-                        ),
-                      );
-                      if (result == 'language_changed') {
-                        await _loadLanguagePreference();
-                      }
-                    },
-                  ),
-                ),
-              ],
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
+        child: Row(
+          children: [
+            // Virtual Fence Button
+            Expanded(
+              child: _buildCompactFeatureButton(
+                icon: Icons.radio_button_checked_rounded,
+                label: _selectedLanguage == 'en' ? 'Virtual Fence' : 'Barrière Virtuelle',
+                isActive: controller.geofenceEnabled,
+                isLoading: controller.isTogglingGeofence,
+                onTap: _handleGeofenceToggle,
+                activeColor: const Color(0xFF8B5CF6),
+              ),
+            ),
+            const SizedBox(width: 8),
+
+            // Safe Zone Button
+            Expanded(
+              child: _buildCompactFeatureButton(
+                icon: Icons.shield_rounded,
+                label: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone Sûre',
+                isActive: controller.safeZoneEnabled,
+                isLoading: controller.isTogglingSafeZone,
+                onTap: _handleSafeZoneToggle,
+                activeColor: const Color(0xFF10B981),
+              ),
+            ),
+            const SizedBox(width: 8),
+
+            // Trip History Button
+            Expanded(
+              child: _buildCompactActionButton(
+                icon: Icons.timeline_rounded,
+                label: _selectedLanguage == 'en' ? 'Trip History' : 'Historique',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => TripsScreen(vehicleId: controller.selectedVehicleId),
+                    ),
+                  );
+                },
+              ),
             ),
           ],
         ),
@@ -1234,100 +1228,122 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  Widget _buildModernFeatureCard({
+  Widget _buildCompactFeatureButton({
     required IconData icon,
     required String label,
     required bool isActive,
+    required bool isLoading,
     required VoidCallback onTap,
+    required Color activeColor,
   }) {
-    // ✅ Use green when active, red when inactive
-    final Color activeColor = isActive ? AppColors.success : AppColors.error;
+    final Color inactiveColor = const Color(0xFF94A3B8);
 
     return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: isActive
-                ? [
-              AppColors.success.withOpacity(0.15),
-              AppColors.success.withOpacity(0.05)
-            ]
-                : [
-              AppColors.error.withOpacity(0.15),
-              AppColors.error.withOpacity(0.05)
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: activeColor.withOpacity(0.5),
-            width: 2,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: activeColor.withOpacity(0.2),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8), // ✅ Reduced padding
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [activeColor, activeColor.withOpacity(0.8)],
-                ),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                icon,
-                color: Colors.white,
-                size: 18, // ✅ Reduced icon size
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      onTap: () {
+        if (_controller.isOffline) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
                 children: [
-                  Text(
-                    label,
-                    style: AppTypography.body2.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: activeColor,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    isActive
-                        ? (_selectedLanguage == 'en' ? 'Active' : 'Actif')
-                        : (_selectedLanguage == 'en' ? 'Inactive' : 'Inactif'),
-                    style: AppTypography.caption.copyWith(
-                      fontSize: 10,
-                      color: activeColor.withOpacity(0.8),
-                      fontWeight: FontWeight.w600,
+                  Icon(Icons.wifi_off_rounded, color: Colors.white, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _selectedLanguage == 'en' ? 'Requires Internet' : 'Internet requis',
+                      style: const TextStyle(fontSize: 13),
                     ),
                   ),
                 ],
               ),
+              backgroundColor: const Color(0xFFF59E0B),
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 2),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              margin: const EdgeInsets.all(12),
             ),
-            Icon(
-              isActive ? Icons.check_circle_rounded : Icons.cancel_rounded,
-              color: activeColor,
-              size: 20,
+          );
+          return;
+        }
+        if (!isLoading) onTap();
+      },
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        opacity: _controller.isOffline || isLoading ? 0.5 : 1.0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+          decoration: BoxDecoration(
+            color: isActive ? activeColor.withOpacity(0.08) : Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isActive ? activeColor.withOpacity(0.25) : Colors.grey.shade200,
+              width: 1.5,
             ),
-          ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icon
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: isActive ? activeColor.withOpacity(0.15) : Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: isLoading
+                    ? Center(
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: isActive ? activeColor : inactiveColor,
+                    ),
+                  ),
+                )
+                    : Icon(icon, color: isActive ? activeColor : inactiveColor, size: 18),
+              ),
+              const SizedBox(height: 6),
+
+              // Label
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: isActive ? activeColor : inactiveColor,
+                  height: 1.2,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+
+              // Status Badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isActive ? activeColor.withOpacity(0.15) : Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  isActive ? (_selectedLanguage == 'en' ? 'ON' : 'ACTIVÉ') : (_selectedLanguage == 'en' ? 'OFF' : 'INACTIF'),
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    color: isActive ? activeColor : inactiveColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildModernQuickAction({
+  Widget _buildCompactActionButton({
     required IconData icon,
     required String label,
     required VoidCallback onTap,
@@ -1335,33 +1351,66 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [AppColors.primary, AppColors.primary.withOpacity(0.85)],
-            // ✅ Use brand primary color
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: AppColors.primary.withOpacity(0.3),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+              color: AppColors.primary.withOpacity(0.25),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: Colors.white, size: 22),
-            const SizedBox(width: 10),
+            // Icon
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.25),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, color: Colors.white, size: 18),
+            ),
+            const SizedBox(height: 6),
+
+            // Label
             Text(
               label,
-              style: AppTypography.body2.copyWith(
-                color: Colors.white,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 10,
                 fontWeight: FontWeight.w700,
+                color: Colors.white,
+                height: 1.2,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
+
+            // Action Badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.25),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                _selectedLanguage == 'en' ? 'VIEW' : 'VOIR',
+                style: const TextStyle(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
               ),
             ),
           ],

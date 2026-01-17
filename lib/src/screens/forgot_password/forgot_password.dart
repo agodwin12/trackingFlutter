@@ -180,13 +180,20 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   }
 
   String _getOTP() {
-    return _otpControllers.map((controller) => controller.text).join();
+    String allDigits = _otpControllers.map((controller) => controller.text).join();
+
+    // ✅ Format as XXX-XXX to match backend
+    if (allDigits.length == 6) {
+      return '${allDigits.substring(0, 3)}-${allDigits.substring(3, 6)}';
+    }
+
+    return allDigits;
   }
 
   void _verifyOTP() async {
     String otp = _getOTP();
 
-    if (otp.length != 6) {
+    if (otp.length != 7) {
       _showErrorSnackbar("Please enter the complete 6-digit OTP");
       return;
     }
@@ -840,7 +847,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
                   if (index == 5 && value.isNotEmpty) {
                     String otp = _getOTP();
-                    if (otp.length == 6) {
+                    if (otp.length == 7) {
                       _verifyOTP();
                     }
                   }

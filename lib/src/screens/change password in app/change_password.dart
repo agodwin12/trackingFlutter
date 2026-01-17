@@ -112,12 +112,15 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
       return;
     }
 
+
     setState(() {
       _isLoading = true;
     });
 
+
     // Remove the + sign for SMS API compatibility
     _phoneWithCountryCode = _phoneController.text.trim().replaceAll('+', '');
+
 
     final Uri url = Uri.parse("$baseUrl/auth/forgot-password/request-otp");
 
@@ -202,13 +205,20 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   }
 
   String _getOTP() {
-    return _otpControllers.map((controller) => controller.text).join();
+    String allDigits = _otpControllers.map((controller) => controller.text).join();
+
+    if (allDigits.length == 6) {
+      return '${allDigits.substring(0, 3)}-${allDigits.substring(3, 6)}';
+    }
+
+    return allDigits;
   }
+
 
   void _verifyOTP() async {
     String otp = _getOTP();
 
-    if (otp.length != 6) {
+    if (otp.length != 7) {
       _showErrorSnackbar(
         _selectedLanguage == 'en'
             ? "Please enter the complete 6-digit OTP"
@@ -807,7 +817,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
 
                   if (index == 5 && value.isNotEmpty) {
                     String otp = _getOTP();
-                    if (otp.length == 6) {
+                    if (otp.length == 7) {
                       _verifyOTP();
                     }
                   }

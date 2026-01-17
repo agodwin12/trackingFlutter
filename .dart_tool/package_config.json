@@ -3,7 +3,7 @@
   "packages": [
     {
       "name": "_flutterfire_internals",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/_flutterfire_internals-1.3.64",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/_flutterfire_internals-1.3.65",
       "packageUri": "lib/",
       "languageVersion": "3.2"
     },
@@ -68,6 +68,18 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "connectivity_plus",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/connectivity_plus-6.1.5",
+      "packageUri": "lib/",
+      "languageVersion": "3.2"
+    },
+    {
+      "name": "connectivity_plus_platform_interface",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/connectivity_plus_platform_interface-2.0.1",
+      "packageUri": "lib/",
+      "languageVersion": "2.18"
+    },
+    {
       "name": "crypto",
       "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/crypto-3.0.7",
       "packageUri": "lib/",
@@ -99,7 +111,7 @@
     },
     {
       "name": "ffi",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/ffi-2.1.4",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/ffi-2.1.5",
       "packageUri": "lib/",
       "languageVersion": "3.7"
     },
@@ -111,7 +123,7 @@
     },
     {
       "name": "firebase_core",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_core-4.2.1",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_core-4.3.0",
       "packageUri": "lib/",
       "languageVersion": "3.2"
     },
@@ -123,25 +135,25 @@
     },
     {
       "name": "firebase_core_web",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_core_web-3.3.0",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_core_web-3.3.1",
       "packageUri": "lib/",
       "languageVersion": "3.4"
     },
     {
       "name": "firebase_messaging",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_messaging-16.0.4",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_messaging-16.1.0",
       "packageUri": "lib/",
       "languageVersion": "3.2"
     },
     {
       "name": "firebase_messaging_platform_interface",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_messaging_platform_interface-4.7.4",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_messaging_platform_interface-4.7.5",
       "packageUri": "lib/",
       "languageVersion": "3.2"
     },
     {
       "name": "firebase_messaging_web",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_messaging_web-4.1.0",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/firebase_messaging_web-4.1.1",
       "packageUri": "lib/",
       "languageVersion": "3.4"
     },
@@ -267,15 +279,15 @@
     },
     {
       "name": "google_maps_flutter_android",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/google_maps_flutter_android-2.18.6",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/google_maps_flutter_android-2.18.9",
       "packageUri": "lib/",
       "languageVersion": "3.9"
     },
     {
       "name": "google_maps_flutter_ios",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/google_maps_flutter_ios-2.15.7",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/google_maps_flutter_ios-2.16.1",
       "packageUri": "lib/",
-      "languageVersion": "3.8"
+      "languageVersion": "3.9"
     },
     {
       "name": "google_maps_flutter_platform_interface",
@@ -309,7 +321,7 @@
     },
     {
       "name": "image",
-      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/image-4.5.4",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/image-4.7.2",
       "packageUri": "lib/",
       "languageVersion": "3.0"
     },
@@ -418,6 +430,12 @@
     {
       "name": "nested",
       "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/nested-1.0.0",
+      "packageUri": "lib/",
+      "languageVersion": "2.12"
+    },
+    {
+      "name": "nm",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/nm-0.5.0",
       "packageUri": "lib/",
       "languageVersion": "2.12"
     },

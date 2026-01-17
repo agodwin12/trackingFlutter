@@ -7,6 +7,9 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
+import '../../services/connectivity_service.dart'; // ✅ NEW
+import '../../services/cache_service.dart';
+import '../../widgets/offline_barner.dart'; // ✅ NEW
 
 class TripMapScreen extends StatefulWidget {
   final int tripId;
@@ -25,7 +28,16 @@ class TripMapScreen extends StatefulWidget {
 class _TripMapScreenState extends State<TripMapScreen> {
   final Completer<GoogleMapController> _controller = Completer();
 
+  // ✅ NEW: Offline mode support
+  final ConnectivityService _connectivityService = ConnectivityService();
+  final CacheService _cacheService = CacheService();
+  bool _isLoadedFromCache = false;
+
   String get baseUrl => EnvConfig.baseUrl;
+
+  // ✅ NEW: Check if online
+  bool get isOnline => _connectivityService.isOnline;
+  bool get isOffline => _connectivityService.isOffline;
 
   bool _isLoading = true;
   bool _isRefreshing = false;
@@ -56,9 +68,50 @@ class _TripMapScreenState extends State<TripMapScreen> {
   void initState() {
     super.initState();
     _loadTripData();
+
+    // ✅ NEW: Listen to connectivity changes
+    _connectivityService.addListener(_onConnectivityChanged);
   }
 
-  /// ✅ OPTIMIZED: Load trip data and generate road-following route
+  @override
+  void dispose() {
+    _connectivityService.removeListener(_onConnectivityChanged);
+    super.dispose();
+  }
+
+  // ✅ NEW: Handle connectivity changes
+  void _onConnectivityChanged() {
+    if (mounted) {
+      setState(() {});
+
+      // If we just came back online and loaded from cache, offer to refresh
+      if (isOnline && _isLoadedFromCache) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.wifi_rounded, color: Colors.white, size: 20),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Back online! Pull down to refresh route.',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Color(0xFF10B981),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            margin: EdgeInsets.all(16),
+          ),
+        );
+      }
+    }
+  }
+
+  // ✅ UPDATED: Load trip data with offline support
   Future<void> _loadTripData() async {
     setState(() {
       _isLoading = true;
@@ -66,6 +119,14 @@ class _TripMapScreenState extends State<TripMapScreen> {
     });
 
     try {
+      if (isOffline) {
+        // ✅ OFFLINE MODE: Load from cache
+        debugPrint("📱 OFFLINE MODE - Loading trip from cache...");
+        await _loadTripFromCache();
+        return;
+      }
+
+      // ✅ ONLINE MODE: Load from API
       debugPrint("📡 Fetching trip ${widget.tripId}...");
 
       final response = await http.get(
@@ -85,11 +146,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
           debugPrint("✅ Trip loaded: ${trip['id']}");
           debugPrint("📍 GPS waypoints received: ${waypoints.length}");
 
-          if (metadata != null) {
-            debugPrint("📊 Total waypoints: ${metadata['totalWaypoints']}");
-            debugPrint("📊 Sampled: ${metadata['isSampled']}");
-          }
-
           if (waypoints.isEmpty) {
             setState(() {
               _isLoading = false;
@@ -103,6 +159,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
             _totalWaypoints = metadata?['totalWaypoints'] ?? waypoints.length;
             _sampledWaypoints = metadata?['returnedWaypoints'] ?? waypoints.length;
             _isSampled = metadata?['isSampled'] ?? false;
+            _isLoadedFromCache = false;
 
             _startLocation = LatLng(
               (trip['startLocation']['latitude'] as num).toDouble(),
@@ -125,7 +182,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
             debugPrint("🗺️ GPS waypoints: ${_gpsWaypoints.length} points");
           });
 
-          // 🔥 NEW: Generate road-following route using OSRM
+          // Generate road-following route using OSRM
           await _generateRoadFollowingRoute();
 
           setState(() {
@@ -155,8 +212,108 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  /// 🔥 NEW: Generate road-following route using OSRM (FREE routing API)
+  // ✅ NEW: Load trip from cache (offline mode)
+  Future<void> _loadTripFromCache() async {
+    try {
+      debugPrint('📦 Loading trip from cache...');
+
+      // Get cached trips
+      final cachedTrips = await _cacheService.getCachedTrips(widget.vehicleId);
+
+      if (cachedTrips == null || cachedTrips.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = "No cached data available for this trip";
+        });
+        return;
+      }
+
+      // Find the specific trip
+      final trip = cachedTrips.firstWhere(
+            (t) => t['id'] == widget.tripId,
+        orElse: () => {},
+      );
+
+      if (trip.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = "This trip is not available offline";
+        });
+        return;
+      }
+
+      debugPrint('✅ Found cached trip: ${trip['id']}');
+
+      // Parse trip data
+      setState(() {
+        _tripData = {
+          'id': trip['id'],
+          'totalDistanceKm': trip['totalDistanceKm'] ?? 0,
+          'durationFormatted': trip['durationFormatted'] ?? 'N/A',
+          'avgSpeedKmh': trip['avgSpeedKmh'] ?? 0,
+          'startTime': trip['startTime'],
+          'endTime': trip['endTime'],
+          'startLocation': {
+            'latitude': trip['startLatitude'],
+            'longitude': trip['startLongitude'],
+            'address': trip['startAddress'] ?? 'Start Location',
+          },
+          'endLocation': {
+            'latitude': trip['endLatitude'],
+            'longitude': trip['endLongitude'],
+            'address': trip['endAddress'] ?? 'End Location',
+          },
+        };
+
+        _startLocation = LatLng(
+          (trip['startLatitude'] as num).toDouble(),
+          (trip['startLongitude'] as num).toDouble(),
+        );
+
+        _endLocation = LatLng(
+          (trip['endLatitude'] as num).toDouble(),
+          (trip['endLongitude'] as num).toDouble(),
+        );
+
+        // ✅ Use simple straight line route when offline (no waypoints in cache)
+        _gpsWaypoints = [_startLocation!, _endLocation!];
+        _routePoints = [_startLocation!, _endLocation!];
+
+        _isLoadedFromCache = true;
+      });
+
+      _buildMarkersAndPolylines();
+
+      setState(() {
+        _isLoading = false;
+      });
+
+      // Fit map to route
+      await Future.delayed(const Duration(milliseconds: 300));
+      _fitMapToRoute();
+
+      debugPrint('✅ Loaded trip from cache (offline mode)');
+
+    } catch (e) {
+      debugPrint('❌ Error loading trip from cache: $e');
+      setState(() {
+        _isLoading = false;
+        _errorMessage = "Error loading cached trip: $e";
+      });
+    }
+  }
+
+  // ✅ UPDATED: Generate road-following route (skip when offline)
   Future<void> _generateRoadFollowingRoute() async {
+    if (isOffline) {
+      debugPrint('📱 Offline - using direct GPS waypoints (no OSRM)');
+      setState(() {
+        _routePoints = _gpsWaypoints;
+      });
+      _buildMarkersAndPolylines();
+      return;
+    }
+
     try {
       debugPrint("🛣️ Generating road-following route...");
 
@@ -197,7 +354,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
           });
 
           debugPrint("✅ Road-following route generated: ${_routePoints.length} points");
-          debugPrint("📏 Route distance from OSRM: ${(route['distance'] / 1000).toStringAsFixed(2)} km");
 
           _buildMarkersAndPolylines();
           return;
@@ -213,7 +369,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
 
     } catch (error) {
       debugPrint("🔥 Error generating road route: $error");
-      // Fallback to GPS waypoints
       setState(() {
         _routePoints = _gpsWaypoints;
       });
@@ -221,16 +376,13 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  /// 🔥 Smart sampling for routing API (keeps start, end, and evenly distributed points)
+  /// Smart sampling for routing API
   List<LatLng> _sampleWaypointsForRouting(List<LatLng> waypoints, int maxPoints) {
     if (waypoints.length <= maxPoints) return waypoints;
 
     final sampled = <LatLng>[];
-
-    // Always keep first point
     sampled.add(waypoints.first);
 
-    // Sample middle points evenly
     final step = (waypoints.length - 2) / (maxPoints - 2);
     for (int i = 1; i < maxPoints - 1; i++) {
       final index = 1 + (step * (i - 1)).round();
@@ -239,13 +391,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
       }
     }
 
-    // Always keep last point
     sampled.add(waypoints.last);
-
     return sampled;
   }
 
-  /// 🔥 Decode polyline from OSRM (Encoded Polyline Algorithm Format)
+  /// Decode polyline from OSRM
   List<LatLng> _decodePolyline(String encoded) {
     List<LatLng> points = [];
     int index = 0;
@@ -283,8 +433,35 @@ class _TripMapScreenState extends State<TripMapScreen> {
     return points;
   }
 
-  /// ✅ Pull to refresh
+  // ✅ UPDATED: Handle refresh with offline check
   Future<void> _handleRefresh() async {
+    if (isOffline) {
+      debugPrint('📱 Cannot refresh while offline');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.cloud_off_rounded, color: Colors.white, size: 20),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Cannot refresh while offline',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Color(0xFFF59E0B),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          margin: EdgeInsets.all(16),
+        ),
+      );
+      return;
+    }
+
     setState(() => _isRefreshing = true);
     await _loadTripData();
     if (mounted) {
@@ -313,7 +490,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  /// 🔥 Build markers and polylines with professional styling
+  /// Build markers and polylines
   void _buildMarkersAndPolylines() {
     _markers.clear();
     _polylines.clear();
@@ -346,21 +523,21 @@ class _TripMapScreenState extends State<TripMapScreen> {
       ),
     );
 
-    // 🔥 Professional polyline with road-following curves
+    // ✅ Polyline (different color when offline/cached)
     if (_routePoints.isNotEmpty) {
       _polylines.add(
         Polyline(
           polylineId: const PolylineId('route'),
           points: _routePoints,
-          color: AppColors.success,
-          width: 6, // Slightly thicker for better visibility
-          geodesic: false, // Use actual route points, not great circle
+          color: _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success, // ✅ Orange when offline
+          width: 6,
+          geodesic: false,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
         ),
       );
-      debugPrint("✅ Drew professional polyline with ${_routePoints.length} road-following points");
+      debugPrint("✅ Drew polyline with ${_routePoints.length} points");
     }
 
     setState(() {});
@@ -391,7 +568,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
       );
 
       await controller.animateCamera(
-        CameraUpdate.newLatLngBounds(bounds, 80), // 80px padding
+        CameraUpdate.newLatLngBounds(bounds, 80),
       );
 
       debugPrint("✅ Map fitted to route bounds");
@@ -463,6 +640,9 @@ class _TripMapScreenState extends State<TripMapScreen> {
             mapToolbarEnabled: false,
           ),
 
+          // ✅ NEW: Offline Banner
+          const OfflineBanner(),
+
           // Top Bar
           _buildTopBar(),
 
@@ -472,7 +652,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
           // Bottom Card
           _buildBottomCard(),
 
-          // Loading overlay for refresh
           if (_isRefreshing)
             Positioned(
               top: 120,
@@ -534,7 +713,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
           ),
           SizedBox(height: AppSizes.spacingM),
           Text(
-            "Loading professional route...",
+            isOffline ? "Loading cached route..." : "Loading professional route...",
             style: AppTypography.body2,
           ),
         ],
@@ -552,18 +731,22 @@ class _TripMapScreenState extends State<TripMapScreen> {
             Container(
               padding: EdgeInsets.all(AppSizes.spacingXL),
               decoration: BoxDecoration(
-                color: AppColors.primaryLight,
+                color: isOffline
+                    ? Color(0xFFF59E0B).withOpacity(0.1)
+                    : AppColors.primaryLight,
                 shape: BoxShape.circle,
               ),
               child: Icon(
-                Icons.error_outline_rounded,
+                isOffline ? Icons.cloud_off_rounded : Icons.error_outline_rounded,
                 size: 80,
-                color: AppColors.primary.withOpacity(0.5),
+                color: isOffline
+                    ? Color(0xFFF59E0B)
+                    : AppColors.primary.withOpacity(0.5),
               ),
             ),
             SizedBox(height: AppSizes.spacingL),
             Text(
-              'Failed to Load Trip',
+              isOffline ? 'Trip Not Available Offline' : 'Failed to Load Trip',
               style: AppTypography.h3,
             ),
             SizedBox(height: AppSizes.spacingM),
@@ -574,7 +757,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
             ),
             SizedBox(height: AppSizes.spacingXL),
             ElevatedButton.icon(
-              onPressed: _loadTripData,
+              onPressed: isOffline ? null : _loadTripData,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 shape: RoundedRectangleBorder(
@@ -588,7 +771,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
               ),
               icon: Icon(Icons.refresh, color: AppColors.black),
               label: Text(
-                'Retry',
+                isOffline ? 'No Internet' : 'Retry',
                 style: AppTypography.button.copyWith(
                   color: AppColors.black,
                 ),
@@ -634,11 +817,37 @@ class _TripMapScreenState extends State<TripMapScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Trip Route',
-                      style: AppTypography.body1.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          'Trip Route',
+                          style: AppTypography.body1.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        // ✅ Show offline indicator
+                        if (_isLoadedFromCache) ...[
+                          SizedBox(width: 8),
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Color(0xFFF59E0B).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'OFFLINE',
+                              style: AppTypography.caption.copyWith(
+                                fontSize: 9,
+                                color: Color(0xFFF59E0B),
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     if (_tripData != null)
                       Text(
@@ -648,22 +857,28 @@ class _TripMapScreenState extends State<TripMapScreen> {
                   ],
                 ),
               ),
-              IconButton(
-                onPressed: _isRefreshing ? null : _handleRefresh,
-                icon: Icon(
-                  Icons.refresh_rounded,
-                  color: _isRefreshing
-                      ? AppColors.textSecondary.withOpacity(0.5)
-                      : AppColors.primary,
-                  size: 22,
+              // ✅ Disable refresh when offline
+              Opacity(
+                opacity: isOffline ? 0.5 : 1.0,
+                child: IconButton(
+                  onPressed: (isOffline || _isRefreshing) ? null : _handleRefresh,
+                  icon: Icon(
+                    Icons.refresh_rounded,
+                    color: (isOffline || _isRefreshing)
+                        ? AppColors.textSecondary.withOpacity(0.5)
+                        : AppColors.primary,
+                    size: 22,
+                  ),
+                  tooltip: isOffline ? 'Offline' : 'Refresh',
                 ),
-                tooltip: 'Refresh',
               ),
               SizedBox(width: AppSizes.spacingXS),
               Container(
                 padding: EdgeInsets.all(AppSizes.spacingS),
                 decoration: BoxDecoration(
-                  color: AppColors.success.withOpacity(0.1),
+                  color: _isLoadedFromCache
+                      ? Color(0xFFF59E0B).withOpacity(0.1)
+                      : AppColors.success.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(AppSizes.radiusM),
                 ),
                 child: Row(
@@ -671,7 +886,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
                   children: [
                     Icon(
                       Icons.route_rounded,
-                      color: AppColors.success,
+                      color: _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success,
                       size: 16,
                     ),
                     SizedBox(width: AppSizes.spacingXS),
@@ -679,7 +894,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
                       '${_routePoints.length} pts',
                       style: AppTypography.caption.copyWith(
                         fontSize: 11,
-                        color: AppColors.success,
+                        color: _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success,
                         fontWeight: FontWeight.w700,
                       ),
                     ),

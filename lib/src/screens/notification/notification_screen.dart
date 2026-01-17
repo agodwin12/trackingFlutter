@@ -9,14 +9,9 @@ import '../../services/env_config.dart';
 import '../../services/socket_service.dart';
 import 'widgets/notifications_skeleton.dart';
 
-
-
-
 enum NotificationType {
   safeZone,
   geofence,
-  speed,
-  timeZone,
   alert,
 }
 
@@ -45,49 +40,42 @@ class AppNotification {
     final String alertType = (json['alert_type'] ?? 'alert').toLowerCase();
     final String message = json['message'] ?? '';
 
-    // Determine notification type
+    // ✅ FIXED: Proper type determination
     NotificationType type;
     String title = 'Alert';
 
-    if (alertType.contains('speed')) {
-      type = NotificationType.speed;
-      title = 'Speed Alert';
-    } else if (alertType.contains('time') || alertType.contains('zone')) {
-      // Check if it's time_zone or safe_zone
-      if (alertType == 'time_zone') {
-        type = NotificationType.timeZone;
-        title = 'Time Zone Alert';
-      } else if (alertType.contains('safe')) {
-        type = NotificationType.safeZone;
+    // Check for safe zone first (most specific)
+    if (alertType.contains('safe') || message.toLowerCase().contains('safe zone')) {
+      type = NotificationType.safeZone;
+      if (message.contains('left') || message.contains('outside')) {
         title = 'Safe Zone Alert';
+      } else if (message.contains('returned') || message.contains('inside')) {
+        title = 'Safe Zone Return';
       } else {
-        type = NotificationType.alert;
+        title = 'Safe Zone Alert';
       }
-    } else if (alertType.contains('geofence') || alertType.contains('fence')) {
-      type = NotificationType.geofence;
-      title = 'Geofence Alert';
-    } else {
-      type = NotificationType.alert;
     }
-
-    // Parse message to extract details
-    if (message.contains('left') || message.contains('outside')) {
-      title = 'Safe Zone Alert';
-    } else if (message.contains('returned') || message.contains('inside')) {
-      title = 'Safe Zone Return';
-    } else if (message.contains('entered')) {
-      title = 'Geofence Entry';
-    } else if (message.contains('exited')) {
-      title = 'Geofence Exit';
-    } else if (message.contains('exceeded') || message.contains('speed')) {
-      title = 'Speed Alert';
-    } else if (message.contains('restricted') || message.contains('hours')) {
-      title = 'Time Zone Alert';
+    // Then check for geofence
+    else if (alertType.contains('geofence') || alertType.contains('fence') ||
+        message.toLowerCase().contains('geofence')) {
+      type = NotificationType.geofence;
+      if (message.contains('entered')) {
+        title = 'Geofence Entry';
+      } else if (message.contains('exited')) {
+        title = 'Geofence Exit';
+      } else {
+        title = 'Geofence Alert';
+      }
+    }
+    // Default to alert
+    else {
+      type = NotificationType.alert;
+      title = 'Alert';
     }
 
     // Extract vehicle name
     String vehicleNickname = 'Vehicle';
-    final vehicleMatch = RegExp(r'Vehicle\s+([A-Za-z0-9\s]+)\s+(left|returned|entered|exited|exceeded|moved)').firstMatch(message);
+    final vehicleMatch = RegExp(r'Vehicle\s+([A-Za-z0-9\s]+)\s+(left|returned|entered|exited|moved)').firstMatch(message);
     if (vehicleMatch != null) {
       vehicleNickname = vehicleMatch.group(1)?.trim() ?? vehicleNickname;
     }
@@ -102,12 +90,12 @@ class AppNotification {
     return AppNotification(
       id: json['id'] ?? 0,
       type: type,
-      title: title,
       vehicleNickname: vehicleNickname,
       zone: zone,
       time: DateTime.parse(json['alerted_at'] ?? DateTime.now().toIso8601String()),
       isRead: json['read'] == true || json['read'] == 1,
       message: message,
+      title: title,
     );
   }
 }
@@ -151,7 +139,7 @@ class _NotificationScreenState extends State<NotificationScreen>
   void initState() {
     super.initState();
     _loadLanguagePreference();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 3, vsync: this); // ✅ Changed from 5 to 3
     _fetchNotifications();
     _connectSocketForAlerts();
   }
@@ -426,6 +414,7 @@ class _NotificationScreenState extends State<NotificationScreen>
         .toList();
   }
 
+  // ✅ FIXED: Proper filtering
   List<AppNotification> get _safeZoneNotifications {
     return _allNotifications
         .where((n) => n.type == NotificationType.safeZone)
@@ -435,18 +424,6 @@ class _NotificationScreenState extends State<NotificationScreen>
   List<AppNotification> get _geofenceNotifications {
     return _allNotifications
         .where((n) => n.type == NotificationType.geofence)
-        .toList();
-  }
-
-  List<AppNotification> get _speedNotifications {
-    return _allNotifications
-        .where((n) => n.type == NotificationType.speed)
-        .toList();
-  }
-
-  List<AppNotification> get _timeZoneNotifications {
-    return _allNotifications
-        .where((n) => n.type == NotificationType.timeZone)
         .toList();
   }
 
@@ -518,10 +495,6 @@ class _NotificationScreenState extends State<NotificationScreen>
         return Icons.shield_rounded;
       case NotificationType.geofence:
         return Icons.location_on_rounded;
-      case NotificationType.speed:
-        return Icons.speed_rounded;
-      case NotificationType.timeZone:
-        return Icons.access_time_rounded;
       case NotificationType.alert:
         return Icons.warning_rounded;
     }
@@ -533,10 +506,6 @@ class _NotificationScreenState extends State<NotificationScreen>
         return Color(0xFF3B82F6);
       case NotificationType.geofence:
         return Color(0xFF8B5CF6);
-      case NotificationType.speed:
-        return Color(0xFFEF4444);
-      case NotificationType.timeZone:
-        return Color(0xFFF59E0B);
       case NotificationType.alert:
         return Color(0xFFEF4444);
     }
@@ -545,7 +514,7 @@ class _NotificationScreenState extends State<NotificationScreen>
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const NotificationsSkeleton();  // ✅ Use skeleton instead
+      return const NotificationsSkeleton();
     }
 
     return Scaffold(
@@ -608,7 +577,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                   ),
                 ),
 
-                // Tabs
+                // ✅ FIXED: Only 3 tabs now
                 Container(
                   color: AppColors.white,
                   child: TabBar(
@@ -650,15 +619,13 @@ class _NotificationScreenState extends State<NotificationScreen>
                           ],
                         ),
                       ),
-                      Tab(text: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone de sécurité'),
+                      Tab(text: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone sûre'),
                       Tab(text: _selectedLanguage == 'en' ? 'Geofence' : 'Géofence'),
-                      Tab(text: _selectedLanguage == 'en' ? 'Speed' : 'Vitesse'),
-                      Tab(text: _selectedLanguage == 'en' ? 'Time Zone' : 'Horaire'),
                     ],
                   ),
                 ),
 
-                // Tab Views
+                // ✅ FIXED: Only 3 tab views
                 Expanded(
                   child: TabBarView(
                     controller: _tabController,
@@ -666,8 +633,6 @@ class _NotificationScreenState extends State<NotificationScreen>
                       _buildNotificationsList(_allNotifications),
                       _buildNotificationsList(_safeZoneNotifications),
                       _buildNotificationsList(_geofenceNotifications),
-                      _buildNotificationsList(_speedNotifications),
-                      _buildNotificationsList(_timeZoneNotifications),
                     ],
                   ),
                 ),

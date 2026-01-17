@@ -8,6 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
+import '../../services/connectivity_service.dart'; // ✅ NEW
+import '../../services/cache_service.dart'; // ✅ NEW
+import '../../widgets/offline_barner.dart';
 import '../settings/settings.dart';
 
 class TripsScreen extends StatefulWidget {
@@ -25,12 +28,21 @@ class _TripsScreenState extends State<TripsScreen> {
   bool _showFilters = false;
   String _selectedLanguage = 'en';
 
+  // ✅ NEW: Offline mode support
+  final ConnectivityService _connectivityService = ConnectivityService();
+  final CacheService _cacheService = CacheService();
+  bool _isLoadedFromCache = false;
+
   // Trip tracking status
   bool _isTripTrackingEnabled = false;
   bool _isLoadingStatus = true;
   int? _userId;
 
   String get baseUrl => EnvConfig.baseUrl;
+
+  // ✅ NEW: Check if online
+  bool get isOnline => _connectivityService.isOnline;
+  bool get isOffline => _connectivityService.isOffline;
 
   // Trip Data
   List<Map<String, dynamic>> _trips = [];
@@ -45,6 +57,29 @@ class _TripsScreenState extends State<TripsScreen> {
     super.initState();
     _loadLanguagePreference();
     _initializeScreen();
+
+    // ✅ NEW: Listen to connectivity changes
+    _connectivityService.addListener(_onConnectivityChanged);
+  }
+
+  @override
+  void dispose() {
+    _connectivityService.removeListener(_onConnectivityChanged);
+    super.dispose();
+  }
+
+  // ✅ NEW: Handle connectivity changes
+  void _onConnectivityChanged() {
+    if (mounted) {
+      setState(() {});
+
+      // If we just came back online, refresh data
+      if (isOnline && _isLoadedFromCache) {
+        debugPrint('🌐 Back online - refreshing trips...');
+        _fetchTrips();
+        _fetchTripTrackingStatus();
+      }
+    }
   }
 
   Future<void> _loadLanguagePreference() async {
@@ -55,12 +90,21 @@ class _TripsScreenState extends State<TripsScreen> {
     debugPrint('✅ Trips screen loaded language preference: $_selectedLanguage');
   }
 
+  // ✅ UPDATED: Initialize with offline support
   Future<void> _initializeScreen() async {
     await _loadUserId();
-    await Future.wait([
-      _fetchTripTrackingStatus(),
-      _fetchTrips(),
-    ]);
+
+    if (isOffline) {
+      // ✅ Load from cache when offline
+      debugPrint('📱 OFFLINE MODE - Loading trips from cache...');
+      await _loadTripsFromCache();
+    } else {
+      // ✅ Load from API when online
+      await Future.wait([
+        _fetchTripTrackingStatus(),
+        _fetchTrips(),
+      ]);
+    }
   }
 
   /// Load user ID from SharedPreferences
@@ -79,9 +123,46 @@ class _TripsScreenState extends State<TripsScreen> {
     }
   }
 
-  /// 🔧 FIXED: Corrected API endpoint to match settings_screen.dart
+  // ✅ NEW: Load trips from cache (offline mode)
+  Future<void> _loadTripsFromCache() async {
+    setState(() => _isLoading = true);
+
+    try {
+      final cachedTrips = await _cacheService.getCachedTrips(widget.vehicleId);
+
+      if (cachedTrips != null && cachedTrips.isNotEmpty) {
+        setState(() {
+          _trips = cachedTrips;
+          _isLoadedFromCache = true;
+        });
+        debugPrint('✅ Loaded ${_trips.length} trips from cache (last 30 days)');
+      } else {
+        setState(() {
+          _trips = [];
+          _isLoadedFromCache = true;
+        });
+        debugPrint('ℹ️ No cached trips found');
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading trips from cache: $e');
+      setState(() {
+        _trips = [];
+        _isLoadedFromCache = true;
+      });
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // ✅ UPDATED: Fetch trip tracking status with offline check
   Future<void> _fetchTripTrackingStatus() async {
     if (_userId == null) {
+      setState(() => _isLoadingStatus = false);
+      return;
+    }
+
+    if (isOffline) {
+      debugPrint('📱 Offline - skipping trip tracking status fetch');
       setState(() => _isLoadingStatus = false);
       return;
     }
@@ -89,14 +170,12 @@ class _TripsScreenState extends State<TripsScreen> {
     try {
       debugPrint('📡 Fetching trip tracking status for user: $_userId');
 
-      // 🔧 FIXED: Removed /api prefix to match backend route
       final response = await http.get(
         Uri.parse('$baseUrl/users-settings/$_userId/settings'),
         headers: {'Content-Type': 'application/json'},
       );
 
       debugPrint('📡 Status response: ${response.statusCode}');
-      debugPrint('📡 Status body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -146,7 +225,6 @@ class _TripsScreenState extends State<TripsScreen> {
         break;
 
       case 'week':
-      // Start from Monday of current week
         final weekday = now.weekday;
         final monday = now.subtract(Duration(days: weekday - 1));
         startDate = DateTime(monday.year, monday.month, monday.day);
@@ -171,10 +249,17 @@ class _TripsScreenState extends State<TripsScreen> {
     return {'start': startDate, 'end': endDate};
   }
 
+  // ✅ UPDATED: Fetch trips with caching
   Future<void> _fetchTrips() async {
     setState(() => _isLoading = true);
 
     try {
+      if (isOffline) {
+        debugPrint('📱 Offline - loading cached trips');
+        await _loadTripsFromCache();
+        return;
+      }
+
       final dateRange = _getDateRange();
       final params = <String, String>{};
 
@@ -198,10 +283,17 @@ class _TripsScreenState extends State<TripsScreen> {
         final data = jsonDecode(response.body);
 
         if (mounted && data['success'] == true) {
+          final trips = List<Map<String, dynamic>>.from(data['data']['trips']);
+
           setState(() {
-            _trips = List<Map<String, dynamic>>.from(data['data']['trips']);
+            _trips = trips;
+            _isLoadedFromCache = false;
           });
-          debugPrint('✅ Loaded ${_trips.length} trips');
+
+          // ✅ Cache the trips (last 30 days only)
+          await _cacheService.cacheTrips(widget.vehicleId, trips);
+
+          debugPrint('✅ Loaded ${_trips.length} trips and cached them');
         }
       }
     } catch (error) {
@@ -213,7 +305,40 @@ class _TripsScreenState extends State<TripsScreen> {
     }
   }
 
+  // ✅ UPDATED: Handle refresh with offline check
   Future<void> _handleRefresh() async {
+    if (isOffline) {
+      debugPrint('📱 Cannot refresh while offline');
+
+      // Show offline message
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.cloud_off_rounded, color: Colors.white, size: 20),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _selectedLanguage == 'en'
+                        ? 'Cannot refresh while offline'
+                        : 'Impossible de rafraîchir hors ligne',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Color(0xFFF59E0B),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 2),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            margin: EdgeInsets.all(16),
+          ),
+        );
+      }
+      return;
+    }
+
     await Future.wait([
       _fetchTripTrackingStatus(),
       _fetchTrips(),
@@ -228,6 +353,34 @@ class _TripsScreenState extends State<TripsScreen> {
 
   /// Show custom date picker
   Future<void> _showCustomDatePicker() async {
+    // ✅ Check if offline
+    if (isOffline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.cloud_off_rounded, color: Colors.white, size: 20),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _selectedLanguage == 'en'
+                      ? 'This feature requires internet'
+                      : 'Cette fonction nécessite Internet',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: Color(0xFFF59E0B),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          margin: EdgeInsets.all(16),
+        ),
+      );
+      return;
+    }
+
     final DateTimeRange? picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2020),
@@ -264,7 +417,7 @@ class _TripsScreenState extends State<TripsScreen> {
     }
   }
 
-  /// Navigate to Settings to enable trip tracking
+  /// Navigate to Settings
   void _goToSettings() {
     Navigator.push(
       context,
@@ -272,10 +425,11 @@ class _TripsScreenState extends State<TripsScreen> {
         builder: (context) => SettingsScreen(vehicleId: widget.vehicleId),
       ),
     ).then((_) {
-      // 🔧 FIXED: Refresh status when coming back from Settings
       debugPrint('🔄 Returned from Settings, refreshing status...');
-      _fetchTripTrackingStatus();
-      _fetchTrips();
+      if (isOnline) {
+        _fetchTripTrackingStatus();
+        _fetchTrips();
+      }
     });
   }
 
@@ -351,6 +505,13 @@ class _TripsScreenState extends State<TripsScreen> {
 
   /// Get display text for current filter
   String _getFilterDisplayText() {
+    // ✅ Show "Last 30 days (cached)" when offline
+    if (isOffline && _isLoadedFromCache) {
+      return _selectedLanguage == 'en'
+          ? 'Last 30 days (cached)'
+          : 'Derniers 30 jours (cache)';
+    }
+
     switch (_selectedFilter) {
       case 'today':
         return _selectedLanguage == 'en' ? 'Today\'s trips' : 'Trajets d\'aujourd\'hui';
@@ -377,6 +538,9 @@ class _TripsScreenState extends State<TripsScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            // ✅ NEW: Offline Banner
+            const OfflineBanner(),
+
             // Compact Header
             Container(
               color: AppColors.white,
@@ -404,7 +568,7 @@ class _TripsScreenState extends State<TripsScreen> {
                         Text(
                           _getFilterDisplayText(),
                           style: AppTypography.caption.copyWith(
-                            color: AppColors.primary,
+                            color: isOffline ? Color(0xFFF59E0B) : AppColors.primary,
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
                           ),
@@ -412,15 +576,19 @@ class _TripsScreenState extends State<TripsScreen> {
                       ],
                     ),
                   ),
-                  IconButton(
-                    onPressed: _toggleFilters,
-                    icon: Icon(
-                      Icons.tune_rounded,
-                      color: _showFilters ? AppColors.primary : AppColors.black,
-                      size: 22,
+                  // ✅ Disable filter button when offline
+                  Opacity(
+                    opacity: isOffline ? 0.5 : 1.0,
+                    child: IconButton(
+                      onPressed: isOffline ? null : _toggleFilters,
+                      icon: Icon(
+                        Icons.tune_rounded,
+                        color: _showFilters ? AppColors.primary : AppColors.black,
+                        size: 22,
+                      ),
+                      padding: EdgeInsets.zero,
+                      constraints: BoxConstraints(),
                     ),
-                    padding: EdgeInsets.zero,
-                    constraints: BoxConstraints(),
                   ),
                 ],
               ),
@@ -508,89 +676,105 @@ class _TripsScreenState extends State<TripsScreen> {
                 ),
               ),
 
-            // 🆕 REDESIGNED Filter Section
+            // Filter Section
             if (_showFilters)
-              Container(
-                color: AppColors.white,
-                padding: EdgeInsets.all(AppSizes.spacingL),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Divider(height: 1),
-                    SizedBox(height: AppSizes.spacingM),
-                    Text(
-                      _selectedLanguage == 'en' ? 'Filter by Date' : 'Filtrer par date',
-                      style: AppTypography.subtitle1.copyWith(fontSize: 14),
-                    ),
-                    SizedBox(height: AppSizes.spacingM),
+              Opacity(
+                opacity: isOffline ? 0.5 : 1.0, // ✅ Dim when offline
+                child: Container(
+                  color: AppColors.white,
+                  padding: EdgeInsets.all(AppSizes.spacingL),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Divider(height: 1),
+                      SizedBox(height: AppSizes.spacingM),
+                      Row(
+                        children: [
+                          Text(
+                            _selectedLanguage == 'en' ? 'Filter by Date' : 'Filtrer par date',
+                            style: AppTypography.subtitle1.copyWith(fontSize: 14),
+                          ),
+                          // ✅ Show offline indicator
+                          if (isOffline) ...[
+                            SizedBox(width: 8),
+                            Icon(
+                              Icons.cloud_off_rounded,
+                              size: 16,
+                              color: Color(0xFFF59E0B),
+                            ),
+                          ],
+                        ],
+                      ),
+                      SizedBox(height: AppSizes.spacingM),
 
-                    // Quick filter chips
-                    Wrap(
-                      spacing: AppSizes.spacingS,
-                      runSpacing: AppSizes.spacingS,
-                      children: [
-                        _buildFilterChip(
-                          label: _selectedLanguage == 'en' ? 'Today' : 'Aujourd\'hui',
-                          icon: Icons.today_rounded,
-                          value: 'today',
-                        ),
-                        _buildFilterChip(
-                          label: _selectedLanguage == 'en' ? 'Yesterday' : 'Hier',
-                          icon: Icons.calendar_today_rounded,
-                          value: 'yesterday',
-                        ),
-                        _buildFilterChip(
-                          label: _selectedLanguage == 'en' ? 'This Week' : 'Cette semaine',
-                          icon: Icons.date_range_rounded,
-                          value: 'week',
-                        ),
-                        _buildFilterChip(
-                          label: _selectedLanguage == 'en' ? 'This Month' : 'Ce mois',
-                          icon: Icons.calendar_month_rounded,
-                          value: 'month',
-                        ),
-                      ],
-                    ),
+                      // Quick filter chips
+                      Wrap(
+                        spacing: AppSizes.spacingS,
+                        runSpacing: AppSizes.spacingS,
+                        children: [
+                          _buildFilterChip(
+                            label: _selectedLanguage == 'en' ? 'Today' : 'Aujourd\'hui',
+                            icon: Icons.today_rounded,
+                            value: 'today',
+                          ),
+                          _buildFilterChip(
+                            label: _selectedLanguage == 'en' ? 'Yesterday' : 'Hier',
+                            icon: Icons.calendar_today_rounded,
+                            value: 'yesterday',
+                          ),
+                          _buildFilterChip(
+                            label: _selectedLanguage == 'en' ? 'This Week' : 'Cette semaine',
+                            icon: Icons.date_range_rounded,
+                            value: 'week',
+                          ),
+                          _buildFilterChip(
+                            label: _selectedLanguage == 'en' ? 'This Month' : 'Ce mois',
+                            icon: Icons.calendar_month_rounded,
+                            value: 'month',
+                          ),
+                        ],
+                      ),
 
-                    SizedBox(height: AppSizes.spacingM),
+                      SizedBox(height: AppSizes.spacingM),
 
-                    // Custom date range button
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _showCustomDatePicker,
-                        icon: Icon(Icons.event_rounded, size: 18),
-                        label: Text(
-                          _selectedFilter == 'custom' && _customStartDate != null
-                              ? '${DateFormat('MMM dd, yyyy').format(_customStartDate!)} - ${DateFormat('MMM dd, yyyy').format(_customEndDate!)}'
-                              : (_selectedLanguage == 'en'
-                                  ? 'Choose Custom Date Range'
-                                  : 'Choisir une période personnalisée'),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: _selectedFilter == 'custom'
-                              ? AppColors.primary
-                              : AppColors.textSecondary,
-                          side: BorderSide(
-                            color: _selectedFilter == 'custom'
+                      // Custom date range button
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: isOffline ? null : _showCustomDatePicker, // ✅ Disable when offline
+                          icon: Icon(Icons.event_rounded, size: 18),
+                          label: Text(
+                            _selectedFilter == 'custom' && _customStartDate != null
+                                ? '${DateFormat('MMM dd, yyyy').format(_customStartDate!)} - ${DateFormat('MMM dd, yyyy').format(_customEndDate!)}'
+                                : (_selectedLanguage == 'en'
+                                ? 'Choose Custom Date Range'
+                                : 'Choisir une période personnalisée'),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _selectedFilter == 'custom'
                                 ? AppColors.primary
-                                : AppColors.border,
-                            width: _selectedFilter == 'custom' ? 2 : 1,
-                          ),
-                          backgroundColor: _selectedFilter == 'custom'
-                              ? AppColors.primaryLight
-                              : Colors.transparent,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                          ),
-                          padding: EdgeInsets.symmetric(
-                            horizontal: AppSizes.spacingM,
-                            vertical: 14,
+                                : AppColors.textSecondary,
+                            side: BorderSide(
+                              color: _selectedFilter == 'custom'
+                                  ? AppColors.primary
+                                  : AppColors.border,
+                              width: _selectedFilter == 'custom' ? 2 : 1,
+                            ),
+                            backgroundColor: _selectedFilter == 'custom'
+                                ? AppColors.primaryLight
+                                : Colors.transparent,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                            ),
+                            padding: EdgeInsets.symmetric(
+                              horizontal: AppSizes.spacingM,
+                              vertical: 14,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
 
@@ -649,7 +833,7 @@ class _TripsScreenState extends State<TripsScreen> {
     );
   }
 
-  /// 🆕 Beautiful filter chip widget
+  /// Filter chip widget
   Widget _buildFilterChip({
     required String label,
     required IconData icon,
@@ -658,7 +842,7 @@ class _TripsScreenState extends State<TripsScreen> {
     final isSelected = _selectedFilter == value;
 
     return InkWell(
-      onTap: () {
+      onTap: isOffline ? null : () { // ✅ Disable when offline
         setState(() {
           _selectedFilter = value;
         });
@@ -851,6 +1035,53 @@ class _TripsScreenState extends State<TripsScreen> {
   }
 
   Widget _buildEmptyState() {
+    // ✅ Show offline empty state
+    if (isOffline && _trips.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.all(AppSizes.spacingXL),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: EdgeInsets.all(AppSizes.spacingL),
+                decoration: BoxDecoration(
+                  color: Color(0xFFF59E0B).withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.cloud_off_rounded,
+                  size: 48,
+                  color: Color(0xFFF59E0B),
+                ),
+              ),
+              SizedBox(height: AppSizes.spacingL),
+              Text(
+                _selectedLanguage == 'en' ? 'You\'re Offline' : 'Vous êtes hors ligne',
+                style: AppTypography.h3.copyWith(
+                  color: AppColors.black,
+                  fontSize: 18,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: AppSizes.spacingS),
+              Text(
+                _selectedLanguage == 'en'
+                    ? 'No cached trips available. Connect to the internet to view your trip history.'
+                    : 'Aucun trajet en cache. Connectez-vous à Internet pour voir l\'historique.',
+                style: AppTypography.body2.copyWith(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     // Show different message based on tracking status
     if (!_isLoadingStatus && !_isTripTrackingEnabled) {
       return Center(
@@ -918,7 +1149,7 @@ class _TripsScreenState extends State<TripsScreen> {
       );
     }
 
-    // Default empty state (tracking is enabled, but no trips)
+    // Default empty state
     return Center(
       child: Padding(
         padding: EdgeInsets.all(AppSizes.spacingXL),

@@ -48,7 +48,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadLanguagePreference();
     _loadUserData();
     _loadSettings();
+    _redirectIfLoggedOut();
   }
+
+  Future<void> _redirectIfLoggedOut() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('accessToken');
+    final uid = prefs.getInt('user_id');
+
+    if (token == null || uid == null) {
+      if (mounted) {
+        Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
+      }
+    }
+  }
+
 
   Future<void> _loadLanguagePreference() async {
     final prefs = await SharedPreferences.getInstance();
@@ -57,6 +71,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
     debugPrint('✅ Loaded language preference: $_selectedLanguage');
   }
+
+
 
   Future<void> _changeLanguage(String languageCode) async {
     final prefs = await SharedPreferences.getInstance();
@@ -79,6 +95,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       Navigator.pop(context, 'language_changed');
     }
   }
+
 
   void _showLanguageSelector() {
     showModalBottomSheet(
@@ -137,6 +154,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+
+
 
   Widget _buildLanguageOption({
     required String languageCode,
@@ -203,6 +222,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+
+
 
   Future<void> _loadUserData() async {
     try {
@@ -1018,19 +1039,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
 
+      // Auth/session
       await prefs.remove('user');
       await prefs.remove('accessToken');
-      await prefs.remove('refreshToken');
-      await prefs.remove('userId');
+      await prefs.remove('refreshToken'); // (if you store it)
+      await prefs.remove('userId');       // (optional legacy)
+
+      // ✅ PIN service keys
+      await prefs.remove('user_id');              // <--- THIS fixes your case
+      await prefs.remove('failed_pin_attempts');  // <--- reset lock/attempts
 
       debugPrint('✅ User logged out successfully');
 
       if (mounted) {
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(
-            builder: (context) => ModernLoginScreen(),
-          ),
+          MaterialPageRoute(builder: (_) => ModernLoginScreen()),
               (route) => false,
         );
       }
@@ -1038,6 +1062,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       debugPrint('🔥 Error during logout: $e');
     }
   }
+
+
 
   @override
   Widget build(BuildContext context) {
