@@ -64,6 +64,9 @@
 
     <!-- ✅ User Notification Permission Description -->
     <key>NSUserNotificationUsageDescription</key>
-    <string>This app sends you notifications about vehicle alerts, geofence violations, and security events.</string>
+    <string>This app sends you notifications about vehicle alerts, geofence violations.</string>
+
+      <key>NSUserNotificationAlertStyle</key>
+        <string>alert</string>
 </dict>
 </plist>

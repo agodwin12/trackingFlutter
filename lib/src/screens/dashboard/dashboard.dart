@@ -1,6 +1,7 @@
 // lib/screens/dashboard/dashboard.dart
 
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
@@ -28,7 +29,6 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   StreamSubscription<Map<String, dynamic>>? _alertSubscription;
   String _selectedLanguage = 'en';
 
-  // Animation controllers for micro-interactions
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
@@ -40,7 +40,6 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     _controller = DashboardController(widget.vehicleId);
     _controller.initialize();
 
-    // Setup pulse animation for online indicator
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
@@ -542,13 +541,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) => VehicleSelectorModal(
-        controller: _controller,
-        onVehicleSelected: (vehicleId) {
-          _controller.onVehicleSelected(vehicleId);
-        },
-        selectedLanguage: _selectedLanguage,
-      ),
+      builder: (context) => _buildCompactVehicleSelector(),
     );
   }
 
@@ -589,7 +582,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
             body: SafeArea(
               child: Column(
                 children: [
-                  _buildModernHeader(controller),
+                  _buildCompactHeader(controller),
                   const OfflineBanner(),
                   Expanded(
                     child: Stack(
@@ -611,12 +604,14 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                           minMaxZoomPreference: const MinMaxZoomPreference(10, 20),
                         ),
 
-                        // Modern Floating Elements
-                        _buildModernVehicleSelector(controller),
-                        _buildModernMapTypeButton(controller),
-                        _buildModernEngineButton(controller),
-                        _buildModernReportStolenButton(controller),
-                        _buildModernBottomControls(controller),
+                        // Compact Top Buttons
+                        _buildCompactVehicleSelectorButton(controller),
+                        _buildCompactMapTypeButton(controller),
+                        _buildCompactEngineButton(controller),
+                        _buildCompactStolenButton(controller),
+
+                        // ✅ PURE Glassmorphism Bottom Controls
+                        _buildPureGlassmorphicBottomControls(controller),
                       ],
                     ),
                   ),
@@ -629,39 +624,34 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  Widget _buildModernHeader(DashboardController controller) {
+  // ✅ COMPACT HEADER (FLEETRA with gradient back)
+  Widget _buildCompactHeader(DashboardController controller) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
+            blurRadius: 4,
             offset: const Offset(0, 2),
           ),
         ],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Logo with gradient
+          // ✅ FLEETRA Logo with GRADIENT
           ShaderMask(
             shaderCallback: (bounds) => LinearGradient(
               colors: [AppColors.primary, AppColors.primary.withOpacity(0.7)],
             ).createShader(bounds),
-            child: RichText(
-              text: TextSpan(
-                children: [
-                  TextSpan(
-                    text: 'FLEETRA',
-                    style: AppTypography.h3.copyWith(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                    ),
-                  ),
-                ],
+            child: Text(
+              'FLEETRA',
+              style: AppTypography.h3.copyWith(
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
               ),
             ),
           ),
@@ -669,7 +659,21 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
           Row(
             children: [
               // Refresh Button
-              GestureDetector(
+              _buildSimpleIconButton(
+                icon: controller.isRefreshing
+                    ? SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.black54,
+                  ),
+                )
+                    : Icon(
+                  Icons.refresh_rounded,
+                  size: 20,
+                  color: controller.isOffline ? Colors.grey : Colors.black54,
+                ),
                 onTap: controller.isOffline || controller.isRefreshing
                     ? null
                     : () async {
@@ -679,152 +683,84 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                       SnackBar(
                         content: Row(
                           children: [
-                            Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                _selectedLanguage == 'en' ? 'Refreshed' : 'Actualisé',
-                                style: AppTypography.body2.copyWith(color: Colors.white),
-                              ),
+                            Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+                            const SizedBox(width: 10),
+                            Text(
+                              _selectedLanguage == 'en' ? 'Refreshed' : 'Actualisé',
+                              style: const TextStyle(fontSize: 13),
                             ),
                           ],
                         ),
                         backgroundColor: const Color(0xFF10B981),
                         behavior: SnackBarBehavior.floating,
                         duration: const Duration(seconds: 1),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        margin: const EdgeInsets.all(16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        margin: const EdgeInsets.all(12),
                       ),
                     );
                   }
                 },
-                child: Opacity(
-                  opacity: controller.isOffline ? 0.5 : 1.0,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: AppColors.background,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: controller.isRefreshing
-                            ? AppColors.primary.withOpacity(0.5)
-                            : AppColors.border.withOpacity(0.5),
-                        width: controller.isRefreshing ? 2 : 1,
-                      ),
-                    ),
-                    child: IconButton(
-                      onPressed: null,
-                      icon: controller.isRefreshing
-                          ? SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: AppColors.primary,
-                        ),
-                      )
-                          : Icon(
-                        Icons.refresh_rounded,
-                        size: 22,
-                        color: controller.isOffline ? Colors.grey : AppColors.primary,
-                      ),
-                      padding: const EdgeInsets.all(8),
-                      constraints: const BoxConstraints(),
-                    ),
-                  ),
-                ),
               ),
 
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
 
               // Notification Button
               Stack(
                 children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      color: AppColors.background,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.border.withOpacity(0.5)),
+                  _buildSimpleIconButton(
+                    icon: Icon(
+                      Icons.notifications_outlined,
+                      size: 20,
+                      color: controller.notificationCount > 0 ? Colors.black : Colors.black54,
                     ),
-                    child: IconButton(
-                      onPressed: () {
-                        Navigator.pushNamed(
-                          context,
-                          '/notifications',
-                          arguments: {'vehicleId': controller.selectedVehicleId},
-                        ).then((_) => controller.fetchUnreadNotifications());
-                      },
-                      icon: Icon(
-                        Icons.notifications_rounded,
-                        size: 22,
-                        color: controller.notificationCount > 0 ? AppColors.primary : AppColors.textSecondary,
-                      ),
-                      padding: const EdgeInsets.all(8),
-                      constraints: const BoxConstraints(),
-                    ),
+                    onTap: () {
+                      Navigator.pushNamed(
+                        context,
+                        '/notifications',
+                        arguments: {'vehicleId': controller.selectedVehicleId},
+                      ).then((_) => controller.fetchUnreadNotifications());
+                    },
                   ),
                   if (controller.notificationCount > 0)
                     Positioned(
                       right: 4,
                       top: 4,
                       child: Container(
-                        padding: const EdgeInsets.all(4),
+                        width: 8,
+                        height: 8,
                         decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [AppColors.error, AppColors.error.withOpacity(0.8)],
-                          ),
+                          color: AppColors.error,
                           shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.error.withOpacity(0.4),
-                              blurRadius: 4,
-                              spreadRadius: 1,
-                            ),
-                          ],
-                        ),
-                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                        child: Text(
-                          controller.notificationCount > 9 ? '9+' : '${controller.notificationCount}',
-                          style: const TextStyle(
+                          border: Border.all(
                             color: Colors.white,
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
+                            width: 1.5,
                           ),
-                          textAlign: TextAlign.center,
                         ),
                       ),
                     ),
                 ],
               ),
 
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
 
               // Settings Button
-              Container(
-                decoration: BoxDecoration(
-                  color: AppColors.background,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border.withOpacity(0.5)),
+              _buildSimpleIconButton(
+                icon: Icon(
+                  Icons.settings_outlined,
+                  size: 20,
+                  color: Colors.black54,
                 ),
-                child: IconButton(
-                  onPressed: () async {
-                    final result = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => SettingsScreen(vehicleId: widget.vehicleId),
-                      ),
-                    );
-                    if (result == 'language_changed') {
-                      await _loadLanguagePreference();
-                    }
-                  },
-                  icon: Icon(
-                    Icons.settings_rounded,
-                    size: 22,
-                    color: AppColors.textSecondary,
-                  ),
-                  padding: const EdgeInsets.all(8),
-                  constraints: const BoxConstraints(),
-                ),
+                onTap: () async {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => SettingsScreen(vehicleId: widget.vehicleId),
+                    ),
+                  );
+                  if (result == 'language_changed') {
+                    await _loadLanguagePreference();
+                  }
+                },
               ),
             ],
           ),
@@ -833,35 +769,23 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  Widget _buildModernVehicleSelector(DashboardController controller) {
+  // ✅ COMPACT VEHICLE SELECTOR BUTTON
+  Widget _buildCompactVehicleSelectorButton(DashboardController controller) {
     return Positioned(
-      top: 16,
+      top: 12,
       left: 0,
       right: 0,
       child: Center(
         child: GestureDetector(
           onTap: _showVehicleSelectorModal,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.white, Colors.white.withOpacity(0.95)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: AppColors.primary.withOpacity(0.3),
-                width: 2,
-              ),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.primary.withOpacity(0.2),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4),
-                ),
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withOpacity(0.15),
                   blurRadius: 8,
                   offset: const Offset(0, 2),
                 ),
@@ -870,88 +794,30 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: controller.hexToColor(controller.selectedVehicle!.color),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2.5),
-                    boxShadow: [
-                      BoxShadow(
-                        color: controller.hexToColor(controller.selectedVehicle!.color).withOpacity(0.4),
-                        blurRadius: 8,
-                        spreadRadius: 1,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        AppColors.primary.withOpacity(0.1),
-                        AppColors.primary.withOpacity(0.05),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(Icons.directions_car_rounded, color: AppColors.primary, size: 18),
-                ),
-                const SizedBox(width: 10),
-
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      controller.selectedVehicle!.nickname.isNotEmpty
-                          ? controller.selectedVehicle!.nickname
-                          : controller.selectedVehicle!.immatriculation,
-                      style: AppTypography.body1.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.black,
-                        fontSize: 14,
-                      ),
-                    ),
-                    if (controller.isOffline && controller.lastLocationUpdate != null)
-                      Text(
-                        _getLastSeenText(controller.lastLocationUpdate!),
-                        style: AppTypography.caption.copyWith(
-                          fontSize: 10,
-                          color: const Color(0xFFF59E0B),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(width: 10),
-
-                if (controller.selectedVehicle!.isOnline)
-                  ScaleTransition(
-                    scale: _pulseAnimation,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF10B981),
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF10B981).withOpacity(0.5),
-                            blurRadius: 6,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                Icon(Icons.directions_car, color: Colors.black87, size: 18),
                 const SizedBox(width: 8),
-
-                Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.primary, size: 20),
+                Text(
+                  controller.selectedVehicle!.nickname.isNotEmpty
+                      ? controller.selectedVehicle!.nickname
+                      : controller.selectedVehicle!.immatriculation,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                if (controller.selectedVehicle!.isOnline)
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                const SizedBox(width: 4),
+                Icon(Icons.keyboard_arrow_down, color: Colors.black54, size: 16),
               ],
             ),
           ),
@@ -960,115 +826,78 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  Widget _buildModernMapTypeButton(DashboardController controller) {
+  // ✅ COMPACT MAP TYPE BUTTON
+  Widget _buildCompactMapTypeButton(DashboardController controller) {
     return Positioned(
-      top: 16,
-      left: 16,
+      top: 12,
+      left: 12,
       child: GestureDetector(
         onTap: () => controller.cycleMapType(),
         child: Container(
-          padding: const EdgeInsets.all(12),
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Colors.white, Colors.white.withOpacity(0.95)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.primary.withOpacity(0.2), width: 1.5),
+            color: Colors.white,
+            shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.15),
-                blurRadius: 20,
-                spreadRadius: 2,
-                offset: const Offset(0, 6),
-              ),
-              BoxShadow(
-                color: AppColors.primary.withOpacity(0.1),
-                blurRadius: 12,
-                spreadRadius: 0,
+                blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
             ],
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [AppColors.primary.withOpacity(0.15), AppColors.primary.withOpacity(0.08)],
-                  ),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(Icons.layers_rounded, color: AppColors.primary, size: 20),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                controller.getMapTypeLabel(),
-                style: AppTypography.caption.copyWith(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
-                ),
-              ),
-            ],
-          ),
+          child: Icon(Icons.layers, color: Colors.black87, size: 20),
         ),
       ),
     );
   }
 
-  Widget _buildModernEngineButton(DashboardController controller) {
+  // ✅ COMPACT ENGINE BUTTON
+  Widget _buildCompactEngineButton(DashboardController controller) {
     final bool isDisabled = controller.isOffline || controller.isTogglingEngine;
 
     return Positioned(
-      top: 16,
-      right: 16,
+      top: 12,
+      right: 12,
       child: GestureDetector(
         onTap: isDisabled ? null : _showEngineConfirmDialog,
         child: Opacity(
           opacity: controller.isOffline ? 0.5 : 1.0,
           child: Container(
-            width: 56,
-            height: 56,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: controller.engineOn
-                    ? [const Color(0xFF10B981), const Color(0xFF059669)]
-                    : [const Color(0xFFEF4444), const Color(0xFFDC2626)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+              color: controller.engineOn
+                  ? Colors.white
+                  : const Color(0xFFEF4444),
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: (controller.engineOn ? const Color(0xFF10B981) : const Color(0xFFEF4444)).withOpacity(0.4),
-                  blurRadius: 16,
-                  spreadRadius: 2,
-                  offset: const Offset(0, 4),
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
                 ),
               ],
             ),
             child: controller.isTogglingEngine
                 ? Padding(
-              padding: const EdgeInsets.all(14.0),
-              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+              padding: const EdgeInsets.all(12.0),
+              child: CircularProgressIndicator(
+                color: controller.engineOn ? Colors.black87 : Colors.white,
+                strokeWidth: 2,
+              ),
             )
                 : Stack(
               alignment: Alignment.center,
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(28),
-                  child: Image.asset(
-                    controller.engineOn ? 'assets/open.ico' : 'assets/lock.ico',
-                    width: 32,
-                    height: 32,
-                    fit: BoxFit.contain,
-                    color: Colors.white,
-                    colorBlendMode: BlendMode.srcIn,
-                  ),
+                Image.asset(
+                  controller.engineOn ? 'assets/open.ico' : 'assets/lock.ico',
+                  width: 24,
+                  height: 24,
+                  fit: BoxFit.contain,
+                  color: controller.engineOn ? const Color(0xFF10B981) : Colors.white,
+                  colorBlendMode: BlendMode.srcIn,
                 ),
                 if (controller.isOffline)
                   Positioned(
@@ -1080,7 +909,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                         color: Colors.white,
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(Icons.cloud_off_rounded, color: Colors.red, size: 12),
+                      child: Icon(Icons.cloud_off, color: Colors.red, size: 10),
                     ),
                   ),
               ],
@@ -1091,53 +920,46 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  Widget _buildModernReportStolenButton(DashboardController controller) {
+  // ✅ COMPACT STOLEN BUTTON
+  Widget _buildCompactStolenButton(DashboardController controller) {
     final bool isDisabled = controller.isOffline || controller.isReportingStolen;
 
     return Positioned(
-      top: 88,
-      right: 16,
+      top: 64,
+      right: 12,
       child: GestureDetector(
         onTap: isDisabled ? null : _showReportStolenDialog,
         child: Opacity(
           opacity: controller.isOffline ? 0.5 : 1.0,
           child: Container(
-            width: 56,
-            height: 56,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+              color: const Color(0xFFEF4444),
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFEF4444).withOpacity(0.4),
-                  blurRadius: 16,
-                  spreadRadius: 2,
-                  offset: const Offset(0, 4),
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
                 ),
               ],
             ),
             child: controller.isReportingStolen
                 ? Padding(
-              padding: const EdgeInsets.all(14.0),
-              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+              padding: const EdgeInsets.all(12.0),
+              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
             )
                 : Stack(
               alignment: Alignment.center,
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(28),
-                  child: Image.asset(
-                    'assets/stolen.png',
-                    width: 32,
-                    height: 32,
-                    fit: BoxFit.cover,
-                    color: Colors.white,
-                    colorBlendMode: BlendMode.srcIn,
-                  ),
+                Image.asset(
+                  'assets/stolen.png',
+                  width: 24,
+                  height: 24,
+                  fit: BoxFit.cover,
+                  color: Colors.white,
+                  colorBlendMode: BlendMode.srcIn,
                 ),
                 if (controller.isOffline)
                   Positioned(
@@ -1149,7 +971,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                         color: Colors.white,
                         shape: BoxShape.circle,
                       ),
-                      child: Icon(Icons.cloud_off_rounded, color: Colors.red, size: 12),
+                      child: Icon(Icons.cloud_off, color: Colors.red, size: 10),
                     ),
                   ),
               ],
@@ -1160,83 +982,230 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  // ✅ COMPACT & CLEAN: Bottom controls with clear labels - NO OVERFLOW
-  Widget _buildModernBottomControls(DashboardController controller) {
+  // ✅ PURE GLASSMORPHISM BOTTOM CONTROLS (More transparent - see map clearly)
+  Widget _buildPureGlassmorphicBottomControls(DashboardController controller) {
     return Positioned(
       bottom: 0,
       left: 0,
       right: 0,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.08),
-              blurRadius: 12,
-              offset: const Offset(0, -2),
-            ),
-          ],
-        ),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
-        child: Row(
-          children: [
-            // Virtual Fence Button
-            Expanded(
-              child: _buildCompactFeatureButton(
-                icon: Icons.radio_button_checked_rounded,
-                label: _selectedLanguage == 'en' ? 'Virtual Fence' : 'Barrière Virtuelle',
-                isActive: controller.geofenceEnabled,
-                isLoading: controller.isTogglingGeofence,
-                onTap: _handleGeofenceToggle,
-                activeColor: const Color(0xFF8B5CF6),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05), // ✅ Much more transparent
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              border: Border(
+                top: BorderSide(
+                  color: Colors.white.withOpacity(0.2),
+                  width: 1,
+                ),
               ),
             ),
-            const SizedBox(width: 8),
+            padding: const EdgeInsets.fromLTRB(12, 14, 12, 14),
+            child: Row(
+              children: [
+                // Virtual Fence Button
+                Expanded(
+                  child: _buildGlassFeatureButton(
+                    icon: Icons.radio_button_checked_rounded,
+                    label: _selectedLanguage == 'en' ? 'Geofence' : 'Barrière Virtuelle',
+                    isActive: controller.geofenceEnabled,
+                    isLoading: controller.isTogglingGeofence,
+                    onTap: _handleGeofenceToggle,
+                  ),
+                ),
+                const SizedBox(width: 10),
 
-            // Safe Zone Button
-            Expanded(
-              child: _buildCompactFeatureButton(
-                icon: Icons.shield_rounded,
-                label: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone Sûre',
-                isActive: controller.safeZoneEnabled,
-                isLoading: controller.isTogglingSafeZone,
-                onTap: _handleSafeZoneToggle,
-                activeColor: const Color(0xFF10B981),
-              ),
-            ),
-            const SizedBox(width: 8),
+                // Safe Zone Button
+                Expanded(
+                  child: _buildGlassFeatureButton(
+                    icon: Icons.shield_rounded,
+                    label: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone Sûre',
+                    isActive: controller.safeZoneEnabled,
+                    isLoading: controller.isTogglingSafeZone,
+                    onTap: _handleSafeZoneToggle,
+                  ),
+                ),
+                const SizedBox(width: 10),
 
-            // Trip History Button
-            Expanded(
-              child: _buildCompactActionButton(
-                icon: Icons.timeline_rounded,
-                label: _selectedLanguage == 'en' ? 'Trip History' : 'Historique',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => TripsScreen(vehicleId: controller.selectedVehicleId),
-                    ),
-                  );
-                },
-              ),
+                // Trip History Button
+                Expanded(
+                  child: _buildGlassActionButton(
+                    icon: Icons.timeline_rounded,
+                    label: _selectedLanguage == 'en' ? 'Trip History' : 'Historique',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => TripsScreen(vehicleId: controller.selectedVehicleId),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildCompactFeatureButton({
+  // ✅ COMPACT VEHICLE SELECTOR MODAL (Scrollable for 5+ cars)
+  Widget _buildCompactVehicleSelector() {
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.5,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle bar
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+
+          // Title
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            child: Text(
+              _selectedLanguage == 'en' ? 'Select Vehicle' : 'Sélectionner véhicule',
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: Colors.black87,
+              ),
+            ),
+          ),
+
+          // Scrollable vehicle list
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              itemCount: _controller.vehicles.length,
+              itemBuilder: (context, index) {
+                final vehicle = _controller.vehicles[index];
+                final isSelected = vehicle.id == _controller.selectedVehicleId;
+
+                return GestureDetector(
+                  onTap: () {
+                    _controller.onVehicleSelected(vehicle.id);
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isSelected ? AppColors.primary.withOpacity(0.08) : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: isSelected ? AppColors.primary : Colors.grey.shade200,
+                        width: isSelected ? 2 : 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        // Car icon
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: _controller.hexToColor(vehicle.color).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            Icons.directions_car,
+                            color: _controller.hexToColor(vehicle.color),
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+
+                        // Vehicle info
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                vehicle.nickname.isNotEmpty ? vehicle.nickname : vehicle.immatriculation,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: isSelected ? AppColors.primary : Colors.black87,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${vehicle.brand} ${vehicle.model}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        // Selected checkmark
+                        if (isSelected)
+                          Container(
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              color: AppColors.primary,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(Icons.check, color: Colors.white, size: 16),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+
+  // ✅ HELPER: Simple Icon Button
+  Widget _buildSimpleIconButton({required Widget icon, required VoidCallback? onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        child: icon,
+      ),
+    );
+  }
+
+  // ✅ HELPER: Glass Feature Button (Geofence & Safe Zone) - MORE READABLE
+  Widget _buildGlassFeatureButton({
     required IconData icon,
     required String label,
     required bool isActive,
     required bool isLoading,
     required VoidCallback onTap,
-    required Color activeColor,
   }) {
-    final Color inactiveColor = const Color(0xFF94A3B8);
+    // ✅ Green for ON, Red for OFF
+    final Color activeColor = const Color(0xFF10B981); // Green
+    final Color inactiveColor = const Color(0xFFEF4444); // Red
 
     return GestureDetector(
       onTap: () {
@@ -1270,25 +1239,34 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
         duration: const Duration(milliseconds: 200),
         opacity: _controller.isOffline || isLoading ? 0.5 : 1.0,
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
           decoration: BoxDecoration(
-            color: isActive ? activeColor.withOpacity(0.08) : Colors.grey.shade50,
-            borderRadius: BorderRadius.circular(12),
+            // ✅ More opaque background for better readability
+            color: Colors.white.withOpacity(0.25),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: isActive ? activeColor.withOpacity(0.25) : Colors.grey.shade200,
+              color: Colors.white.withOpacity(0.5),
               width: 1.5,
             ),
+            // ✅ Add subtle shadow for depth
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               // Icon
               Container(
-                width: 32,
-                height: 32,
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
-                  color: isActive ? activeColor.withOpacity(0.15) : Colors.white,
-                  borderRadius: BorderRadius.circular(8),
+                  color: Colors.white.withOpacity(0.35),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 child: isLoading
                     ? Center(
@@ -1297,43 +1275,47 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                     height: 16,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: isActive ? activeColor : inactiveColor,
+                      color: Colors.black87,
                     ),
                   ),
                 )
-                    : Icon(icon, color: isActive ? activeColor : inactiveColor, size: 18),
+                    : Icon(
+                  icon,
+                  color: Colors.black87,
+                  size: 18,
+                ),
               ),
               const SizedBox(height: 6),
 
-              // Label
+              // Label - MORE READABLE
               Text(
                 label,
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: isActive ? activeColor : inactiveColor,
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.black87,
                   height: 1.2,
                 ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 6),
 
-              // Status Badge
+              // ✅ Status Dot (Green for ON, Red for OFF)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                width: 8,
+                height: 8,
                 decoration: BoxDecoration(
-                  color: isActive ? activeColor.withOpacity(0.15) : Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  isActive ? (_selectedLanguage == 'en' ? 'ON' : 'ACTIVÉ') : (_selectedLanguage == 'en' ? 'OFF' : 'INACTIF'),
-                  style: TextStyle(
-                    fontSize: 8,
-                    fontWeight: FontWeight.w700,
-                    color: isActive ? activeColor : inactiveColor,
-                  ),
+                  color: isActive ? activeColor : inactiveColor,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: (isActive ? activeColor : inactiveColor).withOpacity(0.6),
+                      blurRadius: 6,
+                      spreadRadius: 2,
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1343,7 +1325,8 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  Widget _buildCompactActionButton({
+  // ✅ HELPER: Glass Action Button (Trip History) - ORANGE/PRIMARY COLOR
+  Widget _buildGlassActionButton({
     required IconData icon,
     required String label,
     required VoidCallback onTap,
@@ -1351,17 +1334,19 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [AppColors.primary, AppColors.primary.withOpacity(0.85)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+          // ✅ PRIMARY/ORANGE COLOR - Solid and readable
+          color: AppColors.primary,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: AppColors.primary.withOpacity(0.8),
+            width: 1.5,
           ),
-          borderRadius: BorderRadius.circular(12),
+          // ✅ Add shadow for depth
           boxShadow: [
             BoxShadow(
-              color: AppColors.primary.withOpacity(0.25),
+              color: AppColors.primary.withOpacity(0.4),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),
@@ -1372,46 +1357,36 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
           children: [
             // Icon
             Container(
-              width: 32,
-              height: 32,
+              width: 34,
+              height: 34,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.25),
-                borderRadius: BorderRadius.circular(8),
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(icon, color: Colors.white, size: 18),
             ),
             const SizedBox(height: 6),
 
-            // Label
+            // Label - WHITE AND BOLD
             Text(
               label,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
                 color: Colors.white,
                 height: 1.2,
               ),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
 
-            // Action Badge
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.25),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                _selectedLanguage == 'en' ? 'VIEW' : 'VOIR',
-                style: const TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
-              ),
+            // Arrow indicator
+            Icon(
+              Icons.arrow_forward_rounded,
+              color: Colors.white,
+              size: 12,
             ),
           ],
         ),

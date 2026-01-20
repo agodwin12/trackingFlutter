@@ -1,12 +1,18 @@
+// lib/src/screens/dashboard/services/dashboard_service.dart
+
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:tracking/src/services/env_config.dart';
+import 'package:tracking/src/services/token_refresh_service.dart';
 
 class DashboardService {
   // ✅ Using EnvConfig for base URL
   static String get baseUrl => EnvConfig.baseUrl;
+
+  // ✅ Token refresh service instance
+  static final TokenRefreshService _tokenService = TokenRefreshService();
 
   /// Load user data from SharedPreferences
   static Future<Map<String, dynamic>?> loadUserData() async {
@@ -24,11 +30,19 @@ class DashboardService {
     }
   }
 
-  /// Fetch all vehicles for a user
+  /// ✅ Fetch all vehicles for a user with automatic token refresh
   static Future<List<dynamic>> fetchVehicles(int userId) async {
     try {
-      final response = await http.get(
-        Uri.parse("$baseUrl/voitures/user/$userId"),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse("$baseUrl/voitures/user/$userId"),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       debugPrint("📡 Vehicles response: ${response.statusCode}");
@@ -44,14 +58,22 @@ class DashboardService {
     }
   }
 
-  /// This returns the ACTUAL current engine state from GPS device
+  /// ✅ This returns the ACTUAL current engine state from GPS device with automatic token refresh
   /// Uses: Cache → Database → GPS API (fallback)
   static Future<Map<String, dynamic>> fetchRealtimeVehicleStatus(int vehicleId) async {
     try {
       debugPrint("🔍 Fetching real-time status for vehicle $vehicleId");
 
-      final response = await http.get(
-        Uri.parse("$baseUrl/gps/vehicle/$vehicleId/realtime-status"),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse("$baseUrl/gps/vehicle/$vehicleId/realtime-status"),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       debugPrint("📡 Realtime status response: ${response.statusCode}");
@@ -121,12 +143,20 @@ class DashboardService {
     }
   }
 
-  /// Fetch vehicle status (DEPRECATED - use fetchRealtimeVehicleStatus instead)
+  /// ✅ Fetch vehicle status (DEPRECATED - use fetchRealtimeVehicleStatus instead) with automatic token refresh
   /// This is kept for backward compatibility but should be replaced
   static Future<Map<String, dynamic>> fetchVehicleStatus(int vehicleId) async {
     try {
-      final response = await http.get(
-        Uri.parse("$baseUrl/gps/vehicle/$vehicleId/status"),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse("$baseUrl/gps/vehicle/$vehicleId/status"),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       debugPrint("📡 Status response: ${response.statusCode}");
@@ -188,11 +218,19 @@ class DashboardService {
     }
   }
 
-  /// Fetch current location of vehicle
+  /// ✅ Fetch current location of vehicle with automatic token refresh
   static Future<Map<String, dynamic>> fetchCurrentLocation(int vehicleId) async {
     try {
-      final response = await http.get(
-        Uri.parse("$baseUrl/tracking/location/vehicle/$vehicleId/latest"),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse("$baseUrl/tracking/location/vehicle/$vehicleId/latest"),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       debugPrint("📡 Location response: ${response.statusCode}");
@@ -259,13 +297,21 @@ class DashboardService {
     }
   }
 
-  /// Fetch geofencing status
+  /// ✅ Fetch geofencing status with automatic token refresh
   static Future<bool?> fetchGeofencingStatus(int vehicleId) async {
     try {
       debugPrint("📡 Fetching geofencing status for vehicle $vehicleId...");
 
-      final response = await http.get(
-        Uri.parse("$baseUrl/vehicle/$vehicleId/security/status"),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse("$baseUrl/vehicle/$vehicleId/security/status"),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       debugPrint("📡 Geofencing status response: ${response.statusCode}");
@@ -303,19 +349,27 @@ class DashboardService {
     }
   }
 
-  /// Fetch weekly statistics
+  /// ✅ Fetch weekly statistics with automatic token refresh
   static Future<Map<String, dynamic>> fetchWeeklyStatistics(int vehicleId) async {
     try {
       // Calculate date range for last 7 days
       final endDate = DateTime.now();
       final startDate = endDate.subtract(const Duration(days: 7));
 
-      final response = await http.get(
-        Uri.parse(
-            "$baseUrl/trips/vehicle/$vehicleId/stats"
-                "?startDate=${startDate.toIso8601String().split('T')[0]}"
-                "&endDate=${endDate.toIso8601String().split('T')[0]}"
-        ),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse(
+                "$baseUrl/trips/vehicle/$vehicleId/stats"
+                    "?startDate=${startDate.toIso8601String().split('T')[0]}"
+                    "&endDate=${endDate.toIso8601String().split('T')[0]}"
+            ),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       debugPrint("📡 Weekly stats response: ${response.statusCode}");
@@ -357,11 +411,19 @@ class DashboardService {
     }
   }
 
-  /// Fetch recent trips
+  /// ✅ Fetch recent trips with automatic token refresh
   static Future<List<Map<String, dynamic>>> fetchRecentTrips(int vehicleId) async {
     try {
-      final response = await http.get(
-        Uri.parse("$baseUrl/trips/vehicle/$vehicleId?page=1&limit=5"),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse("$baseUrl/trips/vehicle/$vehicleId?page=1&limit=5"),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       debugPrint("📡 Recent trips response: ${response.statusCode}");
@@ -393,11 +455,19 @@ class DashboardService {
     }
   }
 
-  /// Fetch unread notifications count
+  /// ✅ Fetch unread notifications count with automatic token refresh
   static Future<Map<String, dynamic>> fetchUnreadNotifications(int vehicleId) async {
     try {
-      final response = await http.get(
-        Uri.parse("$baseUrl/notifications/vehicle/$vehicleId/unread-count"),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse("$baseUrl/notifications/vehicle/$vehicleId/unread-count"),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       debugPrint("📡 Unread notifications response: ${response.statusCode}");

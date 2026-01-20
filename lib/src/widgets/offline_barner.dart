@@ -130,8 +130,8 @@ class _OfflineBannerState extends State<OfflineBanner> with SingleTickerProvider
                   const SizedBox(height: 2),
                   Text(
                     _selectedLanguage == 'en'
-                        ? 'Showing cached data'
-                        : 'Affichage des données en cache',
+                        ? 'Offline data'
+                        : 'Affichage des données hors ligne',
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.9),
                       fontSize: 12,

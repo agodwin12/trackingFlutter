@@ -4,15 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sticky_headers/sticky_headers.dart';
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
 import '../../services/socket_service.dart';
+import '../../services/token_refresh_service.dart';
 import 'widgets/notifications_skeleton.dart';
 
 enum NotificationType {
   safeZone,
   geofence,
-  alert,
 }
 
 class AppNotification {
@@ -37,14 +38,12 @@ class AppNotification {
   });
 
   factory AppNotification.fromJson(Map<String, dynamic> json) {
-    final String alertType = (json['alert_type'] ?? 'alert').toLowerCase();
+    final String alertType = (json['alert_type'] ?? '').toLowerCase();
     final String message = json['message'] ?? '';
 
-    // ✅ FIXED: Proper type determination
     NotificationType type;
     String title = 'Alert';
 
-    // Check for safe zone first (most specific)
     if (alertType.contains('safe') || message.toLowerCase().contains('safe zone')) {
       type = NotificationType.safeZone;
       if (message.contains('left') || message.contains('outside')) {
@@ -54,10 +53,7 @@ class AppNotification {
       } else {
         title = 'Safe Zone Alert';
       }
-    }
-    // Then check for geofence
-    else if (alertType.contains('geofence') || alertType.contains('fence') ||
-        message.toLowerCase().contains('geofence')) {
+    } else {
       type = NotificationType.geofence;
       if (message.contains('entered')) {
         title = 'Geofence Entry';
@@ -67,20 +63,13 @@ class AppNotification {
         title = 'Geofence Alert';
       }
     }
-    // Default to alert
-    else {
-      type = NotificationType.alert;
-      title = 'Alert';
-    }
 
-    // Extract vehicle name
     String vehicleNickname = 'Vehicle';
     final vehicleMatch = RegExp(r'Vehicle\s+([A-Za-z0-9\s]+)\s+(left|returned|entered|exited|moved)').firstMatch(message);
     if (vehicleMatch != null) {
       vehicleNickname = vehicleMatch.group(1)?.trim() ?? vehicleNickname;
     }
 
-    // Extract zone
     String zone = 'Unknown Zone';
     final zoneMatch = RegExp(r'zone\s+"([^"]+)"').firstMatch(message);
     if (zoneMatch != null) {
@@ -122,7 +111,6 @@ class _NotificationScreenState extends State<NotificationScreen>
   List<AppNotification> _allNotifications = [];
   Set<int> _readNotifications = {};
 
-  // Pagination
   int _currentPage = 1;
   final int _pageSize = 20;
   bool _hasMoreData = true;
@@ -131,6 +119,7 @@ class _NotificationScreenState extends State<NotificationScreen>
   AppNotification? _latestAlert;
 
   final SocketService _socketService = SocketService();
+  final TokenRefreshService _tokenService = TokenRefreshService();
   StreamSubscription<Map<String, dynamic>>? _alertSubscription;
 
   String get baseUrl => EnvConfig.baseUrl;
@@ -139,7 +128,7 @@ class _NotificationScreenState extends State<NotificationScreen>
   void initState() {
     super.initState();
     _loadLanguagePreference();
-    _tabController = TabController(length: 3, vsync: this); // ✅ Changed from 5 to 3
+    _tabController = TabController(length: 3, vsync: this);
     _fetchNotifications();
     _connectSocketForAlerts();
   }
@@ -149,7 +138,6 @@ class _NotificationScreenState extends State<NotificationScreen>
     setState(() {
       _selectedLanguage = prefs.getString('language') ?? 'en';
     });
-    debugPrint('✅ Notification screen loaded language preference: $_selectedLanguage');
   }
 
   @override
@@ -164,7 +152,6 @@ class _NotificationScreenState extends State<NotificationScreen>
     _socketService.joinVehicleTracking(widget.vehicleId);
 
     _alertSubscription = _socketService.safeZoneAlertStream.listen((alertData) {
-      debugPrint('🚨 Real-time alert received: $alertData');
       if (mounted) {
         _showRealtimePushNotification(alertData);
         _handleRefresh();
@@ -216,12 +203,17 @@ class _NotificationScreenState extends State<NotificationScreen>
     }
 
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}?page=$_currentPage&limit=$_pageSize'),
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.get(
+            Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}?page=$_currentPage&limit=$_pageSize'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
-
-      debugPrint('📡 Fetch notifications response: ${response.statusCode}');
-      debugPrint('📡 Page: $_currentPage, Limit: $_pageSize');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -242,13 +234,11 @@ class _NotificationScreenState extends State<NotificationScreen>
                 _allNotifications = newNotifications;
               }
 
-              // Update read status
               _readNotifications = _allNotifications
                   .where((n) => n.isRead)
                   .map((n) => n.id)
                   .toSet();
 
-              // Update pagination info
               _totalNotifications = pagination['totalAlerts'] ?? 0;
               _hasMoreData = pagination['hasNextPage'] ?? false;
 
@@ -257,12 +247,7 @@ class _NotificationScreenState extends State<NotificationScreen>
               _isLoadingMore = false;
             });
           }
-
-          debugPrint('✅ Loaded ${_allNotifications.length} of $_totalNotifications notifications');
-          debugPrint('✅ Has more data: $_hasMoreData');
         }
-      } else {
-        debugPrint('⚠️ Failed to load notifications: ${response.statusCode}');
       }
     } catch (error) {
       debugPrint('🔥 Error fetching notifications: $error');
@@ -353,16 +338,23 @@ class _NotificationScreenState extends State<NotificationScreen>
               Navigator.pop(context);
 
               try {
-                final response = await http.post(
-                  Uri.parse('$baseUrl/gps/issue-command'),
-                  headers: {'Content-Type': 'application/json'},
-                  body: jsonEncode({
-                    'vehicleId': widget.vehicleId,
-                    'command': 'CLOSERELAY',
-                    'params': '',
-                    'password': '',
-                    'sendTime': '',
-                  }),
+                final response = await _tokenService.makeAuthenticatedRequest(
+                  request: (token) async {
+                    return await http.post(
+                      Uri.parse('$baseUrl/gps/issue-command'),
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer $token',
+                      },
+                      body: jsonEncode({
+                        'vehicleId': widget.vehicleId,
+                        'command': 'CLOSERELAY',
+                        'params': '',
+                        'password': '',
+                        'sendTime': '',
+                      }),
+                    );
+                  },
                 );
 
                 if (response.statusCode == 200) {
@@ -414,7 +406,6 @@ class _NotificationScreenState extends State<NotificationScreen>
         .toList();
   }
 
-  // ✅ FIXED: Proper filtering
   List<AppNotification> get _safeZoneNotifications {
     return _allNotifications
         .where((n) => n.type == NotificationType.safeZone)
@@ -429,9 +420,16 @@ class _NotificationScreenState extends State<NotificationScreen>
 
   Future<void> _markAsRead(int notificationId) async {
     try {
-      final response = await http.patch(
-        Uri.parse('$baseUrl/alerts/$notificationId/read'),
-        headers: {'Content-Type': 'application/json'},
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.patch(
+            Uri.parse('$baseUrl/alerts/$notificationId/read'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       if (response.statusCode == 200) {
@@ -447,9 +445,16 @@ class _NotificationScreenState extends State<NotificationScreen>
 
   Future<void> _markAllAsRead() async {
     try {
-      final response = await http.patch(
-        Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}/read-all'),
-        headers: {'Content-Type': 'application/json'},
+      final response = await _tokenService.makeAuthenticatedRequest(
+        request: (token) async {
+          return await http.patch(
+            Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}/read-all'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          );
+        },
       );
 
       if (response.statusCode == 200) {
@@ -474,19 +479,50 @@ class _NotificationScreenState extends State<NotificationScreen>
     }
   }
 
-  String _formatTime(DateTime time) {
-    final now = DateTime.now();
-    final difference = now.difference(time);
+  Map<String, List<AppNotification>> _groupNotificationsByDate(List<AppNotification> notifications) {
+    final Map<String, List<AppNotification>> grouped = {
+      'Today': [],
+      'Yesterday': [],
+      'This Week': [],
+      'This Month': [],
+      'Older': [],
+    };
 
-    if (difference.inMinutes < 1) {
-      return _selectedLanguage == 'en' ? 'Now' : 'Maintenant';
-    } else if (difference.inMinutes < 60) {
-      return '${difference.inMinutes}m';
-    } else if (difference.inHours < 24) {
-      return '${difference.inHours}h';
-    } else {
-      return '${difference.inDays}${_selectedLanguage == 'en' ? 'd' : 'j'}';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(Duration(days: 1));
+    final thisWeekStart = today.subtract(Duration(days: now.weekday - 1));
+    final thisMonthStart = DateTime(now.year, now.month, 1);
+
+    for (var notification in notifications) {
+      final notificationDate = DateTime(
+        notification.time.year,
+        notification.time.month,
+        notification.time.day,
+      );
+
+      if (notificationDate.isAtSameMomentAs(today)) {
+        grouped['Today']!.add(notification);
+      } else if (notificationDate.isAtSameMomentAs(yesterday)) {
+        grouped['Yesterday']!.add(notification);
+      } else if (notificationDate.isAfter(thisWeekStart) || notificationDate.isAtSameMomentAs(thisWeekStart)) {
+        grouped['This Week']!.add(notification);
+      } else if (notificationDate.isAfter(thisMonthStart) || notificationDate.isAtSameMomentAs(thisMonthStart)) {
+        grouped['This Month']!.add(notification);
+      } else {
+        grouped['Older']!.add(notification);
+      }
     }
+
+    grouped.removeWhere((key, value) => value.isEmpty);
+    return grouped;
+  }
+
+  String _formatDetailedTime(DateTime time) {
+    final hour = time.hour > 12 ? time.hour - 12 : (time.hour == 0 ? 12 : time.hour);
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $period';
   }
 
   IconData _getNotificationIcon(NotificationType type) {
@@ -495,8 +531,6 @@ class _NotificationScreenState extends State<NotificationScreen>
         return Icons.shield_rounded;
       case NotificationType.geofence:
         return Icons.location_on_rounded;
-      case NotificationType.alert:
-        return Icons.warning_rounded;
     }
   }
 
@@ -506,8 +540,6 @@ class _NotificationScreenState extends State<NotificationScreen>
         return Color(0xFF3B82F6);
       case NotificationType.geofence:
         return Color(0xFF8B5CF6);
-      case NotificationType.alert:
-        return Color(0xFFEF4444);
     }
   }
 
@@ -577,17 +609,16 @@ class _NotificationScreenState extends State<NotificationScreen>
                   ),
                 ),
 
-                // ✅ FIXED: Only 3 tabs now
+                // ✅ 3 Tabs - FIXED OVERFLOW
                 Container(
                   color: AppColors.white,
                   child: TabBar(
                     controller: _tabController,
-                    isScrollable: true,
                     labelColor: AppColors.primary,
                     unselectedLabelColor: AppColors.textSecondary,
                     labelStyle: AppTypography.body1.copyWith(
                       fontWeight: FontWeight.w600,
-                      fontSize: 13,
+                      fontSize: 12,
                     ),
                     indicatorColor: AppColors.primary,
                     indicatorWeight: 2,
@@ -598,10 +629,9 @@ class _NotificationScreenState extends State<NotificationScreen>
                           children: [
                             Text(_selectedLanguage == 'en' ? 'All' : 'Tout'),
                             if (_unreadNotifications.isNotEmpty) ...[
-                              SizedBox(width: 6),
+                              SizedBox(width: 4),
                               Container(
-                                padding: EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
+                                padding: EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                                 decoration: BoxDecoration(
                                   color: AppColors.error,
                                   borderRadius: BorderRadius.circular(10),
@@ -610,7 +640,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                                   '${_unreadNotifications.length}',
                                   style: TextStyle(
                                     color: AppColors.white,
-                                    fontSize: 10,
+                                    fontSize: 9,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -619,20 +649,48 @@ class _NotificationScreenState extends State<NotificationScreen>
                           ],
                         ),
                       ),
-                      Tab(text: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone sûre'),
-                      Tab(text: _selectedLanguage == 'en' ? 'Geofence' : 'Géofence'),
+                      Tab(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.shield_rounded, size: 14),
+                            SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                _selectedLanguage == 'en' ? 'Safe' : 'Sûr',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Tab(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.location_on_rounded, size: 14),
+                            SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                _selectedLanguage == 'en' ? 'Geo' : 'Géo',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
 
-                // ✅ FIXED: Only 3 tab views
+                // ✅ 3 Tab Views with Sticky Headers
                 Expanded(
                   child: TabBarView(
                     controller: _tabController,
                     children: [
-                      _buildNotificationsList(_allNotifications),
-                      _buildNotificationsList(_safeZoneNotifications),
-                      _buildNotificationsList(_geofenceNotifications),
+                      _buildStickyNotificationsList(_allNotifications),
+                      _buildStickyNotificationsList(_safeZoneNotifications),
+                      _buildStickyNotificationsList(_geofenceNotifications),
                     ],
                   ),
                 ),
@@ -780,7 +838,8 @@ class _NotificationScreenState extends State<NotificationScreen>
     );
   }
 
-  Widget _buildNotificationsList(List<AppNotification> notifications) {
+  // ✅ WhatsApp-Style Sticky Headers
+  Widget _buildStickyNotificationsList(List<AppNotification> notifications) {
     if (notifications.isEmpty) {
       return RefreshIndicator(
         onRefresh: _handleRefresh,
@@ -808,15 +867,17 @@ class _NotificationScreenState extends State<NotificationScreen>
       );
     }
 
+    final groupedNotifications = _groupNotificationsByDate(notifications);
+
     return RefreshIndicator(
       onRefresh: _handleRefresh,
       color: AppColors.primary,
       child: ListView.builder(
-        padding: EdgeInsets.all(AppSizes.spacingM),
-        itemCount: notifications.length + (_hasMoreData ? 1 : 0),
+        padding: EdgeInsets.zero,
+        itemCount: groupedNotifications.length + (_hasMoreData ? 1 : 0),
         itemBuilder: (context, index) {
           // Load more indicator
-          if (index == notifications.length) {
+          if (index == groupedNotifications.length) {
             if (_isLoadingMore) {
               return Center(
                 child: Padding(
@@ -829,7 +890,6 @@ class _NotificationScreenState extends State<NotificationScreen>
               );
             }
 
-            // Load more button
             return Center(
               child: Padding(
                 padding: EdgeInsets.all(AppSizes.spacingL),
@@ -857,17 +917,70 @@ class _NotificationScreenState extends State<NotificationScreen>
             );
           }
 
-          final notification = notifications[index];
-          final isRead = _readNotifications.contains(notification.id);
-          final isExpanded = _expandedNotificationId == notification.id.toString();
+          final groupKey = groupedNotifications.keys.elementAt(index);
+          final groupNotifications = groupedNotifications[groupKey]!;
 
-          return Padding(
-            padding: EdgeInsets.only(bottom: AppSizes.spacingM),
-            child: _buildNotificationCard(notification, isRead, isExpanded),
+          // ✅ Sticky Header like WhatsApp
+          return StickyHeader(
+            header: Container(
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(
+                horizontal: AppSizes.spacingL,
+                vertical: AppSizes.spacingS,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.background,
+                border: Border(
+                  bottom: BorderSide(
+                    color: AppColors.border,
+                    width: 0.5,
+                  ),
+                ),
+              ),
+              child: Text(
+                _selectedLanguage == 'en' ? groupKey : _translateGroupKey(groupKey),
+                style: AppTypography.body1.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            content: Column(
+              children: groupNotifications.map((notification) {
+                final isRead = _readNotifications.contains(notification.id);
+                final isExpanded = _expandedNotificationId == notification.id.toString();
+
+                return Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: AppSizes.spacingM,
+                    vertical: AppSizes.spacingS,
+                  ),
+                  child: _buildNotificationCard(notification, isRead, isExpanded),
+                );
+              }).toList(),
+            ),
           );
         },
       ),
     );
+  }
+
+  String _translateGroupKey(String key) {
+    switch (key) {
+      case 'Today':
+        return 'Aujourd\'hui';
+      case 'Yesterday':
+        return 'Hier';
+      case 'This Week':
+        return 'Cette semaine';
+      case 'This Month':
+        return 'Ce mois';
+      case 'Older':
+        return 'Plus ancien';
+      default:
+        return key;
+    }
   }
 
   Widget _buildNotificationCard(
@@ -908,6 +1021,7 @@ class _NotificationScreenState extends State<NotificationScreen>
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Icon
                   Container(
                     width: 40,
                     height: 40,
@@ -918,31 +1032,20 @@ class _NotificationScreenState extends State<NotificationScreen>
                     child: Icon(icon, color: color, size: 22),
                   ),
                   SizedBox(width: AppSizes.spacingM),
+
+                  // Content
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                notification.title,
-                                style: AppTypography.body1.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              _formatTime(notification.time),
-                              style: AppTypography.caption.copyWith(
-                                color: AppColors.textSecondary,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
+                        Text(
+                          notification.title,
+                          style: AppTypography.body1.copyWith(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
                         ),
-                        SizedBox(height: AppSizes.spacingXS),
+                        SizedBox(height: 4),
                         Text(
                           notification.message,
                           style: AppTypography.body2.copyWith(
@@ -952,9 +1055,21 @@ class _NotificationScreenState extends State<NotificationScreen>
                           maxLines: isExpanded ? null : 2,
                           overflow: isExpanded ? null : TextOverflow.ellipsis,
                         ),
+                        SizedBox(height: 6),
+                        Text(
+                          _formatDetailedTime(notification.time),
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.textSecondary.withOpacity(0.7),
+                            fontSize: 11,
+                          ),
+                        ),
                       ],
                     ),
                   ),
+
+                  SizedBox(width: AppSizes.spacingS),
+
+                  // Expand button
                   InkWell(
                     onTap: () {
                       setState(() {
@@ -962,7 +1077,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                       });
                     },
                     child: Container(
-                      padding: EdgeInsets.all(4),
+                      padding: EdgeInsets.all(6),
                       decoration: BoxDecoration(
                         color: AppColors.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(8),
@@ -972,10 +1087,12 @@ class _NotificationScreenState extends State<NotificationScreen>
                             ? Icons.keyboard_arrow_up_rounded
                             : Icons.keyboard_arrow_down_rounded,
                         color: AppColors.primary,
-                        size: 24,
+                        size: 20,
                       ),
                     ),
                   ),
+
+                  // Unread indicator
                   if (!isRead)
                     Container(
                       width: 8,
@@ -990,6 +1107,8 @@ class _NotificationScreenState extends State<NotificationScreen>
               ),
             ),
           ),
+
+          // Expanded actions
           if (isExpanded)
             Container(
               decoration: BoxDecoration(

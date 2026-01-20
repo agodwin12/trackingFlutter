@@ -99,6 +99,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
 
 
 
+
   void _login() async {
     if (_phoneController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {
       _showErrorSnackbar("Phone and Password are required");
@@ -134,6 +135,12 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
         // ✅ Save all user data
         await prefs.setString("accessToken", responseData["accessToken"]);
         await prefs.setString("user", jsonEncode(responseData["user"]));
+
+        // ✅ NEW: Save refresh token from response
+        if (responseData["refreshToken"] != null) {
+          await prefs.setString("refreshToken", responseData["refreshToken"]);
+          debugPrint('✅ Saved refresh token');
+        }
 
         // 🆕 CRITICAL: Save user_id separately for PIN service
         await prefs.setInt("user_id", responseData["user"]["id"]);

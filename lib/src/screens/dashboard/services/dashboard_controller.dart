@@ -395,7 +395,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ UPDATED: Fetch engine status with offline check
+// ✅ UPDATED: Fetch ACTUAL engine status from GPS device
   Future<void> fetchRealtimeEngineStatus() async {
     try {
       if (isOffline) {
@@ -403,23 +403,29 @@ class DashboardController extends ChangeNotifier {
         return;
       }
 
-      debugPrint('🔍 Fetching REALTIME engine status from GPS device...');
+      debugPrint('🔍 Fetching ACTUAL engine status from GPS device...');
 
-      final url = '${EnvConfig.baseUrl}/gps/vehicle/$_selectedVehicleId/realtime-status';
+      // ✅ Use the /location endpoint to get real GPS status
+      final url = '${EnvConfig.baseUrl}/gps/location/$_selectedVehicleId';
       final response = await http.get(Uri.parse(url));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
         if (data['success'] == true) {
-          final bool newEngineState = data['engineOn'] ?? false;
+          // ✅ Get engine_status from API (ON or OFF)
+          final String engineStatus = data['engine_status'] ?? 'OFF';
+          final bool newEngineState = (engineStatus == 'ON');
 
-          debugPrint('✅ Engine status: ${newEngineState ? "ON" : "OFF"}');
+          debugPrint('✅ Actual GPS Engine Status: $engineStatus');
+          debugPrint('✅ Engine boolean: $newEngineState');
 
+          // ✅ Update the engine state
           _engineOn = newEngineState;
 
-          if (data['rawStatus'] != null && data['rawStatus'].isNotEmpty) {
-            _parseVehicleStatus(data['rawStatus']);
+          // ✅ Parse battery if available
+          if (data['raw_status'] != null && data['raw_status'].isNotEmpty) {
+            _parseVehicleStatus(data['raw_status']);
           }
 
           // ✅ Update cache
@@ -431,6 +437,8 @@ class DashboardController extends ChangeNotifier {
 
           notifyListeners();
         }
+      } else {
+        debugPrint('⚠️ Failed to fetch engine status: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('🔥 Error fetching realtime engine status: $e');

@@ -21,12 +21,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool isLoading = true;
   String _selectedLanguage = 'en';
 
-  // Edit Profile Controllers
-  final TextEditingController _prenomController = TextEditingController();
-  final TextEditingController _nomController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-
   String get baseUrl => EnvConfig.baseUrl;
 
   @override
@@ -47,17 +41,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       _selectedLanguage = prefs.getString('language') ?? 'en';
     });
-    debugPrint(
-        '✅ Profile screen loaded language preference: $_selectedLanguage');
-  }
-
-  @override
-  void dispose() {
-    _prenomController.dispose();
-    _nomController.dispose();
-    _phoneController.dispose();
-    _emailController.dispose();
-    super.dispose();
+    debugPrint('✅ Profile screen loaded language preference: $_selectedLanguage');
   }
 
   Future<void> fetchUserData() async {
@@ -73,12 +57,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             userData = data["user"];
             isLoading = false;
           });
-
-          // Initialize edit controllers
-          _prenomController.text = userData['prenom'] ?? '';
-          _nomController.text = userData['nom'] ?? '';
-          _phoneController.text = userData['phone'] ?? '';
-          _emailController.text = userData['email'] ?? '';
         }
       }
     } catch (e) {
@@ -87,244 +65,79 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _updateProfile() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('accessToken');
-
-      final response = await http.put(
-        Uri.parse('$baseUrl/users/${userData["id"]}'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (token != null) 'Authorization': 'Bearer $token',
-        },
-        body: jsonEncode({
-          'prenom': _prenomController.text,
-          'nom': _nomController.text,
-          'phone': _phoneController.text,
-          'email': _emailController.text,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success'] == true) {
-          setState(() {
-            userData = data['user'];
-          });
-
-          Navigator.pop(context);
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  Icon(Icons.check_circle, color: AppColors.white, size: 20),
-                  SizedBox(width: AppSizes.spacingM),
-                  Text(_selectedLanguage == 'en'
-                      ? 'Profile updated successfully!'
-                      : 'Profil mis à jour avec succès !'),
-                ],
-              ),
-              backgroundColor: AppColors.success,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppSizes.radiusM),
-              ),
-              margin: EdgeInsets.all(AppSizes.spacingM),
-            ),
-          );
-        }
-      } else {
-        throw Exception('Failed to update profile');
-      }
-    } catch (error) {
-      debugPrint('🔥 Error updating profile: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_selectedLanguage == 'en'
-              ? 'Failed to update profile'
-              : 'Échec de la mise à jour du profil'),
-          backgroundColor: AppColors.error,
-        ),
-      );
-    }
-  }
-
   Future<void> _logout() async {
     showDialog(
       context: context,
-      builder: (context) =>
-          AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AppSizes.radiusL),
-            ),
-            contentPadding: EdgeInsets.all(AppSizes.spacingL),
-            title: Row(
-              children: [
-                Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.error.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                      Icons.logout_rounded, color: AppColors.error, size: 20),
-                ),
-                SizedBox(width: AppSizes.spacingM),
-                Expanded(
-                  child: Text(
-                    _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
-                    style: AppTypography.subtitle1.copyWith(fontSize: 16),
-                  ),
-                ),
-              ],
-            ),
-            content: Text(
-              _selectedLanguage == 'en'
-                  ? 'Are you sure you want to logout?'
-                  : 'Êtes-vous sûr de vouloir vous déconnecter ?',
-              style: AppTypography.body2.copyWith(fontSize: 13),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(
-                  _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
-                  style: AppTypography.body2.copyWith(
-                    color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        ),
+        contentPadding: EdgeInsets.all(AppSizes.spacingL),
+        title: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.error.withOpacity(0.1),
+                shape: BoxShape.circle,
               ),
-              ElevatedButton(
-                onPressed: () async {
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.clear();
-
-                  if (!mounted) return;
-                  Navigator.of(context).pushNamedAndRemoveUntil(
-                      '/login', (_) => false);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.error,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                  ),
-                  elevation: 0,
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                ),
-                child: Text(
-                  _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
-                  style: AppTypography.body2.copyWith(
-                    color: AppColors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+              child: Icon(Icons.logout_rounded, color: AppColors.error, size: 20),
+            ),
+            SizedBox(width: AppSizes.spacingM),
+            Expanded(
+              child: Text(
+                _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
+                style: AppTypography.subtitle1.copyWith(fontSize: 16),
               ),
-            ],
+            ),
+          ],
+        ),
+        content: Text(
+          _selectedLanguage == 'en'
+              ? 'Are you sure you want to logout?'
+              : 'Êtes-vous sûr de vouloir vous déconnecter ?',
+          style: AppTypography.body2.copyWith(fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
+              style: AppTypography.body2.copyWith(
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
+          ElevatedButton(
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.clear();
+
+              if (!mounted) return;
+              Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppSizes.radiusM),
+              ),
+              elevation: 0,
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            ),
+            child: Text(
+              _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
+              style: AppTypography.body2.copyWith(
+                color: AppColors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  void _showEditProfileDialog() {
-    showDialog(
-      context: context,
-      builder: (context) =>
-          AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AppSizes.radiusL),
-            ),
-            contentPadding: EdgeInsets.all(AppSizes.spacingL),
-            title: Row(
-              children: [
-                Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                      Icons.edit_rounded, color: AppColors.primary, size: 20),
-                ),
-                SizedBox(width: AppSizes.spacingM),
-                Expanded(
-                  child: Text(
-                    _selectedLanguage == 'en'
-                        ? 'Edit Profile'
-                        : 'Modifier le profil',
-                    style: AppTypography.subtitle1.copyWith(fontSize: 16),
-                  ),
-                ),
-              ],
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _buildTextField(
-                    controller: _prenomController,
-                    label: _selectedLanguage == 'en' ? 'First Name' : 'Prénom',
-                    icon: Icons.person_outline,
-                  ),
-                  SizedBox(height: AppSizes.spacingM),
-                  _buildTextField(
-                    controller: _nomController,
-                    label: _selectedLanguage == 'en' ? 'Last Name' : 'Nom',
-                    icon: Icons.person_outline,
-                  ),
-                  SizedBox(height: AppSizes.spacingM),
-                  _buildTextField(
-                    controller: _phoneController,
-                    label: _selectedLanguage == 'en' ? 'Phone' : 'Téléphone',
-                    icon: Icons.phone_outlined,
-                    keyboardType: TextInputType.phone,
-                  ),
-                  SizedBox(height: AppSizes.spacingM),
-                  _buildTextField(
-                    controller: _emailController,
-                    label: 'Email',
-                    icon: Icons.email_outlined,
-                    keyboardType: TextInputType.emailAddress,
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(
-                  _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
-                  style: AppTypography.body2.copyWith(
-                    color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              ElevatedButton(
-                onPressed: _updateProfile,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                  ),
-                  elevation: 0,
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                ),
-                child: Text(
-                  _selectedLanguage == 'en' ? 'Save' : 'Enregistrer',
-                  style: AppTypography.body2.copyWith(
-                    color: AppColors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-    );
-  }
-
-  // 🆕 Navigate to Change Password Screen
   void _navigateToChangePassword() {
     Navigator.pushNamed(
       context,
@@ -333,45 +146,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'phone': userData['phone'] ?? '',
         'userId': userData['id'],
       },
-    );
-  }
-
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-    bool obscureText = false,
-    TextInputType keyboardType = TextInputType.text,
-  }) {
-    return TextField(
-      controller: controller,
-      obscureText: obscureText,
-      keyboardType: keyboardType,
-      style: AppTypography.body1.copyWith(fontSize: 13),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: AppTypography.body2.copyWith(
-          fontSize: 12,
-          color: AppColors.textSecondary,
-        ),
-        prefixIcon: Icon(icon, size: 18, color: AppColors.primary),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppSizes.radiusM),
-          borderSide: BorderSide(color: AppColors.border),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppSizes.radiusM),
-          borderSide: BorderSide(color: AppColors.border),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppSizes.radiusM),
-          borderSide: BorderSide(color: AppColors.primary, width: 2),
-        ),
-        contentPadding: EdgeInsets.symmetric(
-          horizontal: AppSizes.spacingM,
-          vertical: AppSizes.spacingS,
-        ),
-      ),
     );
   }
 
@@ -391,7 +165,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Compact Header
+            // Compact Header (No Edit Button)
             Container(
               color: AppColors.white,
               padding: EdgeInsets.symmetric(
@@ -412,13 +186,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       _selectedLanguage == 'en' ? 'Profile' : 'Profil',
                       style: AppTypography.h3.copyWith(fontSize: 18),
                     ),
-                  ),
-                  IconButton(
-                    onPressed: _showEditProfileDialog,
-                    icon: Icon(Icons.edit_rounded, size: 20),
-                    color: AppColors.primary,
-                    padding: EdgeInsets.zero,
-                    constraints: BoxConstraints(),
                   ),
                 ],
               ),
@@ -472,8 +239,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                             child: Center(
                               child: Text(
-                                "${(userData['prenom'] ??
-                                    'U')[0]}${(userData['nom'] ?? 'S')[0]}",
+                                "${(userData['prenom'] ?? 'U')[0]}${(userData['nom'] ?? 'S')[0]}",
                                 style: TextStyle(
                                   fontSize: 32,
                                   fontWeight: FontWeight.bold,
@@ -485,8 +251,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           SizedBox(height: AppSizes.spacingM),
                           // Name
                           Text(
-                            "${userData['prenom'] ?? ''} ${userData['nom'] ??
-                                ''}",
+                            "${userData['prenom'] ?? ''} ${userData['nom'] ?? ''}",
                             style: AppTypography.h3.copyWith(fontSize: 20),
                             textAlign: TextAlign.center,
                           ),
@@ -537,28 +302,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             _selectedLanguage == 'en'
                                 ? 'Contact Information'
                                 : 'Informations de contact',
-                            style: AppTypography.subtitle1.copyWith(
-                                fontSize: 15),
+                            style: AppTypography.subtitle1.copyWith(fontSize: 15),
                           ),
                           SizedBox(height: AppSizes.spacingM),
                           _buildInfoRow(
                             icon: Icons.phone_outlined,
-                            label: _selectedLanguage == 'en'
-                                ? 'Phone'
-                                : 'Téléphone',
+                            label: _selectedLanguage == 'en' ? 'Phone' : 'Téléphone',
                             value: userData['phone'] ??
-                                (_selectedLanguage == 'en'
-                                    ? 'Not provided'
-                                    : 'Non fourni'),
+                                (_selectedLanguage == 'en' ? 'Not provided' : 'Non fourni'),
                           ),
                           SizedBox(height: AppSizes.spacingM),
                           _buildInfoRow(
                             icon: Icons.email_outlined,
                             label: 'Email',
                             value: userData['email'] ??
-                                (_selectedLanguage == 'en'
-                                    ? 'Not provided'
-                                    : 'Non fourni'),
+                                (_selectedLanguage == 'en' ? 'Not provided' : 'Non fourni'),
                           ),
                         ],
                       ),
@@ -566,20 +324,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                     SizedBox(height: AppSizes.spacingL),
 
-                    // Action Buttons
+                    // Action Buttons (Only Change Password & Logout)
                     Column(
                       children: [
-                        // Edit Profile Button
-                        _buildActionButton(
-                          icon: Icons.edit_rounded,
-                          label: _selectedLanguage == 'en'
-                              ? 'Edit Profile'
-                              : 'Modifier le profil',
-                          color: AppColors.primary,
-                          onTap: _showEditProfileDialog,
-                        ),
-                        SizedBox(height: AppSizes.spacingM),
-                        // Change Password Button - 🆕 NOW NAVIGATES TO NEW SCREEN
+                        // Change Password Button
                         _buildActionButton(
                           icon: Icons.lock_outline,
                           label: _selectedLanguage == 'en'
@@ -592,9 +340,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         // Logout Button
                         _buildActionButton(
                           icon: Icons.logout_rounded,
-                          label: _selectedLanguage == 'en'
-                              ? 'Logout'
-                              : 'Déconnexion',
+                          label: _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
                           color: AppColors.error,
                           onTap: _logout,
                         ),
