@@ -127,6 +127,9 @@ class _NotificationScreenState extends State<NotificationScreen>
   @override
   void initState() {
     super.initState();
+    debugPrint('🔔 ========== NOTIFICATIONS SCREEN INITIALIZED ==========');
+    debugPrint('🚗 Vehicle ID: ${widget.vehicleId}');
+
     _loadLanguagePreference();
     _tabController = TabController(length: 3, vsync: this);
     _fetchNotifications();
@@ -138,25 +141,35 @@ class _NotificationScreenState extends State<NotificationScreen>
     setState(() {
       _selectedLanguage = prefs.getString('language') ?? 'en';
     });
+    debugPrint('✅ Language loaded: $_selectedLanguage');
   }
 
   @override
   void dispose() {
+    debugPrint('🔔 Notifications screen disposed');
     _tabController.dispose();
     _alertSubscription?.cancel();
     super.dispose();
   }
 
   void _connectSocketForAlerts() {
-    _socketService.connect(EnvConfig.socketUrl);
-    _socketService.joinVehicleTracking(widget.vehicleId);
+    debugPrint('🔌 Connecting socket for real-time alerts...');
+    try {
+      _socketService.connect(EnvConfig.socketUrl);
+      _socketService.joinVehicleTracking(widget.vehicleId);
 
-    _alertSubscription = _socketService.safeZoneAlertStream.listen((alertData) {
-      if (mounted) {
-        _showRealtimePushNotification(alertData);
-        _handleRefresh();
-      }
-    });
+      _alertSubscription = _socketService.safeZoneAlertStream.listen((alertData) {
+        debugPrint('🚨 Real-time alert received: $alertData');
+        if (mounted) {
+          _showRealtimePushNotification(alertData);
+          _handleRefresh();
+        }
+      });
+
+      debugPrint('✅ Socket connected successfully');
+    } catch (e) {
+      debugPrint('❌ Socket connection error: $e');
+    }
   }
 
   void _showRealtimePushNotification(Map<String, dynamic> alertData) {
@@ -165,6 +178,7 @@ class _NotificationScreenState extends State<NotificationScreen>
     final vehicleName = alertData['nickname'] ?? (_selectedLanguage == 'en' ? 'Vehicle' : 'Véhicule');
     final zoneName = alertData['safeZoneName'] ?? (_selectedLanguage == 'en' ? 'Unknown Zone' : 'Zone inconnue');
 
+    debugPrint('📢 Showing push notification banner');
     setState(() {
       _latestAlert = AppNotification(
         id: alertData['alertId'] ?? 0,
@@ -181,6 +195,7 @@ class _NotificationScreenState extends State<NotificationScreen>
 
     Future.delayed(Duration(seconds: 8), () {
       if (mounted && _showPushNotification) {
+        debugPrint('⏱️ Auto-dismissing push notification banner');
         setState(() {
           _showPushNotification = false;
         });
@@ -189,8 +204,19 @@ class _NotificationScreenState extends State<NotificationScreen>
   }
 
   Future<void> _fetchNotifications({bool loadMore = false}) async {
-    if (loadMore && !_hasMoreData) return;
-    if (loadMore && _isLoadingMore) return;
+    if (loadMore && !_hasMoreData) {
+      debugPrint('⚠️ No more data to load');
+      return;
+    }
+    if (loadMore && _isLoadingMore) {
+      debugPrint('⚠️ Already loading more data');
+      return;
+    }
+
+    debugPrint('\n📡 ========== FETCHING NOTIFICATIONS ==========');
+    debugPrint('📄 Page: $_currentPage');
+    debugPrint('📊 Page Size: $_pageSize');
+    debugPrint('🔄 Load More: $loadMore');
 
     if (loadMore) {
       setState(() => _isLoadingMore = true);
@@ -203,8 +229,13 @@ class _NotificationScreenState extends State<NotificationScreen>
     }
 
     try {
+      debugPrint('🔐 Making authenticated request...');
+
       final response = await _tokenService.makeAuthenticatedRequest(
         request: (token) async {
+          debugPrint('🎫 Access token received (first 20 chars): ${token.substring(0, 20)}...');
+          debugPrint('📍 API URL: $baseUrl/alerts/vehicle/${widget.vehicleId}?page=$_currentPage&limit=$_pageSize');
+
           return await http.get(
             Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}?page=$_currentPage&limit=$_pageSize'),
             headers: {
@@ -215,12 +246,18 @@ class _NotificationScreenState extends State<NotificationScreen>
         },
       );
 
+      debugPrint('📬 Response Status: ${response.statusCode}');
+
       if (response.statusCode == 200) {
+        debugPrint('✅ Success - parsing response...');
         final data = jsonDecode(response.body);
 
         if (data['success'] == true && data['data'] != null) {
           final List<dynamic> alertsJson = data['data']['alerts'] ?? [];
           final pagination = data['data']['pagination'];
+
+          debugPrint('📦 Received ${alertsJson.length} notifications');
+          debugPrint('📊 Pagination: $pagination');
 
           if (mounted) {
             setState(() {
@@ -230,8 +267,10 @@ class _NotificationScreenState extends State<NotificationScreen>
 
               if (loadMore) {
                 _allNotifications.addAll(newNotifications);
+                debugPrint('➕ Added ${newNotifications.length} notifications (Total: ${_allNotifications.length})');
               } else {
                 _allNotifications = newNotifications;
+                debugPrint('🔄 Replaced notifications list (Total: ${_allNotifications.length})');
               }
 
               _readNotifications = _allNotifications
@@ -239,18 +278,57 @@ class _NotificationScreenState extends State<NotificationScreen>
                   .map((n) => n.id)
                   .toSet();
 
+              debugPrint('👁️ Read notifications: ${_readNotifications.length}');
+
               _totalNotifications = pagination['totalAlerts'] ?? 0;
               _hasMoreData = pagination['hasNextPage'] ?? false;
+
+              debugPrint('📈 Total: $_totalNotifications, Has more: $_hasMoreData');
 
               _isLoading = false;
               _isRefreshing = false;
               _isLoadingMore = false;
             });
           }
+
+          debugPrint('✅ Notifications loaded successfully\n');
+        } else {
+          debugPrint('⚠️ Response success=false or no data');
+          debugPrint('Response body: ${response.body}');
+        }
+      } else if (response.statusCode == 401) {
+        debugPrint('🔒 ========== UNAUTHORIZED (401) ==========');
+        debugPrint('❌ Token refresh failed - session expired');
+        debugPrint('🔄 User needs to login again');
+
+        if (mounted) {
+          _showSessionExpiredDialog();
+        }
+      } else {
+        debugPrint('❌ HTTP Error ${response.statusCode}');
+        debugPrint('Response: ${response.body}');
+
+        if (mounted) {
+          _showErrorSnackBar(
+              _selectedLanguage == 'en'
+                  ? 'Failed to load notifications'
+                  : 'Échec du chargement des notifications'
+          );
         }
       }
     } catch (error) {
-      debugPrint('🔥 Error fetching notifications: $error');
+      debugPrint('🔥 ========== ERROR FETCHING NOTIFICATIONS ==========');
+      debugPrint('❌ Error type: ${error.runtimeType}');
+      debugPrint('❌ Error message: $error');
+      debugPrint('Stack trace: ${StackTrace.current}');
+
+      if (mounted) {
+        _showErrorSnackBar(
+            _selectedLanguage == 'en'
+                ? 'Network error - check your connection'
+                : 'Erreur réseau - vérifiez votre connexion'
+        );
+      }
     }
 
     if (mounted) {
@@ -262,24 +340,114 @@ class _NotificationScreenState extends State<NotificationScreen>
     }
   }
 
+  void _showSessionExpiredDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        ),
+        title: Row(
+          children: [
+            Icon(Icons.lock_clock_rounded, color: AppColors.error, size: 28),
+            SizedBox(width: AppSizes.spacingM),
+            Expanded(
+              child: Text(
+                _selectedLanguage == 'en' ? 'Session Expired' : 'Session expirée',
+                style: AppTypography.h3.copyWith(fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          _selectedLanguage == 'en'
+              ? 'Your session has expired. Please login again to continue.'
+              : 'Votre session a expiré. Veuillez vous reconnecter pour continuer.',
+          style: AppTypography.body2,
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () async {
+              debugPrint('🚪 Logging out user...');
+
+              // Clear all user data
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.clear();
+
+              debugPrint('✅ User data cleared');
+
+              if (mounted) {
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  '/login',
+                      (route) => false,
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              padding: EdgeInsets.symmetric(
+                horizontal: AppSizes.spacingL,
+                vertical: AppSizes.spacingM,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppSizes.radiusM),
+              ),
+            ),
+            child: Text(
+              _selectedLanguage == 'en' ? 'Login Again' : 'Se reconnecter',
+              style: AppTypography.button.copyWith(color: AppColors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.error_outline_rounded, color: Colors.white, size: 20),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(message, style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 3),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: EdgeInsets.all(16),
+      ),
+    );
+  }
+
   void _loadMoreNotifications() {
     if (!_hasMoreData || _isLoadingMore) return;
+
+    debugPrint('📄 Loading more notifications (page ${_currentPage + 1})');
     _currentPage++;
     _fetchNotifications(loadMore: true);
   }
 
   Future<void> _handleRefresh() async {
+    debugPrint('🔄 Manual refresh triggered');
     setState(() => _isRefreshing = true);
     await _fetchNotifications();
   }
 
   void _dismissPushNotification() {
+    debugPrint('✖️ Dismissing push notification banner');
     setState(() {
       _showPushNotification = false;
     });
   }
 
   void _navigateToDashboard() {
+    debugPrint('🗺️ Navigating to dashboard');
     Navigator.pushReplacementNamed(
       context,
       '/dashboard',
@@ -288,6 +456,7 @@ class _NotificationScreenState extends State<NotificationScreen>
   }
 
   void _handleEngineAction() {
+    debugPrint('🔧 Engine action triggered');
     _dismissPushNotification();
 
     showDialog(
@@ -324,7 +493,10 @@ class _NotificationScreenState extends State<NotificationScreen>
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              debugPrint('❌ Engine cut cancelled');
+              Navigator.pop(context);
+            },
             child: Text(
               _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
               style: AppTypography.body2.copyWith(
@@ -337,9 +509,12 @@ class _NotificationScreenState extends State<NotificationScreen>
             onPressed: () async {
               Navigator.pop(context);
 
+              debugPrint('🔒 Cutting engine for vehicle ${widget.vehicleId}...');
+
               try {
                 final response = await _tokenService.makeAuthenticatedRequest(
                   request: (token) async {
+                    debugPrint('🎫 Sending engine command with token');
                     return await http.post(
                       Uri.parse('$baseUrl/gps/issue-command'),
                       headers: {
@@ -357,27 +532,38 @@ class _NotificationScreenState extends State<NotificationScreen>
                   },
                 );
 
+                debugPrint('📬 Engine command response: ${response.statusCode}');
+
                 if (response.statusCode == 200) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(_selectedLanguage == 'en'
-                          ? 'Engine cut off successfully'
-                          : 'Moteur coupé avec succès'),
-                      backgroundColor: AppColors.success,
-                    ),
-                  );
+                  debugPrint('✅ Engine cut successfully');
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(_selectedLanguage == 'en'
+                            ? 'Engine cut off successfully'
+                            : 'Moteur coupé avec succès'),
+                        backgroundColor: AppColors.success,
+                      ),
+                    );
+                  }
                 } else {
+                  debugPrint('❌ Engine command failed: ${response.statusCode}');
                   throw Exception('Failed to cut engine');
                 }
               } catch (error) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(_selectedLanguage == 'en'
-                        ? 'Failed to cut engine'
-                        : 'Échec de la coupure du moteur'),
-                    backgroundColor: AppColors.error,
-                  ),
-                );
+                debugPrint('🔥 Error cutting engine: $error');
+
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(_selectedLanguage == 'en'
+                          ? 'Failed to cut engine'
+                          : 'Échec de la coupure du moteur'),
+                      backgroundColor: AppColors.error,
+                    ),
+                  );
+                }
               }
             },
             style: ElevatedButton.styleFrom(
@@ -419,6 +605,8 @@ class _NotificationScreenState extends State<NotificationScreen>
   }
 
   Future<void> _markAsRead(int notificationId) async {
+    debugPrint('👁️ Marking notification $notificationId as read');
+
     try {
       final response = await _tokenService.makeAuthenticatedRequest(
         request: (token) async {
@@ -432,11 +620,16 @@ class _NotificationScreenState extends State<NotificationScreen>
         },
       );
 
+      debugPrint('📬 Mark as read response: ${response.statusCode}');
+
       if (response.statusCode == 200) {
+        debugPrint('✅ Notification marked as read');
         setState(() {
           _readNotifications.add(notificationId);
           _expandedNotificationId = null;
         });
+      } else {
+        debugPrint('❌ Failed to mark as read');
       }
     } catch (error) {
       debugPrint('🔥 Error marking as read: $error');
@@ -444,6 +637,8 @@ class _NotificationScreenState extends State<NotificationScreen>
   }
 
   Future<void> _markAllAsRead() async {
+    debugPrint('👁️ Marking ALL notifications as read');
+
     try {
       final response = await _tokenService.makeAuthenticatedRequest(
         request: (token) async {
@@ -457,7 +652,11 @@ class _NotificationScreenState extends State<NotificationScreen>
         },
       );
 
+      debugPrint('📬 Mark all as read response: ${response.statusCode}');
+
       if (response.statusCode == 200) {
+        debugPrint('✅ All notifications marked as read');
+
         setState(() {
           for (var notification in _allNotifications) {
             _readNotifications.add(notification.id);
@@ -465,14 +664,18 @@ class _NotificationScreenState extends State<NotificationScreen>
           _expandedNotificationId = null;
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_selectedLanguage == 'en'
-                ? 'All notifications marked as read'
-                : 'Toutes les notifications marquées comme lues'),
-            backgroundColor: AppColors.success,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(_selectedLanguage == 'en'
+                  ? 'All notifications marked as read'
+                  : 'Toutes les notifications marquées comme lues'),
+              backgroundColor: AppColors.success,
+            ),
+          );
+        }
+      } else {
+        debugPrint('❌ Failed to mark all as read');
       }
     } catch (error) {
       debugPrint('🔥 Error marking all as read: $error');
@@ -609,7 +812,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                   ),
                 ),
 
-                // ✅ 3 Tabs - FIXED OVERFLOW
+                // 3 Tabs
                 Container(
                   color: AppColors.white,
                   child: TabBar(
@@ -683,7 +886,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                   ),
                 ),
 
-                // ✅ 3 Tab Views with Sticky Headers
+                // Tab Views
                 Expanded(
                   child: TabBarView(
                     controller: _tabController,
@@ -838,7 +1041,7 @@ class _NotificationScreenState extends State<NotificationScreen>
     );
   }
 
-  // ✅ WhatsApp-Style Sticky Headers
+  // WhatsApp-Style Sticky Headers
   Widget _buildStickyNotificationsList(List<AppNotification> notifications) {
     if (notifications.isEmpty) {
       return RefreshIndicator(
@@ -920,7 +1123,6 @@ class _NotificationScreenState extends State<NotificationScreen>
           final groupKey = groupedNotifications.keys.elementAt(index);
           final groupNotifications = groupedNotifications[groupKey]!;
 
-          // ✅ Sticky Header like WhatsApp
           return StickyHeader(
             header: Container(
               width: double.infinity,

@@ -34,7 +34,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   void _setupAnimations() {
     // Animation controller for 5 seconds
     _animationController = AnimationController(
-      duration: const Duration(milliseconds: 5000), // 5 seconds
+      duration: const Duration(milliseconds: 2000), // 2 seconds
       vsync: this,
     );
 
@@ -59,8 +59,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
 
   Future<void> _checkSessionAndNavigate() async {
-    // Wait for animation to complete (5 seconds)
-    await Future.delayed(const Duration(milliseconds: 5000));
+    // Wait for animation to complete (2 seconds)
+    await Future.delayed(const Duration(milliseconds: 2000));
 
     if (!mounted) return;
 

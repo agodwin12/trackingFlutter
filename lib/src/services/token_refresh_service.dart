@@ -45,7 +45,7 @@ class TokenRefreshService {
         Uri.parse('${EnvConfig.baseUrl}/auth/refresh-token'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'refreshToken': refreshToken,  // ✅ ADDED: Send refresh token
+          'refreshToken': refreshToken,
         }),
       ).timeout(
         const Duration(seconds: 10),
@@ -113,7 +113,7 @@ class TokenRefreshService {
   Future<void> _handleLogout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('accessToken');
-    await prefs.remove('refreshToken');  // ✅ ADDED: Also remove refresh token
+    await prefs.remove('refreshToken');
     await prefs.remove('user');
     debugPrint('🚪 User logged out - tokens cleared');
     // Navigate to login will be handled by the calling code
@@ -135,6 +135,13 @@ class TokenRefreshService {
 
       // Make the request
       final response = await request(token);
+
+      // ✅ Check for X-New-Access-Token header (backend auto-refresh)
+      final newToken = response.headers['x-new-access-token'];
+      if (newToken != null && newToken.isNotEmpty) {
+        debugPrint('🔄 Backend auto-refreshed token, saving new token...');
+        await prefs.setString('accessToken', newToken);
+      }
 
       // ✅ If 401, refresh token and retry
       if (response.statusCode == 401 && retryCount < 1) {
@@ -187,8 +194,8 @@ class TokenRefreshService {
             final expiryDate = DateTime.fromMillisecondsSinceEpoch(exp * 1000);
             final now = DateTime.now();
 
-            // ✅ If token expires in less than 5 minutes, refresh it
-            if (expiryDate.difference(now).inMinutes < 5) {
+            // ✅ If token expires in less than 1 day, refresh it (changed from 5 minutes for 90-day tokens)
+            if (expiryDate.difference(now).inDays < 1) {
               debugPrint('⏰ Token expires soon, refreshing...');
               final newToken = await refreshAccessToken();
               return newToken ?? token;

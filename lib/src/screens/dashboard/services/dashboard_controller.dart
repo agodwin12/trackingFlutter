@@ -635,7 +635,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ UPDATED: Toggle safe zone with offline check
+// ✅ UPDATED: Toggle safe zone with offline check
   Future<Map<String, dynamic>> toggleSafeZone() async {
     if (isOffline) {
       debugPrint('❌ Cannot toggle safe zone while offline');
@@ -654,7 +654,7 @@ class DashboardController extends ChangeNotifier {
           latitude: _vehicleLat,
           longitude: _vehicleLng,
           name: 'Home',
-          radiusMeters: 100,
+          radiusMeters: 10,  // ✅ CHANGED FROM 100 TO 10
         );
 
         _isTogglingSafeZone = false;

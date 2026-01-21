@@ -31,7 +31,7 @@ class NotificationService {
   // ✅ Global navigator key for navigation from notifications
   static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-  /// ✅ Initialize Firebase and notification services
+  /// ✅ Initialize Firebase and notification services - ENHANCED DEBUGGING
   static Future<void> initialize() async {
     if (_initialized) {
       debugPrint('⚠️ Notification service already initialized');
@@ -39,56 +39,124 @@ class NotificationService {
     }
 
     try {
-      debugPrint('🔔 Initializing notification service...');
+      print("\n========================================");
+      print("🔔 INITIALIZING NOTIFICATION SERVICE");
+      print("========================================");
+      print("📱 Platform: ${defaultTargetPlatform.toString()}");
+      print("🏗️ Debug Mode: ${kDebugMode}");
+      print("========================================\n");
 
       // ✅ Initialize local notifications first (always works)
       await _initializeLocalNotifications();
 
       // ✅ Try Firebase initialization with error handling
       try {
-        // Request permissions
+        print("========================================");
+        print("🔥 REQUESTING NOTIFICATION PERMISSIONS");
+        print("========================================");
+
+        // Request permissions with detailed logging
         NotificationSettings settings = await _firebaseMessaging.requestPermission(
           alert: true,
           badge: true,
           sound: true,
           provisional: false,
+          announcement: false,
+          carPlay: false,
+          criticalAlert: false,
         );
+
+        print("📋 Permission Status: ${settings.authorizationStatus}");
+        print("🔔 Alert: ${settings.alert}");
+        print("🔵 Badge: ${settings.badge}");
+        print("🔊 Sound: ${settings.sound}");
+        print("📢 Announcement: ${settings.announcement}");
+        print("🚗 CarPlay: ${settings.carPlay}");
+        print("⚠️ Critical: ${settings.criticalAlert}");
+        print("🔒 Lock Screen: ${settings.lockScreen}");
+        print("📱 Notification Center: ${settings.notificationCenter}");
+        print("========================================\n");
 
         if (settings.authorizationStatus == AuthorizationStatus.authorized) {
           debugPrint('✅ Notification permissions granted');
 
-          // Try to get FCM token
+          // ✅ Configure FCM for iOS to receive notifications in foreground
+          if (defaultTargetPlatform == TargetPlatform.iOS) {
+            print("🍎 Configuring iOS foreground notification presentation options...");
+            await _firebaseMessaging.setForegroundNotificationPresentationOptions(
+              alert: true,
+              badge: true,
+              sound: true,
+            );
+            print("✅ iOS foreground options configured");
+          }
+
+          // Try to get FCM token with enhanced error handling
           try {
-            String? token = await _firebaseMessaging.getToken();
-            if (token != null) {
+            print("\n========================================");
+            print("📱 GETTING FCM TOKEN");
+            print("========================================");
+
+            // Add timeout to token retrieval
+            String? token = await _firebaseMessaging.getToken().timeout(
+              const Duration(seconds: 15),
+              onTimeout: () {
+                print("⏰ FCM token retrieval timeout!");
+                return null;
+              },
+            );
+
+            if (token != null && token.isNotEmpty) {
               _fcmToken = token;
               _firebaseAvailable = true;
-              debugPrint('📱 FCM Token: $token');
+              print("✅ FCM Token received!");
+              print("📱 Token (first 50 chars): ${token.substring(0, token.length > 50 ? 50 : token.length)}...");
+              print("📏 Token length: ${token.length}");
+              print("========================================\n");
+
               await _registerTokenWithBackend(token);
             } else {
-              debugPrint('⚠️ No FCM token available');
+              print("❌ FCM token is null or empty");
+              print("🔍 Possible causes:");
+              print("   - Google Play Services not available (Android)");
+              print("   - APNs not configured (iOS)");
+              print("   - No internet connection");
+              print("   - Firebase configuration missing");
+              print("========================================\n");
+              _firebaseAvailable = false;
             }
 
             // Listen for token refresh
             _firebaseMessaging.onTokenRefresh.listen((newToken) {
+              print("\n========================================");
+              print("🔄 FCM TOKEN REFRESHED");
+              print("========================================");
               _fcmToken = newToken;
-              debugPrint('🔄 FCM Token refreshed: $newToken');
+              print('📱 New Token: ${newToken.substring(0, 50)}...');
+              print("========================================\n");
               _registerTokenWithBackend(newToken);
+            }, onError: (error) {
+              print("❌ Token refresh error: $error");
             });
 
             // ✅ Set up background message handler
             FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+            print("✅ Background message handler registered");
 
             // ✅ Handle foreground messages
             FirebaseMessaging.onMessage.listen((RemoteMessage message) {
               debugPrint('📨 Foreground message received: ${message.notification?.title}');
               _handleForegroundMessage(message);
+            }, onError: (error) {
+              print("❌ Foreground message error: $error");
             });
 
             // ✅ Handle notification tap when app is in background
             FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
               debugPrint('📬 Notification opened app: ${message.notification?.title}');
               _handleNotificationTap(message);
+            }, onError: (error) {
+              print("❌ Message opened error: $error");
             });
 
             // ✅ Check for initial notification (if app was opened from terminated state)
@@ -98,34 +166,74 @@ class NotificationService {
               _handleNotificationTap(initialMessage);
             }
 
-            debugPrint('✅ Firebase Messaging initialized successfully');
+            print("✅ Firebase Messaging initialized successfully\n");
           } catch (tokenError) {
-            debugPrint('⚠️ FCM token error: $tokenError');
+            print("\n========================================");
+            print("❌ FCM TOKEN ERROR");
+            print("========================================");
+            print("Error: $tokenError");
+            print("Stack trace: ${StackTrace.current}");
+            print("========================================\n");
             _firebaseAvailable = false;
           }
         } else if (settings.authorizationStatus == AuthorizationStatus.denied) {
-          debugPrint('❌ Notification permissions denied');
+          print("========================================");
+          print("❌ NOTIFICATION PERMISSIONS DENIED");
+          print("========================================");
+          print("User has denied notification permissions.");
+          print("On iOS: User must enable in Settings > App > Notifications");
+          print("On Android: User must enable in Settings > Apps > App > Notifications");
+          print("========================================\n");
         } else if (settings.authorizationStatus == AuthorizationStatus.provisional) {
-          debugPrint('⚠️ Notification permissions provisional');
+          print("========================================");
+          print("⚠️ NOTIFICATION PERMISSIONS PROVISIONAL");
+          print("========================================");
+          print("Notifications will be delivered quietly.");
+          print("========================================\n");
+        } else if (settings.authorizationStatus == AuthorizationStatus.notDetermined) {
+          print("========================================");
+          print("❓ NOTIFICATION PERMISSIONS NOT DETERMINED");
+          print("========================================");
+          print("User hasn't been asked for permissions yet.");
+          print("========================================\n");
         }
       } catch (firebaseError) {
-        debugPrint('⚠️ Firebase Cloud Messaging not available: $firebaseError');
-        debugPrint('ℹ️ Push notifications will be disabled, but app will continue working');
+        print("\n========================================");
+        print("❌ FIREBASE INITIALIZATION ERROR");
+        print("========================================");
+        print("Error: $firebaseError");
+        print("Stack trace: ${StackTrace.current}");
+        print("\n🔍 Common causes:");
+        print("   Android:");
+        print("     - google-services.json missing or incorrect");
+        print("     - Google Play Services not installed/updated");
+        print("     - SHA-1 fingerprint not added to Firebase Console");
+        print("   iOS:");
+        print("     - GoogleService-Info.plist missing");
+        print("     - APNs certificate/key not configured in Firebase");
+        print("     - Push Notifications capability not enabled in Xcode");
+        print("========================================\n");
         _firebaseAvailable = false;
       }
 
       _initialized = true;
-      debugPrint('✅ Notification service initialized successfully');
+      print("✅ Notification service initialization complete\n");
     } catch (error) {
-      debugPrint('❌ Error initializing notifications: $error');
+      print("\n========================================");
+      print("❌ CRITICAL INITIALIZATION ERROR");
+      print("========================================");
+      print("Error: $error");
+      print("Stack trace: ${StackTrace.current}");
+      print("========================================\n");
       _initialized = true; // Mark as initialized even with errors to prevent re-init
-      // Don't throw - allow app to continue without notifications
     }
   }
 
   /// ✅ Initialize local notifications plugin
   static Future<void> _initializeLocalNotifications() async {
     try {
+      print("🔔 Initializing local notifications plugin...");
+
       const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
 
       const DarwinInitializationSettings iosSettings = DarwinInitializationSettings(
@@ -139,10 +247,9 @@ class NotificationService {
         iOS: iosSettings,
       );
 
-      await _localNotifications.initialize(
+      bool? initialized = await _localNotifications.initialize(
         settings,
         onDidReceiveNotificationResponse: (NotificationResponse response) {
-          // Handle notification tap from local notification
           if (response.payload != null) {
             debugPrint("🔔 Local notification tapped: ${response.payload}");
             try {
@@ -155,9 +262,14 @@ class NotificationService {
         },
       );
 
-      debugPrint("✅ Local notifications initialized");
+      if (initialized == true) {
+        print("✅ Local notifications initialized successfully\n");
+      } else {
+        print("⚠️ Local notifications initialization returned: $initialized\n");
+      }
     } catch (e) {
-      debugPrint("❌ Error initializing local notifications: $e");
+      print("❌ Error initializing local notifications: $e");
+      print("Stack trace: ${StackTrace.current}\n");
     }
   }
 
@@ -543,23 +655,28 @@ class NotificationService {
     }
   }
 
-  /// ✅ Show local notification
+  /// ✅ Show local notification - ENHANCED FOR ANDROID 13+
   static Future<void> _showLocalNotification({
     required String title,
     required String body,
     String? payload,
   }) async {
     try {
+      print("🔔 Attempting to show local notification...");
+      print("   Title: $title");
+      print("   Body: $body");
+
       const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
         'default_channel',
         'Default Notifications',
         channelDescription: 'General notifications from PROXYM TRACKING',
-        importance: Importance.high,
+        importance: Importance.max, // Changed from high to max
         priority: Priority.high,
         showWhen: true,
         icon: '@mipmap/ic_launcher',
         enableVibration: true,
         playSound: true,
+        ticker: 'PROXYM TRACKING',
       );
 
       const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
@@ -581,16 +698,22 @@ class NotificationService {
         payload: payload,
       );
 
-      debugPrint("✅ Local notification shown: $title");
+      print("✅ Local notification command sent successfully");
     } catch (e) {
-      debugPrint("❌ Error showing local notification: $e");
+      print("❌ Error showing local notification: $e");
+      print("Stack trace: ${StackTrace.current}");
     }
   }
 
-  /// ✅ Register FCM token with backend
+  /// ✅ Register FCM token with backend - ENHANCED LOGGING
   static Future<void> registerToken() async {
     if (_fcmToken == null) {
-      debugPrint("⚠️ No FCM token available to register");
+      print("========================================");
+      print("⚠️ NO FCM TOKEN TO REGISTER");
+      print("========================================");
+      print("This means FCM token was not generated.");
+      print("Check the initialization logs above for errors.");
+      print("========================================\n");
       return;
     }
 
@@ -604,7 +727,11 @@ class NotificationService {
         return;
       }
 
-      debugPrint("📱 Registering FCM token with backend...");
+      print("\n========================================");
+      print("📱 REGISTERING FCM TOKEN WITH BACKEND");
+      print("========================================");
+      print("Token: ${_fcmToken!.substring(0, 50)}...");
+      print("Device: ${defaultTargetPlatform == TargetPlatform.iOS ? "iOS" : "Android"}");
 
       final response = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/notifications/register-token"),
@@ -617,21 +744,37 @@ class NotificationService {
           "device_type": defaultTargetPlatform == TargetPlatform.iOS ? "ios" : "android",
           "device_id": null,
         }),
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          throw Exception('Token registration timeout');
+        },
       );
 
+      print("Response status: ${response.statusCode}");
+      print("Response body: ${response.body}");
+
       if (response.statusCode == 200 || response.statusCode == 201) {
-        debugPrint("✅ FCM token registered with backend");
+        print("✅ FCM TOKEN REGISTERED SUCCESSFULLY");
+        print("========================================\n");
       } else {
-        debugPrint("⚠️ Failed to register FCM token: ${response.statusCode} - ${response.body}");
+        print("❌ FAILED TO REGISTER FCM TOKEN");
+        print("Status: ${response.statusCode}");
+        print("Body: ${response.body}");
+        print("========================================\n");
       }
     } catch (error) {
-      debugPrint("❌ Error registering FCM token: $error");
+      print("\n========================================");
+      print("❌ ERROR REGISTERING FCM TOKEN");
+      print("========================================");
+      print("Error: $error");
+      print("Stack trace: ${StackTrace.current}");
+      print("========================================\n");
     }
   }
 
   /// ✅ Internal method - don't register automatically
   static Future<void> _registerTokenWithBackend(String token) async {
-    // Store token but don't register yet (no auth token available)
     debugPrint("📱 FCM Token received: ${token.substring(0, 50)}...");
     debugPrint("ℹ️ Will register after user login");
   }
@@ -723,7 +866,6 @@ class NotificationService {
 
         if (authToken == null) {
           debugPrint("⚠️ No auth token found");
-          // Still show local notification
           await _showLocalNotification(
             title: '🔔 Test Notification',
             body: 'This is a local test notification!',
@@ -748,15 +890,13 @@ class NotificationService {
           debugPrint("✅ Test notification sent from server");
         } else {
           debugPrint("⚠️ Failed to send test notification: ${response.body}");
-          // Fallback to local notification
           await _showLocalNotification(
-            title: '🔔 Test Notification',
-            body: 'This is a local test notification!',
+            title: '🔔  Notification',
+            body: 'notification!',
             payload: jsonEncode({'type': 'test'}),
           );
         }
       } else {
-        // Show local notification if Firebase not available
         await _showLocalNotification(
           title: '🔔 Test Notification',
           body: 'This is a local test notification!',

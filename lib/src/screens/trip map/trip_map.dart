@@ -7,9 +7,9 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
-import '../../services/connectivity_service.dart'; // ✅ NEW
+import '../../services/connectivity_service.dart';
 import '../../services/cache_service.dart';
-import '../../widgets/offline_barner.dart'; // ✅ NEW
+import '../../widgets/offline_barner.dart';
 
 class TripMapScreen extends StatefulWidget {
   final int tripId;
@@ -28,14 +28,12 @@ class TripMapScreen extends StatefulWidget {
 class _TripMapScreenState extends State<TripMapScreen> {
   final Completer<GoogleMapController> _controller = Completer();
 
-  // ✅ NEW: Offline mode support
   final ConnectivityService _connectivityService = ConnectivityService();
   final CacheService _cacheService = CacheService();
   bool _isLoadedFromCache = false;
 
   String get baseUrl => EnvConfig.baseUrl;
 
-  // ✅ NEW: Check if online
   bool get isOnline => _connectivityService.isOnline;
   bool get isOffline => _connectivityService.isOffline;
 
@@ -69,7 +67,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
     super.initState();
     _loadTripData();
 
-    // ✅ NEW: Listen to connectivity changes
     _connectivityService.addListener(_onConnectivityChanged);
   }
 
@@ -79,12 +76,10 @@ class _TripMapScreenState extends State<TripMapScreen> {
     super.dispose();
   }
 
-  // ✅ NEW: Handle connectivity changes
   void _onConnectivityChanged() {
     if (mounted) {
       setState(() {});
 
-      // If we just came back online and loaded from cache, offer to refresh
       if (isOnline && _isLoadedFromCache) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -111,7 +106,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  // ✅ UPDATED: Load trip data with offline support
   Future<void> _loadTripData() async {
     setState(() {
       _isLoading = true;
@@ -120,13 +114,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
 
     try {
       if (isOffline) {
-        // ✅ OFFLINE MODE: Load from cache
         debugPrint("📱 OFFLINE MODE - Loading trip from cache...");
         await _loadTripFromCache();
         return;
       }
 
-      // ✅ ONLINE MODE: Load from API
       debugPrint("📡 Fetching trip ${widget.tripId}...");
 
       final response = await http.get(
@@ -182,7 +174,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
             debugPrint("🗺️ GPS waypoints: ${_gpsWaypoints.length} points");
           });
 
-          // Generate road-following route using OSRM
+          // ✅ Use exact GPS waypoints (no OSRM)
           await _generateRoadFollowingRoute();
 
           setState(() {
@@ -193,7 +185,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
           await Future.delayed(const Duration(milliseconds: 300));
           _fitMapToRoute();
 
-          debugPrint("✅ Professional route map loaded!");
+          debugPrint("✅ Exact route map loaded!");
         }
       } else {
         setState(() {
@@ -212,12 +204,10 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  // ✅ NEW: Load trip from cache (offline mode)
   Future<void> _loadTripFromCache() async {
     try {
       debugPrint('📦 Loading trip from cache...');
 
-      // Get cached trips
       final cachedTrips = await _cacheService.getCachedTrips(widget.vehicleId);
 
       if (cachedTrips == null || cachedTrips.isEmpty) {
@@ -228,7 +218,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
         return;
       }
 
-      // Find the specific trip
       final trip = cachedTrips.firstWhere(
             (t) => t['id'] == widget.tripId,
         orElse: () => {},
@@ -244,7 +233,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
 
       debugPrint('✅ Found cached trip: ${trip['id']}');
 
-      // Parse trip data
       setState(() {
         _tripData = {
           'id': trip['id'],
@@ -275,7 +263,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
           (trip['endLongitude'] as num).toDouble(),
         );
 
-        // ✅ Use simple straight line route when offline (no waypoints in cache)
         _gpsWaypoints = [_startLocation!, _endLocation!];
         _routePoints = [_startLocation!, _endLocation!];
 
@@ -288,7 +275,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
         _isLoading = false;
       });
 
-      // Fit map to route
       await Future.delayed(const Duration(milliseconds: 300));
       _fitMapToRoute();
 
@@ -303,137 +289,18 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  // ✅ UPDATED: Generate road-following route (skip when offline)
+  // ✅ EXACT ROUTE: Use all GPS waypoints for precise path accuracy
   Future<void> _generateRoadFollowingRoute() async {
-    if (isOffline) {
-      debugPrint('📱 Offline - using direct GPS waypoints (no OSRM)');
-      setState(() {
-        _routePoints = _gpsWaypoints;
-      });
-      _buildMarkersAndPolylines();
-      return;
-    }
+    debugPrint('📍 Using EXACT GPS waypoints - no sampling, no routing API');
 
-    try {
-      debugPrint("🛣️ Generating road-following route...");
+    setState(() {
+      _routePoints = _gpsWaypoints; // Use ALL GPS points for exact accuracy
+    });
 
-      // Sample GPS waypoints intelligently (max 25 points for OSRM)
-      final sampledWaypoints = _sampleWaypointsForRouting(_gpsWaypoints, 25);
-
-      debugPrint("🛣️ Using ${sampledWaypoints.length} waypoints for routing");
-
-      // Build OSRM API URL
-      final coordinates = sampledWaypoints
-          .map((point) => '${point.longitude},${point.latitude}')
-          .join(';');
-
-      final osrmUrl = 'https://router.project-osrm.org/route/v1/driving/$coordinates?overview=full&geometries=polyline';
-
-      debugPrint("🛣️ Calling OSRM API...");
-
-      final response = await http.get(Uri.parse(osrmUrl)).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          debugPrint("⚠️ OSRM API timeout - falling back to GPS waypoints");
-          return http.Response('{"error": "timeout"}', 408);
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (data['code'] == 'Ok' && data['routes'] != null && data['routes'].isNotEmpty) {
-          final route = data['routes'][0];
-          final encodedPolyline = route['geometry'];
-
-          // Decode polyline
-          final decodedPoints = _decodePolyline(encodedPolyline);
-
-          setState(() {
-            _routePoints = decodedPoints;
-          });
-
-          debugPrint("✅ Road-following route generated: ${_routePoints.length} points");
-
-          _buildMarkersAndPolylines();
-          return;
-        }
-      }
-
-      // Fallback: use GPS waypoints directly
-      debugPrint("⚠️ OSRM failed - using GPS waypoints as fallback");
-      setState(() {
-        _routePoints = _gpsWaypoints;
-      });
-      _buildMarkersAndPolylines();
-
-    } catch (error) {
-      debugPrint("🔥 Error generating road route: $error");
-      setState(() {
-        _routePoints = _gpsWaypoints;
-      });
-      _buildMarkersAndPolylines();
-    }
+    debugPrint("✅ Exact route loaded: ${_routePoints.length} GPS waypoints");
+    _buildMarkersAndPolylines();
   }
 
-  /// Smart sampling for routing API
-  List<LatLng> _sampleWaypointsForRouting(List<LatLng> waypoints, int maxPoints) {
-    if (waypoints.length <= maxPoints) return waypoints;
-
-    final sampled = <LatLng>[];
-    sampled.add(waypoints.first);
-
-    final step = (waypoints.length - 2) / (maxPoints - 2);
-    for (int i = 1; i < maxPoints - 1; i++) {
-      final index = 1 + (step * (i - 1)).round();
-      if (index < waypoints.length - 1) {
-        sampled.add(waypoints[index]);
-      }
-    }
-
-    sampled.add(waypoints.last);
-    return sampled;
-  }
-
-  /// Decode polyline from OSRM
-  List<LatLng> _decodePolyline(String encoded) {
-    List<LatLng> points = [];
-    int index = 0;
-    int len = encoded.length;
-    int lat = 0;
-    int lng = 0;
-
-    while (index < len) {
-      int b;
-      int shift = 0;
-      int result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-      lat += dlat;
-
-      shift = 0;
-      result = 0;
-      do {
-        b = encoded.codeUnitAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
-      lng += dlng;
-
-      double latitude = lat / 1E5;
-      double longitude = lng / 1E5;
-      points.add(LatLng(latitude, longitude));
-    }
-
-    return points;
-  }
-
-  // ✅ UPDATED: Handle refresh with offline check
   Future<void> _handleRefresh() async {
     if (isOffline) {
       debugPrint('📱 Cannot refresh while offline');
@@ -490,7 +357,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  /// Build markers and polylines
   void _buildMarkersAndPolylines() {
     _markers.clear();
     _polylines.clear();
@@ -523,27 +389,35 @@ class _TripMapScreenState extends State<TripMapScreen> {
       ),
     );
 
-    // ✅ Polyline (different color when offline/cached)
+    // ✅ Create main polyline without arrows
     if (_routePoints.isNotEmpty) {
-      _polylines.add(
-        Polyline(
-          polylineId: const PolylineId('route'),
-          points: _routePoints,
-          color: _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success, // ✅ Orange when offline
-          width: 6,
-          geodesic: false,
-          startCap: Cap.roundCap,
-          endCap: Cap.roundCap,
-          jointType: JointType.round,
-        ),
-      );
-      debugPrint("✅ Drew polyline with ${_routePoints.length} points");
+      _createPolylineWithArrows();
     }
 
     setState(() {});
   }
 
-  /// Fit map to route
+  // ✅ Create polyline connecting start to end
+  void _createPolylineWithArrows() {
+    final Color routeColor = _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success;
+
+    // Main continuous polyline
+    _polylines.add(
+      Polyline(
+        polylineId: const PolylineId('main_route'),
+        points: _routePoints,
+        color: routeColor,
+        width: 5,
+        geodesic: true,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+        jointType: JointType.round,
+      ),
+    );
+
+    debugPrint("✅ Drew route with ${_routePoints.length} GPS points");
+  }
+
   Future<void> _fitMapToRoute() async {
     if (_routePoints.isEmpty) return;
 
@@ -577,19 +451,16 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
-  /// Zoom in
   Future<void> _zoomIn() async {
     final controller = await _controller.future;
     controller.animateCamera(CameraUpdate.zoomIn());
   }
 
-  /// Zoom out
   Future<void> _zoomOut() async {
     final controller = await _controller.future;
     controller.animateCamera(CameraUpdate.zoomOut());
   }
 
-  /// Change map type
   void _changeMapType(MapType type) {
     setState(() {
       _currentMapType = type;
@@ -597,10 +468,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
     });
   }
 
+  // ✅ FIXED: Convert UTC to local time
   String _formatTime(String? dateString) {
     if (dateString == null) return 'N/A';
     try {
-      final date = DateTime.parse(dateString);
+      final date = DateTime.parse(dateString).toLocal();
       final hour = date.hour > 12 ? date.hour - 12 : (date.hour == 0 ? 12 : date.hour);
       final minute = date.minute.toString().padLeft(2, '0');
       final period = date.hour >= 12 ? "PM" : "AM";
@@ -640,16 +512,9 @@ class _TripMapScreenState extends State<TripMapScreen> {
             mapToolbarEnabled: false,
           ),
 
-          // ✅ NEW: Offline Banner
           const OfflineBanner(),
-
-          // Top Bar
           _buildTopBar(),
-
-          // Floating Controls
           _buildFloatingControls(),
-
-          // Bottom Card
           _buildBottomCard(),
 
           if (_isRefreshing)
@@ -713,7 +578,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
           ),
           SizedBox(height: AppSizes.spacingM),
           Text(
-            isOffline ? "Loading cached route..." : "Loading professional route...",
+            isOffline ? "Loading cached route..." : "Loading exact route...",
             style: AppTypography.body2,
           ),
         ],
@@ -825,7 +690,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        // ✅ Show offline indicator
                         if (_isLoadedFromCache) ...[
                           SizedBox(width: 8),
                           Container(
@@ -857,7 +721,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
                   ],
                 ),
               ),
-              // ✅ Disable refresh when offline
               Opacity(
                 opacity: isOffline ? 0.5 : 1.0,
                 child: IconButton(
@@ -885,7 +748,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      Icons.route_rounded,
+                      Icons.navigation_rounded,
                       color: _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success,
                       size: 16,
                     ),

@@ -8,8 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
-import '../../services/connectivity_service.dart'; // ✅ NEW
-import '../../services/cache_service.dart'; // ✅ NEW
+import '../../services/connectivity_service.dart';
+import '../../services/cache_service.dart';
 import '../../widgets/offline_barner.dart';
 import '../settings/settings.dart';
 
@@ -46,6 +46,12 @@ class _TripsScreenState extends State<TripsScreen> {
 
   // Trip Data
   List<Map<String, dynamic>> _trips = [];
+
+  // ✅ NEW: Pagination for "Today" filter
+  int _currentPage = 1;
+  bool _hasMoreTrips = false;
+  bool _isLoadingMore = false;
+  int _totalTrips = 0;
 
   // Filter options
   String _selectedFilter = 'today'; // today, yesterday, week, month, custom
@@ -249,9 +255,17 @@ class _TripsScreenState extends State<TripsScreen> {
     return {'start': startDate, 'end': endDate};
   }
 
-  // ✅ UPDATED: Fetch trips with caching
-  Future<void> _fetchTrips() async {
-    setState(() => _isLoading = true);
+  // ✅ UPDATED: Fetch trips with pagination support for "Today" filter
+  Future<void> _fetchTrips({bool loadMore = false}) async {
+    if (loadMore) {
+      setState(() => _isLoadingMore = true);
+    } else {
+      setState(() {
+        _isLoading = true;
+        _currentPage = 1;
+        _trips = [];
+      });
+    }
 
     try {
       if (isOffline) {
@@ -270,10 +284,23 @@ class _TripsScreenState extends State<TripsScreen> {
         params['endDate'] = DateFormat('yyyy-MM-dd').format(dateRange['end']!);
       }
 
+      // ✅ NEW: Special pagination for "Today" filter
+      if (_selectedFilter == 'today') {
+        params['page'] = _currentPage.toString();
+
+        // First load: 5 trips, subsequent loads: 10 trips
+        if (_currentPage == 1) {
+          params['limit'] = '5';
+        } else {
+          params['limit'] = '10';
+        }
+      }
+      // For other filters, use default pagination (50 trips)
+
       final uri = Uri.parse('$baseUrl/trips/vehicle/${widget.vehicleId}')
           .replace(queryParameters: params);
 
-      debugPrint('📡 Fetching trips with params: $params');
+      debugPrint('📡 Fetching trips - Page: $_currentPage, Params: $params');
 
       final response = await http.get(uri);
 
@@ -283,26 +310,56 @@ class _TripsScreenState extends State<TripsScreen> {
         final data = jsonDecode(response.body);
 
         if (mounted && data['success'] == true) {
-          final trips = List<Map<String, dynamic>>.from(data['data']['trips']);
+          final newTrips = List<Map<String, dynamic>>.from(data['data']['trips']);
+          final pagination = data['data']['pagination'];
 
           setState(() {
-            _trips = trips;
+            if (loadMore) {
+              // Append new trips to existing list
+              _trips.addAll(newTrips);
+            } else {
+              // Replace trips list
+              _trips = newTrips;
+            }
+
+            // ✅ Update pagination info
+            _totalTrips = pagination['totalTrips'] ?? 0;
+            _hasMoreTrips = pagination['hasNextPage'] ?? false;
             _isLoadedFromCache = false;
           });
 
-          // ✅ Cache the trips (last 30 days only)
-          await _cacheService.cacheTrips(widget.vehicleId, trips);
+          debugPrint('✅ Loaded ${newTrips.length} trips (Total: $_totalTrips, Has more: $_hasMoreTrips)');
 
-          debugPrint('✅ Loaded ${_trips.length} trips and cached them');
+          // ✅ Cache the trips (last 30 days only)
+          if (!loadMore) {
+            await _cacheService.cacheTrips(widget.vehicleId, _trips);
+            debugPrint('✅ Cached trips');
+          }
         }
       }
     } catch (error) {
       debugPrint('🔥 Error fetching trips: $error');
     } finally {
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _isLoading = false;
+          _isLoadingMore = false;
+        });
       }
     }
+  }
+
+  // ✅ NEW: Load more trips (pagination)
+  Future<void> _loadMoreTrips() async {
+    if (_isLoadingMore || !_hasMoreTrips) return;
+
+    debugPrint('📄 Loading more trips - Page ${_currentPage + 1}');
+
+    setState(() {
+      _currentPage++;
+    });
+
+    await _fetchTrips(loadMore: true);
   }
 
   // ✅ UPDATED: Handle refresh with offline check
@@ -444,30 +501,33 @@ class _TripsScreenState extends State<TripsScreen> {
     );
   }
 
+  // ✅ FIXED: Convert UTC to local time
   String _formatDate(String? dateString) {
     if (dateString == null) return 'N/A';
     try {
-      final date = DateTime.parse(dateString);
+      final date = DateTime.parse(dateString).toLocal();
       return DateFormat('dd MMM yyyy').format(date);
     } catch (e) {
       return _selectedLanguage == 'en' ? 'Invalid date' : 'Date invalide';
     }
   }
 
+  // ✅ FIXED: Convert UTC to local time
   String _formatTime(String? dateString) {
     if (dateString == null) return 'N/A';
     try {
-      final date = DateTime.parse(dateString);
+      final date = DateTime.parse(dateString).toLocal();
       return DateFormat('HH:mm').format(date);
     } catch (e) {
       return _selectedLanguage == 'en' ? 'Invalid time' : 'Heure invalide';
     }
   }
 
+  // ✅ FIXED: Convert UTC to local time
   String _formatDateShort(String? dateString) {
     if (dateString == null) return 'N/A';
     try {
-      final date = DateTime.parse(dateString);
+      final date = DateTime.parse(dateString).toLocal();
       final now = DateTime.now();
       final difference = now.difference(date);
 
@@ -485,10 +545,11 @@ class _TripsScreenState extends State<TripsScreen> {
     }
   }
 
+  // ✅ FIXED: Convert UTC to local time
   String _getTripDuration(Map<String, dynamic> trip) {
     try {
-      final startTime = DateTime.parse(trip['startTime']);
-      final endTime = DateTime.parse(trip['endTime']);
+      final startTime = DateTime.parse(trip['startTime']).toLocal();
+      final endTime = DateTime.parse(trip['endTime']).toLocal();
       final duration = endTime.difference(startTime);
       final hours = duration.inHours;
       final minutes = duration.inMinutes % 60;
@@ -679,7 +740,7 @@ class _TripsScreenState extends State<TripsScreen> {
             // Filter Section
             if (_showFilters)
               Opacity(
-                opacity: isOffline ? 0.5 : 1.0, // ✅ Dim when offline
+                opacity: isOffline ? 0.5 : 1.0,
                 child: Container(
                   color: AppColors.white,
                   padding: EdgeInsets.all(AppSizes.spacingL),
@@ -694,7 +755,6 @@ class _TripsScreenState extends State<TripsScreen> {
                             _selectedLanguage == 'en' ? 'Filter by Date' : 'Filtrer par date',
                             style: AppTypography.subtitle1.copyWith(fontSize: 14),
                           ),
-                          // ✅ Show offline indicator
                           if (isOffline) ...[
                             SizedBox(width: 8),
                             Icon(
@@ -741,7 +801,7 @@ class _TripsScreenState extends State<TripsScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton.icon(
-                          onPressed: isOffline ? null : _showCustomDatePicker, // ✅ Disable when offline
+                          onPressed: isOffline ? null : _showCustomDatePicker,
                           icon: Icon(Icons.event_rounded, size: 18),
                           label: Text(
                             _selectedFilter == 'custom' && _customStartDate != null
@@ -793,8 +853,13 @@ class _TripsScreenState extends State<TripsScreen> {
                 color: AppColors.primary,
                 child: ListView.builder(
                   padding: EdgeInsets.all(AppSizes.spacingM),
-                  itemCount: _trips.length,
+                  itemCount: _trips.length + (_hasMoreTrips && _selectedFilter == 'today' ? 1 : 0),
                   itemBuilder: (context, index) {
+                    // ✅ NEW: Show "See More" button for Today filter
+                    if (index == _trips.length && _hasMoreTrips && _selectedFilter == 'today') {
+                      return _buildSeeMoreButton();
+                    }
+
                     final trip = _trips[index];
                     final showDate = index == 0 ||
                         _formatDate(_trips[index - 1]['startTime']) !=
@@ -833,6 +898,47 @@ class _TripsScreenState extends State<TripsScreen> {
     );
   }
 
+  /// ✅ NEW: Build "See More" button
+  Widget _buildSeeMoreButton() {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: AppSizes.spacingM),
+      child: Center(
+        child: _isLoadingMore
+            ? SizedBox(
+          height: 40,
+          width: 40,
+          child: CircularProgressIndicator(
+            color: AppColors.primary,
+            strokeWidth: 3,
+          ),
+        )
+            : OutlinedButton.icon(
+          onPressed: _loadMoreTrips,
+          icon: Icon(Icons.expand_more_rounded, size: 20),
+          label: Text(
+            _selectedLanguage == 'en'
+                ? 'See More Trips'
+                : 'Voir plus de trajets',
+            style: AppTypography.body2.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.primary,
+            side: BorderSide(color: AppColors.primary, width: 2),
+            padding: EdgeInsets.symmetric(
+              horizontal: AppSizes.spacingL,
+              vertical: AppSizes.spacingM,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppSizes.radiusM),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Filter chip widget
   Widget _buildFilterChip({
     required String label,
@@ -842,7 +948,7 @@ class _TripsScreenState extends State<TripsScreen> {
     final isSelected = _selectedFilter == value;
 
     return InkWell(
-      onTap: isOffline ? null : () { // ✅ Disable when offline
+      onTap: isOffline ? null : () {
         setState(() {
           _selectedFilter = value;
         });
