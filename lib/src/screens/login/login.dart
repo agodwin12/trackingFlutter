@@ -582,7 +582,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
         children: [
           // Welcome Text
           Text(
-            'Welcome back',
+            'Welcome back !',
             style: AppTypography.h2,
           ),
 
