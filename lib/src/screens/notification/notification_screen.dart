@@ -22,7 +22,7 @@ class AppNotification {
   final String title;
   final String vehicleNickname;
   final String zone;
-  final DateTime time;
+  final DateTime time; // ✅ Already converted to local time
   final bool isRead;
   final String message;
 
@@ -76,12 +76,19 @@ class AppNotification {
       zone = zoneMatch.group(1) ?? zone;
     }
 
+    // ✅ FIXED: Parse UTC time and convert to local time
+    String alertedAtStr = json['alerted_at'] ?? DateTime.now().toIso8601String();
+    DateTime utcTime = DateTime.parse(alertedAtStr);
+    DateTime localTime = utcTime.toLocal(); // ← CONVERT TO LOCAL TIME
+
+    debugPrint('🕐 Time conversion: UTC=$utcTime → Local=$localTime');
+
     return AppNotification(
       id: json['id'] ?? 0,
       type: type,
       vehicleNickname: vehicleNickname,
       zone: zone,
-      time: DateTime.parse(json['alerted_at'] ?? DateTime.now().toIso8601String()),
+      time: localTime, // ← USE LOCAL TIME
       isRead: json['read'] == true || json['read'] == 1,
       message: message,
       title: title,
@@ -129,6 +136,8 @@ class _NotificationScreenState extends State<NotificationScreen>
     super.initState();
     debugPrint('🔔 ========== NOTIFICATIONS SCREEN INITIALIZED ==========');
     debugPrint('🚗 Vehicle ID: ${widget.vehicleId}');
+    debugPrint('🌍 Local timezone: ${DateTime.now().timeZoneName}');
+    debugPrint('🕐 Local time offset: ${DateTime.now().timeZoneOffset}');
 
     _loadLanguagePreference();
     _tabController = TabController(length: 3, vsync: this);
@@ -179,6 +188,8 @@ class _NotificationScreenState extends State<NotificationScreen>
     final zoneName = alertData['safeZoneName'] ?? (_selectedLanguage == 'en' ? 'Unknown Zone' : 'Zone inconnue');
 
     debugPrint('📢 Showing push notification banner');
+
+    // ✅ Use local time for real-time notifications
     setState(() {
       _latestAlert = AppNotification(
         id: alertData['alertId'] ?? 0,
@@ -186,7 +197,7 @@ class _NotificationScreenState extends State<NotificationScreen>
         title: title,
         vehicleNickname: vehicleName,
         zone: zoneName,
-        time: DateTime.now(),
+        time: DateTime.now(), // ← Already local time
         isRead: false,
         message: message,
       );
@@ -233,9 +244,6 @@ class _NotificationScreenState extends State<NotificationScreen>
 
       final response = await _tokenService.makeAuthenticatedRequest(
         request: (token) async {
-          debugPrint('🎫 Access token received (first 20 chars): ${token.substring(0, 20)}...');
-          debugPrint('📍 API URL: $baseUrl/alerts/vehicle/${widget.vehicleId}?page=$_currentPage&limit=$_pageSize');
-
           return await http.get(
             Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}?page=$_currentPage&limit=$_pageSize'),
             headers: {
@@ -257,7 +265,6 @@ class _NotificationScreenState extends State<NotificationScreen>
           final pagination = data['data']['pagination'];
 
           debugPrint('📦 Received ${alertsJson.length} notifications');
-          debugPrint('📊 Pagination: $pagination');
 
           if (mounted) {
             setState(() {
@@ -267,10 +274,8 @@ class _NotificationScreenState extends State<NotificationScreen>
 
               if (loadMore) {
                 _allNotifications.addAll(newNotifications);
-                debugPrint('➕ Added ${newNotifications.length} notifications (Total: ${_allNotifications.length})');
               } else {
                 _allNotifications = newNotifications;
-                debugPrint('🔄 Replaced notifications list (Total: ${_allNotifications.length})');
               }
 
               _readNotifications = _allNotifications
@@ -278,12 +283,8 @@ class _NotificationScreenState extends State<NotificationScreen>
                   .map((n) => n.id)
                   .toSet();
 
-              debugPrint('👁️ Read notifications: ${_readNotifications.length}');
-
               _totalNotifications = pagination['totalAlerts'] ?? 0;
               _hasMoreData = pagination['hasNextPage'] ?? false;
-
-              debugPrint('📈 Total: $_totalNotifications, Has more: $_hasMoreData');
 
               _isLoading = false;
               _isRefreshing = false;
@@ -292,22 +293,12 @@ class _NotificationScreenState extends State<NotificationScreen>
           }
 
           debugPrint('✅ Notifications loaded successfully\n');
-        } else {
-          debugPrint('⚠️ Response success=false or no data');
-          debugPrint('Response body: ${response.body}');
         }
       } else if (response.statusCode == 401) {
-        debugPrint('🔒 ========== UNAUTHORIZED (401) ==========');
-        debugPrint('❌ Token refresh failed - session expired');
-        debugPrint('🔄 User needs to login again');
-
         if (mounted) {
           _showSessionExpiredDialog();
         }
       } else {
-        debugPrint('❌ HTTP Error ${response.statusCode}');
-        debugPrint('Response: ${response.body}');
-
         if (mounted) {
           _showErrorSnackBar(
               _selectedLanguage == 'en'
@@ -317,11 +308,7 @@ class _NotificationScreenState extends State<NotificationScreen>
         }
       }
     } catch (error) {
-      debugPrint('🔥 ========== ERROR FETCHING NOTIFICATIONS ==========');
-      debugPrint('❌ Error type: ${error.runtimeType}');
-      debugPrint('❌ Error message: $error');
-      debugPrint('Stack trace: ${StackTrace.current}');
-
+      debugPrint('🔥 Error fetching notifications: $error');
       if (mounted) {
         _showErrorSnackBar(
             _selectedLanguage == 'en'
@@ -369,19 +356,10 @@ class _NotificationScreenState extends State<NotificationScreen>
         actions: [
           ElevatedButton(
             onPressed: () async {
-              debugPrint('🚪 Logging out user...');
-
-              // Clear all user data
               final prefs = await SharedPreferences.getInstance();
               await prefs.clear();
-
-              debugPrint('✅ User data cleared');
-
               if (mounted) {
-                Navigator.of(context).pushNamedAndRemoveUntil(
-                  '/login',
-                      (route) => false,
-                );
+                Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
               }
             },
             style: ElevatedButton.styleFrom(
@@ -411,9 +389,7 @@ class _NotificationScreenState extends State<NotificationScreen>
           children: [
             Icon(Icons.error_outline_rounded, color: Colors.white, size: 20),
             SizedBox(width: 12),
-            Expanded(
-              child: Text(message, style: TextStyle(color: Colors.white)),
-            ),
+            Expanded(child: Text(message, style: TextStyle(color: Colors.white))),
           ],
         ),
         backgroundColor: AppColors.error,
@@ -427,44 +403,30 @@ class _NotificationScreenState extends State<NotificationScreen>
 
   void _loadMoreNotifications() {
     if (!_hasMoreData || _isLoadingMore) return;
-
-    debugPrint('📄 Loading more notifications (page ${_currentPage + 1})');
     _currentPage++;
     _fetchNotifications(loadMore: true);
   }
 
   Future<void> _handleRefresh() async {
-    debugPrint('🔄 Manual refresh triggered');
     setState(() => _isRefreshing = true);
     await _fetchNotifications();
   }
 
   void _dismissPushNotification() {
-    debugPrint('✖️ Dismissing push notification banner');
-    setState(() {
-      _showPushNotification = false;
-    });
+    setState(() => _showPushNotification = false);
   }
 
   void _navigateToDashboard() {
-    debugPrint('🗺️ Navigating to dashboard');
-    Navigator.pushReplacementNamed(
-      context,
-      '/dashboard',
-      arguments: widget.vehicleId,
-    );
+    Navigator.pushReplacementNamed(context, '/dashboard', arguments: widget.vehicleId);
   }
 
   void _handleEngineAction() {
-    debugPrint('🔧 Engine action triggered');
     _dismissPushNotification();
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppSizes.radiusL),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSizes.radiusL)),
         contentPadding: EdgeInsets.all(AppSizes.spacingL),
         title: Row(
           children: [
@@ -493,10 +455,7 @@ class _NotificationScreenState extends State<NotificationScreen>
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              debugPrint('❌ Engine cut cancelled');
-              Navigator.pop(context);
-            },
+            onPressed: () => Navigator.pop(context),
             child: Text(
               _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
               style: AppTypography.body2.copyWith(
@@ -508,13 +467,9 @@ class _NotificationScreenState extends State<NotificationScreen>
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(context);
-
-              debugPrint('🔒 Cutting engine for vehicle ${widget.vehicleId}...');
-
               try {
                 final response = await _tokenService.makeAuthenticatedRequest(
                   request: (token) async {
-                    debugPrint('🎫 Sending engine command with token');
                     return await http.post(
                       Uri.parse('$baseUrl/gps/issue-command'),
                       headers: {
@@ -532,34 +487,21 @@ class _NotificationScreenState extends State<NotificationScreen>
                   },
                 );
 
-                debugPrint('📬 Engine command response: ${response.statusCode}');
-
-                if (response.statusCode == 200) {
-                  debugPrint('✅ Engine cut successfully');
-
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(_selectedLanguage == 'en'
-                            ? 'Engine cut off successfully'
-                            : 'Moteur coupé avec succès'),
-                        backgroundColor: AppColors.success,
-                      ),
-                    );
-                  }
+                if (response.statusCode == 200 && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(_selectedLanguage == 'en' ? 'Engine cut off successfully' : 'Moteur coupé avec succès'),
+                      backgroundColor: AppColors.success,
+                    ),
+                  );
                 } else {
-                  debugPrint('❌ Engine command failed: ${response.statusCode}');
-                  throw Exception('Failed to cut engine');
+                  throw Exception('Failed');
                 }
               } catch (error) {
-                debugPrint('🔥 Error cutting engine: $error');
-
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text(_selectedLanguage == 'en'
-                          ? 'Failed to cut engine'
-                          : 'Échec de la coupure du moteur'),
+                      content: Text(_selectedLanguage == 'en' ? 'Failed to cut engine' : 'Échec'),
                       backgroundColor: AppColors.error,
                     ),
                   );
@@ -568,17 +510,12 @@ class _NotificationScreenState extends State<NotificationScreen>
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.error,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppSizes.radiusM),
-              ),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSizes.radiusM)),
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             ),
             child: Text(
               _selectedLanguage == 'en' ? 'Cut Engine' : 'Couper le moteur',
-              style: AppTypography.body2.copyWith(
-                color: AppColors.white,
-                fontWeight: FontWeight.w700,
-              ),
+              style: AppTypography.body2.copyWith(color: AppColors.white, fontWeight: FontWeight.w700),
             ),
           ),
         ],
@@ -586,77 +523,44 @@ class _NotificationScreenState extends State<NotificationScreen>
     );
   }
 
-  List<AppNotification> get _unreadNotifications {
-    return _allNotifications
-        .where((n) => !_readNotifications.contains(n.id))
-        .toList();
-  }
-
-  List<AppNotification> get _safeZoneNotifications {
-    return _allNotifications
-        .where((n) => n.type == NotificationType.safeZone)
-        .toList();
-  }
-
-  List<AppNotification> get _geofenceNotifications {
-    return _allNotifications
-        .where((n) => n.type == NotificationType.geofence)
-        .toList();
-  }
+  List<AppNotification> get _unreadNotifications => _allNotifications.where((n) => !_readNotifications.contains(n.id)).toList();
+  List<AppNotification> get _safeZoneNotifications => _allNotifications.where((n) => n.type == NotificationType.safeZone).toList();
+  List<AppNotification> get _geofenceNotifications => _allNotifications.where((n) => n.type == NotificationType.geofence).toList();
 
   Future<void> _markAsRead(int notificationId) async {
-    debugPrint('👁️ Marking notification $notificationId as read');
-
     try {
       final response = await _tokenService.makeAuthenticatedRequest(
         request: (token) async {
           return await http.patch(
             Uri.parse('$baseUrl/alerts/$notificationId/read'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
+            headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
           );
         },
       );
 
-      debugPrint('📬 Mark as read response: ${response.statusCode}');
-
       if (response.statusCode == 200) {
-        debugPrint('✅ Notification marked as read');
         setState(() {
           _readNotifications.add(notificationId);
           _expandedNotificationId = null;
         });
-      } else {
-        debugPrint('❌ Failed to mark as read');
       }
     } catch (error) {
-      debugPrint('🔥 Error marking as read: $error');
+      debugPrint('Error marking as read: $error');
     }
   }
 
   Future<void> _markAllAsRead() async {
-    debugPrint('👁️ Marking ALL notifications as read');
-
     try {
       final response = await _tokenService.makeAuthenticatedRequest(
         request: (token) async {
           return await http.patch(
             Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}/read-all'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
+            headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
           );
         },
       );
 
-      debugPrint('📬 Mark all as read response: ${response.statusCode}');
-
       if (response.statusCode == 200) {
-        debugPrint('✅ All notifications marked as read');
-
         setState(() {
           for (var notification in _allNotifications) {
             _readNotifications.add(notification.id);
@@ -667,21 +571,18 @@ class _NotificationScreenState extends State<NotificationScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(_selectedLanguage == 'en'
-                  ? 'All notifications marked as read'
-                  : 'Toutes les notifications marquées comme lues'),
+              content: Text(_selectedLanguage == 'en' ? 'All notifications marked as read' : 'Toutes marquées comme lues'),
               backgroundColor: AppColors.success,
             ),
           );
         }
-      } else {
-        debugPrint('❌ Failed to mark all as read');
       }
     } catch (error) {
-      debugPrint('🔥 Error marking all as read: $error');
+      debugPrint('Error marking all as read: $error');
     }
   }
 
+  // ✅ FIXED: Use local time for date grouping
   Map<String, List<AppNotification>> _groupNotificationsByDate(List<AppNotification> notifications) {
     final Map<String, List<AppNotification>> grouped = {
       'Today': [],
@@ -691,13 +592,14 @@ class _NotificationScreenState extends State<NotificationScreen>
       'Older': [],
     };
 
-    final now = DateTime.now();
+    final now = DateTime.now(); // ← Local time
     final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(Duration(days: 1));
     final thisWeekStart = today.subtract(Duration(days: now.weekday - 1));
     final thisMonthStart = DateTime(now.year, now.month, 1);
 
     for (var notification in notifications) {
+      // notification.time is already in local time
       final notificationDate = DateTime(
         notification.time.year,
         notification.time.month,
@@ -721,10 +623,11 @@ class _NotificationScreenState extends State<NotificationScreen>
     return grouped;
   }
 
-  String _formatDetailedTime(DateTime time) {
-    final hour = time.hour > 12 ? time.hour - 12 : (time.hour == 0 ? 12 : time.hour);
-    final minute = time.minute.toString().padLeft(2, '0');
-    final period = time.hour >= 12 ? 'PM' : 'AM';
+  // ✅ FIXED: Format local time correctly
+  String _formatDetailedTime(DateTime localTime) {
+    final hour = localTime.hour > 12 ? localTime.hour - 12 : (localTime.hour == 0 ? 12 : localTime.hour);
+    final minute = localTime.minute.toString().padLeft(2, '0');
+    final period = localTime.hour >= 12 ? 'PM' : 'AM';
     return '$hour:$minute $period';
   }
 
@@ -762,10 +665,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                 // Header
                 Container(
                   color: AppColors.white,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: AppSizes.spacingL,
-                    vertical: AppSizes.spacingM,
-                  ),
+                  padding: EdgeInsets.symmetric(horizontal: AppSizes.spacingL, vertical: AppSizes.spacingM),
                   child: Row(
                     children: [
                       IconButton(
@@ -812,17 +712,14 @@ class _NotificationScreenState extends State<NotificationScreen>
                   ),
                 ),
 
-                // 3 Tabs
+                // Tabs
                 Container(
                   color: AppColors.white,
                   child: TabBar(
                     controller: _tabController,
                     labelColor: AppColors.primary,
                     unselectedLabelColor: AppColors.textSecondary,
-                    labelStyle: AppTypography.body1.copyWith(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                    ),
+                    labelStyle: AppTypography.body1.copyWith(fontWeight: FontWeight.w600, fontSize: 12),
                     indicatorColor: AppColors.primary,
                     indicatorWeight: 2,
                     tabs: [
@@ -841,11 +738,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                                 ),
                                 child: Text(
                                   '${_unreadNotifications.length}',
-                                  style: TextStyle(
-                                    color: AppColors.white,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                  style: TextStyle(color: AppColors.white, fontSize: 9, fontWeight: FontWeight.bold),
                                 ),
                               ),
                             ],
@@ -858,12 +751,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                           children: [
                             Icon(Icons.shield_rounded, size: 14),
                             SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                _selectedLanguage == 'en' ? 'Safe' : 'Sûr',
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
+                            Flexible(child: Text(_selectedLanguage == 'en' ? 'Safe' : 'Sûr', overflow: TextOverflow.ellipsis)),
                           ],
                         ),
                       ),
@@ -873,12 +761,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                           children: [
                             Icon(Icons.location_on_rounded, size: 14),
                             SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                _selectedLanguage == 'en' ? 'Geo' : 'Géo',
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
+                            Flexible(child: Text(_selectedLanguage == 'en' ? 'Geo' : 'Géo', overflow: TextOverflow.ellipsis)),
                           ],
                         ),
                       ),
@@ -930,17 +813,9 @@ class _NotificationScreenState extends State<NotificationScreen>
         margin: EdgeInsets.all(AppSizes.spacingM),
         padding: EdgeInsets.all(AppSizes.spacingM),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [AppColors.error, AppColors.error.withOpacity(0.8)],
-          ),
+          gradient: LinearGradient(colors: [AppColors.error, AppColors.error.withOpacity(0.8)]),
           borderRadius: BorderRadius.circular(AppSizes.radiusL),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.error.withOpacity(0.4),
-              blurRadius: 12,
-              offset: Offset(0, 4),
-            ),
-          ],
+          boxShadow: [BoxShadow(color: AppColors.error.withOpacity(0.4), blurRadius: 12, offset: Offset(0, 4))],
         ),
         child: Column(
           children: [
@@ -954,18 +829,11 @@ class _NotificationScreenState extends State<NotificationScreen>
                     children: [
                       Text(
                         _latestAlert!.title,
-                        style: AppTypography.body1.copyWith(
-                          color: AppColors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
+                        style: AppTypography.body1.copyWith(color: AppColors.white, fontWeight: FontWeight.bold, fontSize: 14),
                       ),
                       Text(
                         '${_latestAlert!.vehicleNickname} - ${_latestAlert!.zone}',
-                        style: AppTypography.caption.copyWith(
-                          color: AppColors.white.withOpacity(0.9),
-                          fontSize: 12,
-                        ),
+                        style: AppTypography.caption.copyWith(color: AppColors.white.withOpacity(0.9), fontSize: 12),
                       ),
                     ],
                   ),
@@ -990,9 +858,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.white,
                       padding: EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSizes.radiusM)),
                       elevation: 0,
                     ),
                     child: Row(
@@ -1002,11 +868,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                         SizedBox(width: 6),
                         Text(
                           _selectedLanguage == 'en' ? 'Cut Engine' : 'Couper moteur',
-                          style: TextStyle(
-                            color: AppColors.error,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
+                          style: TextStyle(color: AppColors.error, fontWeight: FontWeight.bold, fontSize: 12),
                         ),
                       ],
                     ),
@@ -1019,17 +881,11 @@ class _NotificationScreenState extends State<NotificationScreen>
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: AppColors.white),
                       padding: EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSizes.radiusM)),
                     ),
                     child: Text(
                       _selectedLanguage == 'en' ? 'View Location' : 'Voir position',
-                      style: TextStyle(
-                        color: AppColors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: AppColors.white, fontWeight: FontWeight.w600, fontSize: 12),
                     ),
                   ),
                 ),
@@ -1041,7 +897,6 @@ class _NotificationScreenState extends State<NotificationScreen>
     );
   }
 
-  // WhatsApp-Style Sticky Headers
   Widget _buildStickyNotificationsList(List<AppNotification> notifications) {
     if (notifications.isEmpty) {
       return RefreshIndicator(
@@ -1055,8 +910,7 @@ class _NotificationScreenState extends State<NotificationScreen>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.notifications_off_outlined,
-                      size: 64, color: AppColors.textSecondary.withOpacity(0.5)),
+                  Icon(Icons.notifications_off_outlined, size: 64, color: AppColors.textSecondary.withOpacity(0.5)),
                   SizedBox(height: AppSizes.spacingL),
                   Text(
                     _selectedLanguage == 'en' ? 'No notifications' : 'Aucune notification',
@@ -1079,16 +933,13 @@ class _NotificationScreenState extends State<NotificationScreen>
         padding: EdgeInsets.zero,
         itemCount: groupedNotifications.length + (_hasMoreData ? 1 : 0),
         itemBuilder: (context, index) {
-          // Load more indicator
+          // Load more button
           if (index == groupedNotifications.length) {
             if (_isLoadingMore) {
               return Center(
                 child: Padding(
                   padding: EdgeInsets.all(AppSizes.spacingL),
-                  child: CircularProgressIndicator(
-                    color: AppColors.primary,
-                    strokeWidth: 2,
-                  ),
+                  child: CircularProgressIndicator(color: AppColors.primary, strokeWidth: 2),
                 ),
               );
             }
@@ -1106,13 +957,8 @@ class _NotificationScreenState extends State<NotificationScreen>
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: AppColors.black,
-                    padding: EdgeInsets.symmetric(
-                      horizontal: AppSizes.spacingL,
-                      vertical: AppSizes.spacingM,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                    ),
+                    padding: EdgeInsets.symmetric(horizontal: AppSizes.spacingL, vertical: AppSizes.spacingM),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSizes.radiusM)),
                     elevation: 0,
                   ),
                 ),
@@ -1126,38 +972,22 @@ class _NotificationScreenState extends State<NotificationScreen>
           return StickyHeader(
             header: Container(
               width: double.infinity,
-              padding: EdgeInsets.symmetric(
-                horizontal: AppSizes.spacingL,
-                vertical: AppSizes.spacingS,
-              ),
+              padding: EdgeInsets.symmetric(horizontal: AppSizes.spacingL, vertical: AppSizes.spacingS),
               decoration: BoxDecoration(
                 color: AppColors.background,
-                border: Border(
-                  bottom: BorderSide(
-                    color: AppColors.border,
-                    width: 0.5,
-                  ),
-                ),
+                border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
               ),
               child: Text(
                 _selectedLanguage == 'en' ? groupKey : _translateGroupKey(groupKey),
-                style: AppTypography.body1.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textSecondary,
-                  fontSize: 13,
-                ),
+                style: AppTypography.body1.copyWith(fontWeight: FontWeight.w700, color: AppColors.textSecondary, fontSize: 13),
               ),
             ),
             content: Column(
               children: groupNotifications.map((notification) {
                 final isRead = _readNotifications.contains(notification.id);
                 final isExpanded = _expandedNotificationId == notification.id.toString();
-
                 return Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: AppSizes.spacingM,
-                    vertical: AppSizes.spacingS,
-                  ),
+                  padding: EdgeInsets.symmetric(horizontal: AppSizes.spacingM, vertical: AppSizes.spacingS),
                   child: _buildNotificationCard(notification, isRead, isExpanded),
                 );
               }).toList(),
@@ -1185,8 +1015,7 @@ class _NotificationScreenState extends State<NotificationScreen>
     }
   }
 
-  Widget _buildNotificationCard(
-      AppNotification notification, bool isRead, bool isExpanded) {
+  Widget _buildNotificationCard(AppNotification notification, bool isRead, bool isExpanded) {
     final color = _getNotificationColor(notification.type);
     final icon = _getNotificationIcon(notification.type);
 
@@ -1194,15 +1023,10 @@ class _NotificationScreenState extends State<NotificationScreen>
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(AppSizes.radiusL),
-        border: Border.all(
-          color: isRead ? AppColors.border : AppColors.error,
-          width: isRead ? 1 : 2,
-        ),
+        border: Border.all(color: isRead ? AppColors.border : AppColors.error, width: isRead ? 1 : 2),
         boxShadow: [
           BoxShadow(
-            color: isRead
-                ? AppColors.black.withOpacity(0.05)
-                : AppColors.error.withOpacity(0.15),
+            color: isRead ? AppColors.black.withOpacity(0.05) : AppColors.error.withOpacity(0.15),
             blurRadius: 8,
             offset: Offset(0, 2),
           ),
@@ -1242,24 +1066,18 @@ class _NotificationScreenState extends State<NotificationScreen>
                       children: [
                         Text(
                           notification.title,
-                          style: AppTypography.body1.copyWith(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
+                          style: AppTypography.body1.copyWith(fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         SizedBox(height: 4),
                         Text(
                           notification.message,
-                          style: AppTypography.body2.copyWith(
-                            color: AppColors.textSecondary,
-                            fontSize: 12,
-                          ),
+                          style: AppTypography.body2.copyWith(color: AppColors.textSecondary, fontSize: 12),
                           maxLines: isExpanded ? null : 2,
                           overflow: isExpanded ? null : TextOverflow.ellipsis,
                         ),
                         SizedBox(height: 6),
                         Text(
-                          _formatDetailedTime(notification.time),
+                          _formatDetailedTime(notification.time), // ← Uses local time
                           style: AppTypography.caption.copyWith(
                             color: AppColors.textSecondary.withOpacity(0.7),
                             fontSize: 11,
@@ -1285,9 +1103,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Icon(
-                        isExpanded
-                            ? Icons.keyboard_arrow_up_rounded
-                            : Icons.keyboard_arrow_down_rounded,
+                        isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
                         color: AppColors.primary,
                         size: 20,
                       ),
@@ -1300,10 +1116,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                       width: 8,
                       height: 8,
                       margin: EdgeInsets.only(left: AppSizes.spacingS),
-                      decoration: BoxDecoration(
-                        color: AppColors.error,
-                        shape: BoxShape.circle,
-                      ),
+                      decoration: BoxDecoration(color: AppColors.error, shape: BoxShape.circle),
                     ),
                 ],
               ),
@@ -1331,42 +1144,30 @@ class _NotificationScreenState extends State<NotificationScreen>
                           backgroundColor: AppColors.error,
                           padding: EdgeInsets.symmetric(vertical: 12),
                           elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                          ),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSizes.radiusM)),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(Icons.lock_rounded, size: 16),
                             SizedBox(width: 6),
-                            Text(
-                              _selectedLanguage == 'en' ? 'Cut Engine' : 'Couper moteur',
-                              style: TextStyle(fontSize: 13),
-                            ),
+                            Text(_selectedLanguage == 'en' ? 'Cut Engine' : 'Couper moteur', style: TextStyle(fontSize: 13)),
                           ],
                         ),
                       ),
                     ),
-                  if (notification.type == NotificationType.safeZone)
-                    SizedBox(width: AppSizes.spacingS),
+                  if (notification.type == NotificationType.safeZone) SizedBox(width: AppSizes.spacingS),
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () => _markAsRead(notification.id),
                       style: OutlinedButton.styleFrom(
                         padding: EdgeInsets.symmetric(vertical: 12),
                         side: BorderSide(color: AppColors.primary),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSizes.radiusM)),
                       ),
                       child: Text(
                         _selectedLanguage == 'en' ? 'Mark Read' : 'Marquer lu',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: TextStyle(fontSize: 13, color: AppColors.primary, fontWeight: FontWeight.w600),
                       ),
                     ),
                   ),
