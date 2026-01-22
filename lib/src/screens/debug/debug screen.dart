@@ -31,10 +31,13 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
   String? _pendingToken;
   bool _isRegistered = false;
   bool _permissionGranted = false;
-  int _countdown = 15; // 15 seconds countdown
+  int _countdown = 20; // Increased to 20 seconds
   Timer? _countdownTimer;
   Map<String, dynamic> _debugInfo = {};
   List<String> _setupSteps = [];
+  bool _isLoading = true;
+  int _retryCount = 0;
+  final int _maxRetries = 5;
 
   @override
   void initState() {
@@ -52,6 +55,10 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
     debugPrint('\n🐛 ========================================');
     debugPrint('🐛 FCM DEBUG SCREEN INITIALIZATION');
     debugPrint('🐛 ========================================');
+
+    // Wait a bit for iOS to receive APNs token
+    debugPrint('⏳ Waiting 3 seconds for iOS to receive APNs token...');
+    await Future.delayed(Duration(seconds: 3));
 
     await _loadDebugInfo();
     _startCountdown();
@@ -83,9 +90,12 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
   }
 
   Future<void> _loadDebugInfo() async {
-    try {
+    setState(() {
+      _isLoading = true;
       _setupSteps.clear();
+    });
 
+    try {
       debugPrint('\n📋 STEP 1: Getting Firebase Messaging instance...');
       final messaging = FirebaseMessaging.instance;
       _addStep('✅ Firebase Messaging instance obtained');
@@ -99,26 +109,53 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
           ? '✅ Notification permission GRANTED'
           : '❌ Notification permission DENIED');
 
-      debugPrint('\n📋 STEP 3: Fetching current FCM token...');
-      _fcmToken = await messaging.getToken();
-      debugPrint('📋 FCM Token: ${_fcmToken ?? "NULL"}');
-      if (_fcmToken != null) {
-        debugPrint('📋 Token length: ${_fcmToken!.length} characters');
-        debugPrint('📋 Token preview: ${_fcmToken!.substring(0, _fcmToken!.length > 30 ? 30 : _fcmToken!.length)}...');
-        _addStep('✅ FCM token received (${_fcmToken!.length} chars)');
-      } else {
-        _addStep('❌ FCM token is NULL');
+      if (Platform.isIOS) {
+        debugPrint('\n📋 STEP 3: Fetching APNs token (iOS only)...');
+        try {
+          _apnsToken = await messaging.getAPNSToken();
+          debugPrint('📋 APNs Token: ${_apnsToken ?? "NULL"}');
+          if (_apnsToken != null) {
+            debugPrint('📋 APNs token length: ${_apnsToken!.length} characters');
+            _addStep('✅ APNs token received (${_apnsToken!.length} chars)');
+          } else {
+            debugPrint('⚠️ APNs token is NULL - will retry...');
+            _addStep('⏳ APNs token not ready yet (retry ${_retryCount + 1}/$_maxRetries)');
+
+            // Retry if token is null and we haven't exceeded max retries
+            if (_retryCount < _maxRetries) {
+              _retryCount++;
+              debugPrint('🔄 Retrying in 2 seconds...');
+              await Future.delayed(Duration(seconds: 2));
+              await _loadDebugInfo();
+              return;
+            } else {
+              _addStep('❌ APNs token still NULL after $_maxRetries retries');
+            }
+          }
+        } catch (e) {
+          debugPrint('❌ Error getting APNs token: $e');
+          _addStep('❌ Error getting APNs token: $e');
+        }
       }
 
-      if (Platform.isIOS) {
-        debugPrint('\n📋 STEP 4: Fetching APNs token (iOS only)...');
-        _apnsToken = await messaging.getAPNSToken();
-        debugPrint('📋 APNs Token: ${_apnsToken ?? "NULL"}');
-        if (_apnsToken != null) {
-          debugPrint('📋 APNs token length: ${_apnsToken!.length} characters');
-          _addStep('✅ APNs token received (${_apnsToken!.length} chars)');
+      debugPrint('\n📋 STEP 4: Fetching current FCM token...');
+      try {
+        _fcmToken = await messaging.getToken();
+        debugPrint('📋 FCM Token: ${_fcmToken ?? "NULL"}');
+        if (_fcmToken != null) {
+          debugPrint('📋 Token length: ${_fcmToken!.length} characters');
+          debugPrint('📋 Token preview: ${_fcmToken!.substring(0, _fcmToken!.length > 30 ? 30 : _fcmToken!.length)}...');
+          _addStep('✅ FCM token received (${_fcmToken!.length} chars)');
         } else {
-          _addStep('⚠️ APNs token is NULL (may still be loading)');
+          _addStep('❌ FCM token is NULL');
+        }
+      } catch (e) {
+        debugPrint('❌ Error getting FCM token: $e');
+        _addStep('❌ Error getting FCM token: $e');
+
+        // If it's the APNs error, add specific step
+        if (e.toString().contains('apns-token-not-set')) {
+          _addStep('❌ APNs token not set - iOS native side needs more time');
         }
       }
 
@@ -129,12 +166,12 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
       debugPrint('📋 Saved FCM token: ${_savedToken ?? "NULL"}');
       _addStep(_savedToken != null
           ? '✅ Token saved locally'
-          : '⚠️ No token saved locally yet');
+          : '⏳ No token saved locally yet');
 
       _pendingToken = prefs.getString('pending_fcm_token');
       debugPrint('📋 Pending FCM token: ${_pendingToken ?? "NULL"}');
       if (_pendingToken != null) {
-        _addStep('⏳ Pending token waiting to be sent to backend');
+        _addStep('⏳ Pending token: ${_pendingToken!.substring(0, 20)}...');
       }
 
       final registeredToken = prefs.getString('registered_fcm_token');
@@ -143,7 +180,7 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
       debugPrint('📋 Token is registered: $_isRegistered');
       _addStep(_isRegistered
           ? '✅ Token registered with backend'
-          : '⚠️ Token NOT registered with backend yet');
+          : '⏳ Token NOT registered with backend yet');
 
       debugPrint('\n📋 STEP 6: Compiling debug information...');
       _debugInfo = {
@@ -157,6 +194,7 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
 
       if (Platform.isIOS) {
         _debugInfo['🍎 APNs Token (iOS)'] = _apnsToken != null ? 'Available ✅' : 'Not available ❌';
+        _debugInfo['🔄 Retry Count'] = '$_retryCount/$_maxRetries';
       }
 
       _debugInfo.addAll({
@@ -166,7 +204,9 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
         '🔄 Tokens Match': (_fcmToken != null && _savedToken != null && _fcmToken == _savedToken) ? 'YES ✅' : 'NO ❌',
       });
 
-      setState(() {});
+      setState(() {
+        _isLoading = false;
+      });
 
       debugPrint('\n✅ ========================================');
       debugPrint('✅ DEBUG INFO LOADED SUCCESSFULLY');
@@ -185,6 +225,7 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
       debugPrint('❌ ========================================\n');
 
       setState(() {
+        _isLoading = false;
         _debugInfo['❌ Error'] = e.toString();
         _addStep('❌ Error occurred: ${e.toString()}');
       });
@@ -252,7 +293,28 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
           ),
         ],
       ),
-      body: SingleChildScrollView(
+      body: _isLoading
+          ? Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: AppColors.primary),
+            SizedBox(height: AppSizes.spacingL),
+            Text(
+              'Loading debug information...',
+              style: AppTypography.body1,
+            ),
+            SizedBox(height: AppSizes.spacingS),
+            Text(
+              'Waiting for iOS APNs token',
+              style: AppTypography.body2.copyWith(
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      )
+          : SingleChildScrollView(
         padding: EdgeInsets.all(AppSizes.spacingL),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -331,6 +393,8 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
                 Text(
                   isHealthy
                       ? 'Notifications configured correctly'
+                      : _apnsToken == null
+                      ? 'Waiting for iOS APNs token...'
                       : 'Some notification features may not work',
                   style: AppTypography.body2.copyWith(
                     color: AppColors.white.withOpacity(0.9),
@@ -575,14 +639,13 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
           height: 50,
           child: OutlinedButton.icon(
             onPressed: () async {
-              debugPrint('🔄 Retrying token registration...');
-              await NotificationService.registerToken();
+              debugPrint('🔄 Manual retry triggered by user...');
+              _retryCount = 0; // Reset retry count
               await _loadDebugInfo();
-              debugPrint('✅ Token registration retry complete');
             },
             icon: Icon(Icons.refresh, color: AppColors.primary),
             label: Text(
-              'Retry Token Registration',
+              'Retry Token Fetch',
               style: AppTypography.button.copyWith(color: AppColors.primary),
             ),
             style: OutlinedButton.styleFrom(

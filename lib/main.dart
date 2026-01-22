@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 // Firebase
 import 'package:firebase_core/firebase_core.dart';
@@ -32,40 +33,180 @@ import 'package:tracking/src/services/connectivity_service.dart';
 import 'package:tracking/src/services/app_lifecycle_service.dart';
 
 /// =====================================================
-///  FCM Service for iOS Token Handling
+///  FCM Service - Handles token lifecycle with listeners
 /// =====================================================
 class FCMService {
   static const platform = MethodChannel('com.proxym.tracking/fcm');
+  static bool _isInitialized = false;
+  static String? _lastProcessedToken;
 
-  // Initialize FCM listener
+  /// Initialize FCM with token listeners
   static Future<void> initialize() async {
-    // Listen for token from iOS
-    platform.setMethodCallHandler((call) async {
-      if (call.method == 'onTokenRefresh') {
-        String token = call.arguments as String;
-        debugPrint('📱 FCM Token received from iOS: $token');
-        await _sendTokenToBackend(token);
-      }
-    });
+    if (_isInitialized) {
+      debugPrint('⚠️ FCM Service already initialized, skipping...');
+      return;
+    }
 
-    debugPrint('✅ FCM Service initialized');
+    try {
+      debugPrint('\n📲 ==========================================');
+      debugPrint('📲 INITIALIZING FCM SERVICE WITH LISTENERS');
+      debugPrint('📲 ==========================================');
+      debugPrint('📲 Platform: ${Platform.isIOS ? "iOS" : "Android"}');
+
+      // ✅ LISTENER 1: iOS Native Method Channel
+      if (Platform.isIOS) {
+        debugPrint('📱 Setting up iOS native method channel listener...');
+        platform.setMethodCallHandler((call) async {
+          if (call.method == 'onTokenRefresh') {
+            String token = call.arguments as String;
+            debugPrint('\n🔔 ==========================================');
+            debugPrint('🔔 TOKEN RECEIVED FROM iOS NATIVE SIDE');
+            debugPrint('🔔 ==========================================');
+            debugPrint('🔔 Token: ${token.substring(0, 30)}...');
+            debugPrint('🔔 Length: ${token.length} characters');
+            debugPrint('🔔 ==========================================\n');
+            await _handleTokenReceived(token, 'iOS Native');
+          }
+        });
+        debugPrint('✅ iOS method channel listener active');
+      }
+
+      // ✅ LISTENER 2: Firebase onTokenRefresh (works for both iOS and Android)
+      debugPrint('🔥 Setting up Firebase token refresh listener...');
+      FirebaseMessaging.instance.onTokenRefresh.listen(
+            (newToken) {
+          debugPrint('\n🔔 ==========================================');
+          debugPrint('🔔 TOKEN REFRESH EVENT FROM FIREBASE');
+          debugPrint('🔔 ==========================================');
+          debugPrint('🔔 Token: ${newToken.substring(0, 30)}...');
+          debugPrint('🔔 Length: ${newToken.length} characters');
+          debugPrint('🔔 ==========================================\n');
+          _handleTokenReceived(newToken, 'Firebase Refresh');
+        },
+        onError: (error) {
+          debugPrint('❌ Token refresh error: $error');
+        },
+      );
+      debugPrint('✅ Firebase token refresh listener active');
+
+      // ✅ OPTIONAL: Try to get initial token (may be null on iOS until APNs arrives)
+      debugPrint('\n📱 Attempting to get initial FCM token...');
+      final messaging = FirebaseMessaging.instance;
+
+      // Check permission status
+      final settings = await messaging.getNotificationSettings();
+      debugPrint('🔔 Permission status: ${settings.authorizationStatus}');
+
+      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+        debugPrint('✅ Notification permission granted');
+
+        try {
+          final token = await messaging.getToken();
+          if (token != null) {
+            debugPrint('\n🎯 ==========================================');
+            debugPrint('🎯 INITIAL TOKEN AVAILABLE IMMEDIATELY');
+            debugPrint('🎯 ==========================================');
+            debugPrint('🎯 Token: ${token.substring(0, 30)}...');
+            debugPrint('🎯 Length: ${token.length} characters');
+            debugPrint('🎯 ==========================================\n');
+            await _handleTokenReceived(token, 'Initial Fetch');
+          } else {
+            debugPrint('⏳ Initial token not ready yet');
+            debugPrint('⏳ This is normal on iOS - APNs token may still be loading');
+            debugPrint('⏳ Token will arrive via listener when ready');
+          }
+        } catch (e) {
+          debugPrint('⚠️ Error getting initial token: $e');
+          if (e.toString().contains('apns-token-not-set')) {
+            debugPrint('⏳ APNs token not set yet (iOS)');
+            debugPrint('⏳ Token will arrive via listener when APNs is ready');
+          }
+        }
+      } else {
+        debugPrint('⚠️ Notification permission not granted: ${settings.authorizationStatus}');
+      }
+
+      _isInitialized = true;
+      debugPrint('\n📲 ==========================================');
+      debugPrint('📲 FCM SERVICE INITIALIZED SUCCESSFULLY');
+      debugPrint('📲 Listeners are now active and waiting for tokens');
+      debugPrint('📲 ==========================================\n');
+
+    } catch (e, stackTrace) {
+      debugPrint('❌ FCM Service initialization error: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+    }
   }
 
-  // Send token to backend
-  static Future<void> _sendTokenToBackend(String fcmToken) async {
+  /// Handle token when it's received from any source
+  static Future<void> _handleTokenReceived(String token, String source) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final userId = prefs.getInt('user_id');
-      final authToken = prefs.getString('auth_token');
-
-      if (userId == null || authToken == null) {
-        debugPrint('⚠️ User not logged in, skipping token send');
-        // Save token locally for later
-        await prefs.setString('pending_fcm_token', fcmToken);
+      // Prevent duplicate processing
+      if (_lastProcessedToken == token) {
+        debugPrint('⚠️ Token already processed, skipping duplicate from $source');
         return;
       }
 
+      debugPrint('\n🔑 ==========================================');
+      debugPrint('🔑 PROCESSING NEW FCM TOKEN');
+      debugPrint('🔑 ==========================================');
+      debugPrint('🔑 Source: $source');
+      debugPrint('🔑 Token: ${token.substring(0, 50)}...');
+      debugPrint('🔑 Full length: ${token.length} characters');
+      debugPrint('🔑 Time: ${DateTime.now()}');
+
+      final prefs = await SharedPreferences.getInstance();
+
+      // Save token locally immediately
+      await prefs.setString('fcm_token', token);
+      debugPrint('💾 Token saved to SharedPreferences');
+
+      // Mark as processed
+      _lastProcessedToken = token;
+
+      // Check if user is logged in
+      final userId = prefs.getInt('user_id');
+      final authToken = prefs.getString('auth_token');
+
+      debugPrint('👤 User ID: ${userId ?? "NOT LOGGED IN"}');
+      debugPrint('🔐 Auth token: ${authToken != null ? "PRESENT" : "NOT PRESENT"}');
+
+      if (userId == null || authToken == null) {
+        debugPrint('\n⏳ ==========================================');
+        debugPrint('⏳ USER NOT LOGGED IN - SAVING AS PENDING');
+        debugPrint('⏳ ==========================================');
+        await prefs.setString('pending_fcm_token', token);
+        debugPrint('💾 Pending token saved');
+        debugPrint('💾 Will send to backend after user logs in');
+        debugPrint('⏳ ==========================================\n');
+        return;
+      }
+
+      // User is logged in - send to backend
+      debugPrint('\n📤 ==========================================');
+      debugPrint('📤 SENDING TOKEN TO BACKEND');
+      debugPrint('📤 ==========================================');
+      await _sendTokenToBackend(token, userId, authToken);
+      debugPrint('📤 ==========================================\n');
+
+      debugPrint('🔑 ==========================================');
+      debugPrint('🔑 TOKEN PROCESSING COMPLETE');
+      debugPrint('🔑 ==========================================\n');
+
+    } catch (e, stackTrace) {
+      debugPrint('❌ Error handling token: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+    }
+  }
+
+  /// Send token to backend
+  static Future<void> _sendTokenToBackend(String fcmToken, int userId, String authToken) async {
+    try {
       final baseUrl = EnvConfig.baseUrl;
+      debugPrint('📡 Backend URL: $baseUrl/users/fcm-token');
+      debugPrint('📡 User ID: $userId');
+      debugPrint('📡 Device type: ${Platform.isIOS ? "ios" : "android"}');
+
       final response = await http.post(
         Uri.parse('$baseUrl/users/fcm-token'),
         headers: {
@@ -75,38 +216,78 @@ class FCMService {
         body: jsonEncode({
           'user_id': userId,
           'fcm_token': fcmToken,
-          'device_type': 'ios',
+          'device_type': Platform.isIOS ? 'ios' : 'android',
         }),
-      );
+      ).timeout(Duration(seconds: 10));
+
+      debugPrint('📡 Response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
-        debugPrint('✅ FCM token sent to backend successfully');
-        await prefs.setString('fcm_token', fcmToken);
-        // Remove pending token
+        debugPrint('\n✅ ==========================================');
+        debugPrint('✅ TOKEN SUCCESSFULLY SENT TO BACKEND');
+        debugPrint('✅ ==========================================');
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('registered_fcm_token', fcmToken);
         await prefs.remove('pending_fcm_token');
+        debugPrint('✅ Token marked as registered');
+        debugPrint('✅ Pending token removed');
+        debugPrint('✅ ==========================================\n');
       } else {
-        debugPrint('❌ Failed to send FCM token: ${response.statusCode}');
+        debugPrint('\n❌ ==========================================');
+        debugPrint('❌ FAILED TO SEND TOKEN TO BACKEND');
+        debugPrint('❌ ==========================================');
+        debugPrint('❌ Status code: ${response.statusCode}');
+        debugPrint('❌ Response body: ${response.body}');
+        debugPrint('❌ ==========================================\n');
+
         // Save as pending for retry
+        final prefs = await SharedPreferences.getInstance();
         await prefs.setString('pending_fcm_token', fcmToken);
+        debugPrint('💾 Saved as pending token for retry');
       }
-    } catch (e) {
-      debugPrint('❌ Error sending FCM token: $e');
-      // Save token locally for retry
+    } catch (e, stackTrace) {
+      debugPrint('\n❌ ==========================================');
+      debugPrint('❌ ERROR SENDING TOKEN TO BACKEND');
+      debugPrint('❌ ==========================================');
+      debugPrint('❌ Error: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+      debugPrint('❌ ==========================================\n');
+
+      // Save as pending for retry
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('pending_fcm_token', fcmToken);
+      debugPrint('💾 Saved as pending token for retry');
     }
   }
 
-  // Retry sending pending token (call after login)
+  /// Retry sending pending token (call after login)
   static Future<void> retryPendingToken() async {
     try {
+      debugPrint('\n🔄 ==========================================');
+      debugPrint('🔄 CHECKING FOR PENDING TOKEN');
+      debugPrint('🔄 ==========================================');
+
       final prefs = await SharedPreferences.getInstance();
       final pendingToken = prefs.getString('pending_fcm_token');
 
       if (pendingToken != null) {
-        debugPrint('🔄 Retrying pending FCM token...');
-        await _sendTokenToBackend(pendingToken);
+        debugPrint('🔄 Pending token found: ${pendingToken.substring(0, 30)}...');
+        debugPrint('🔄 Retrying send to backend...');
+
+        final userId = prefs.getInt('user_id');
+        final authToken = prefs.getString('auth_token');
+
+        if (userId != null && authToken != null) {
+          await _sendTokenToBackend(pendingToken, userId, authToken);
+          debugPrint('✅ Pending token retry complete');
+        } else {
+          debugPrint('⚠️ User credentials not available for retry');
+        }
+      } else {
+        debugPrint('ℹ️ No pending token to retry');
       }
+
+      debugPrint('🔄 ==========================================\n');
     } catch (e) {
       debugPrint('❌ Error retrying pending token: $e');
     }
@@ -115,15 +296,13 @@ class FCMService {
 
 /// =====================================================
 ///  Firebase Background Notification Handler
-/// Must be top-level function (not inside a class)
 /// =====================================================
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     await Firebase.initializeApp();
-    debugPrint("📩 Background message received: ${message.notification?.title}");
+    debugPrint("📩 Background message: ${message.notification?.title}");
 
-    // Show local notification for background messages
     if (message.notification != null) {
       await NotificationService.showNotification(
         title: message.notification!.title ?? 'Notification',
@@ -132,7 +311,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       );
     }
   } catch (e) {
-    debugPrint("⚠️ Background message handler error: $e");
+    debugPrint("⚠️ Background handler error: $e");
   }
 }
 
@@ -143,69 +322,63 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    debugPrint('🚀 ========== APP INITIALIZATION START ==========');
+    debugPrint('\n🚀 ==========================================');
+    debugPrint('🚀 APP INITIALIZATION START');
+    debugPrint('🚀 ==========================================');
+    debugPrint('🚀 Time: ${DateTime.now()}');
+    debugPrint('🚀 Platform: ${Platform.isIOS ? "iOS" : "Android"}');
 
-    // ✅ Step 1: Load environment variables
-    debugPrint('📂 Loading environment variables...');
+    // Step 1: Load environment
+    debugPrint('\n📂 STEP 1: Loading environment variables...');
     await dotenv.load(fileName: ".env");
     await EnvConfig.load();
-
     if (!EnvConfig.validate()) {
-      debugPrint("⚠️ Warning: Some environment variables are missing!");
+      debugPrint("⚠️ Warning: Some environment variables missing!");
     }
-
     EnvConfig.printConfig();
     debugPrint('✅ Environment configuration loaded');
 
-    // ✅ Step 2: Initialize Firebase
-    debugPrint('🔥 Initializing Firebase...');
+    // Step 2: Initialize Firebase
+    debugPrint('\n🔥 STEP 2: Initializing Firebase...');
     try {
       await Firebase.initializeApp();
-      debugPrint('✅ Firebase initialized successfully');
-
-      // Set up background message handler
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-      debugPrint('✅ Firebase background handler registered');
-    } catch (firebaseError) {
-      debugPrint('⚠️ Firebase initialization failed: $firebaseError');
-      debugPrint('ℹ️ App will continue without Firebase push notifications');
+      debugPrint('✅ Firebase initialized successfully');
+    } catch (e) {
+      debugPrint('⚠️ Firebase initialization error: $e');
     }
 
-    // ✅ Step 3: Initialize FCM Service (iOS token handling)
-    debugPrint('📲 Initializing FCM service for iOS...');
-    try {
-      await FCMService.initialize();
-      debugPrint('✅ FCM service initialized');
-    } catch (fcmError) {
-      debugPrint('⚠️ FCM service initialization failed: $fcmError');
-    }
+    // Step 3: Initialize FCM Service with listeners
+    debugPrint('\n📲 STEP 3: Initializing FCM Service...');
+    await FCMService.initialize();
 
-    // ✅ Step 4: Initialize Notification Service
-    debugPrint('🔔 Initializing notification service...');
+    // Step 4: Initialize Notification Service
+    debugPrint('\n🔔 STEP 4: Initializing Notification Service...');
     await NotificationService.initialize();
     debugPrint('✅ Notification service initialized');
 
-    // ✅ Step 5: Initialize Connectivity Service
-    debugPrint('🌐 Initializing connectivity service...');
+    // Step 5: Initialize Connectivity
+    debugPrint('\n🌐 STEP 5: Initializing Connectivity Service...');
     await ConnectivityService().initialize();
     debugPrint('✅ Connectivity service initialized');
 
-    // ✅ Step 6: Initialize App Lifecycle Service
-    debugPrint('🔄 Initializing lifecycle service...');
+    // Step 6: Initialize Lifecycle
+    debugPrint('\n🔄 STEP 6: Initializing App Lifecycle Service...');
     AppLifecycleService().initialize();
     debugPrint('✅ Lifecycle service initialized');
 
-    debugPrint('🚀 ========== APP INITIALIZATION COMPLETE ==========\n');
+    debugPrint('\n🚀 ==========================================');
+    debugPrint('🚀 APP INITIALIZATION COMPLETE');
+    debugPrint('🚀 ==========================================\n');
 
-    // ✅ Step 7: Launch app with Splash Screen
     runApp(const MyApp());
-  } catch (error) {
-    debugPrint('❌ ========== FATAL INITIALIZATION ERROR ==========');
+  } catch (error, stackTrace) {
+    debugPrint('\n❌ ==========================================');
+    debugPrint('❌ FATAL INITIALIZATION ERROR');
+    debugPrint('❌ ==========================================');
     debugPrint('❌ Error: $error');
-    debugPrint('❌ App may not function correctly');
-    debugPrint('❌ ================================================\n');
-
-    // Run app anyway
+    debugPrint('❌ Stack trace: $stackTrace');
+    debugPrint('❌ ==========================================\n');
     runApp(const MyApp());
   }
 }
@@ -226,35 +399,27 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    // ✅ Register lifecycle observer
     WidgetsBinding.instance.addObserver(this);
     debugPrint('✅ App lifecycle observer registered');
   }
 
   @override
   void dispose() {
-    // ✅ Unregister lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
     debugPrint('🗑️ App lifecycle observer removed');
     super.dispose();
   }
 
-  /// =====================================================
-  /// 🔄 App Lifecycle Management (PIN Lock on Resume)
-  /// =====================================================
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
-    debugPrint('📱 App lifecycle state changed: $state');
+    debugPrint('📱 App lifecycle: $state');
 
-    // ✅ Only check on RESUMED (when coming back to app)
     if (state == AppLifecycleState.resumed) {
-      debugPrint('🔓 App resumed - checking if PIN required...');
+      debugPrint('🔓 App resumed - checking PIN...');
 
-      // Check if enough time has passed to require PIN
       final shouldLock = await AppLifecycleService().shouldRequirePin();
 
       if (shouldLock) {
-        // Check if user has PIN set
         final hasPinSet = await _pinService.hasPinSet();
 
         if (hasPinSet) {
@@ -263,21 +428,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
           if (vehicleId != null) {
             debugPrint('🔐 Showing PIN screen...');
-
-            // Show PIN screen
             NotificationService.navigatorKey.currentState?.pushNamedAndRemoveUntil(
               '/pin-entry',
                   (route) => false,
               arguments: vehicleId,
             );
-          } else {
-            debugPrint('⚠️ No vehicle ID stored');
           }
-        } else {
-          debugPrint('ℹ️ No PIN set - user can continue');
         }
-      } else {
-        debugPrint('✅ PIN not required - user returned quickly');
       }
     }
   }
@@ -287,15 +444,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     return MaterialApp(
       title: 'PROXYM TRACKING',
       debugShowCheckedModeBanner: false,
-
-      // ✅ CRITICAL: Use NotificationService's navigator key for notification navigation
       navigatorKey: NotificationService.navigatorKey,
-
-      // ✅ Material 3 Theme with PROXYM Blue
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Color(0xFF3B82F6), // PROXYM blue
+          seedColor: Color(0xFF3B82F6),
           brightness: Brightness.light,
         ),
         appBarTheme: AppBarTheme(
@@ -304,20 +457,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           elevation: 0,
         ),
       ),
-
-      // ✅ Start with Splash Screen
       home: const SplashScreen(),
-
-      /// =====================================================
-      /// 🛣️ Route Management
-      /// =====================================================
       onGenerateRoute: (settings) {
         debugPrint('📍 Navigating to: ${settings.name}');
 
         switch (settings.name) {
-        // ============================================
-        // Splash & Authentication Routes
-        // ============================================
           case '/splash':
             return MaterialPageRoute(
               settings: settings,
@@ -336,9 +480,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               builder: (_) => OnboardingScreen(),
             );
 
-        // ============================================
-        // Main App Routes
-        // ============================================
           case '/dashboard':
             final vehicleId = settings.arguments as int?;
             if (vehicleId == null) {
@@ -352,7 +493,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           case '/profile':
             final vehicleId = settings.arguments as int?;
             if (vehicleId == null) {
-              return _errorRoute("❌ Missing vehicleId for Profile Screen");
+              return _errorRoute("❌ Missing vehicleId for Profile");
             }
             return MaterialPageRoute(
               settings: settings,
@@ -362,7 +503,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           case '/change-password':
             final args = settings.arguments as Map<String, dynamic>?;
             if (args == null || args['phone'] == null || args['userId'] == null) {
-              return _errorRoute("❌ Missing phone or userId for Change Password");
+              return _errorRoute("❌ Missing args for Change Password");
             }
             return MaterialPageRoute(
               settings: settings,
@@ -375,7 +516,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           case '/settings':
             final vehicleId = settings.arguments as int?;
             if (vehicleId == null) {
-              return _errorRoute("❌ Missing vehicleId for Settings Screen");
+              return _errorRoute("❌ Missing vehicleId for Settings");
             }
             return MaterialPageRoute(
               settings: settings,
@@ -388,13 +529,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               builder: (_) => ContactScreen(),
             );
 
-        // ============================================
-        // Tracking & Map Routes
-        // ============================================
           case '/track':
             final vehicleId = settings.arguments as int?;
             if (vehicleId == null) {
-              return _errorRoute("❌ Missing vehicleId for Tracking Screen");
+              return _errorRoute("❌ Missing vehicleId for Tracking");
             }
             return MaterialPageRoute(
               settings: settings,
@@ -404,7 +542,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           case '/trip-map':
             final args = settings.arguments as Map<String, dynamic>?;
             if (args == null || args['tripId'] == null || args['vehicleId'] == null) {
-              return _errorRoute("❌ Missing tripId or vehicleId for Trip Map");
+              return _errorRoute("❌ Missing args for Trip Map");
             }
             return MaterialPageRoute(
               settings: settings,
@@ -414,38 +552,27 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               ),
             );
 
-        // ============================================
-        // Trip Routes
-        // ============================================
           case '/trips':
             final vehicleId = settings.arguments as int?;
             if (vehicleId == null) {
-              return _errorRoute("❌ Missing vehicleId for Trips Screen");
+              return _errorRoute("❌ Missing vehicleId for Trips");
             }
             return MaterialPageRoute(
               settings: settings,
               builder: (_) => TripsScreen(vehicleId: vehicleId),
             );
 
-        // ============================================
-        // Notification Routes
-        // ============================================
           case '/notifications':
             final args = settings.arguments as Map<String, dynamic>?;
             final int? vehicleId = args?['vehicleId'];
-
             if (vehicleId == null) {
-              return _errorRoute("❌ Missing vehicleId for Notification Screen");
+              return _errorRoute("❌ Missing vehicleId for Notifications");
             }
-
             return MaterialPageRoute(
               settings: settings,
               builder: (_) => NotificationScreen(vehicleId: vehicleId),
             );
 
-        // ============================================
-        // PIN Lock Screen Route
-        // ============================================
           case '/pin-entry':
             final vehicleId = settings.arguments as int?;
             if (vehicleId == null) {
@@ -456,9 +583,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               builder: (_) => PinEntryScreen(vehicleId: vehicleId),
             );
 
-        // ============================================
-        // Error Route (Unknown Route)
-        // ============================================
           default:
             return _errorRoute("❌ Route not found: ${settings.name}");
         }
@@ -466,7 +590,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     );
   }
 
-  /// ✅ Helper method for error pages
   MaterialPageRoute _errorRoute(String message) {
     debugPrint(message);
     return MaterialPageRoute(
@@ -483,34 +606,21 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(
-                  Icons.error_outline,
-                  size: 64,
-                  color: Colors.red,
-                ),
+                Icon(Icons.error_outline, size: 64, color: Colors.red),
                 SizedBox(height: 24),
                 Text(
                   'Navigation Error',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.red,
-                  ),
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.red),
                 ),
                 SizedBox(height: 16),
                 Text(
                   message,
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.black87,
-                  ),
+                  style: TextStyle(fontSize: 16, color: Colors.black87),
                   textAlign: TextAlign.center,
                 ),
                 SizedBox(height: 32),
                 ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pushReplacementNamed('/splash');
-                  },
+                  onPressed: () => Navigator.of(context).pushReplacementNamed('/splash'),
                   icon: Icon(Icons.refresh),
                   label: Text('Restart App'),
                   style: ElevatedButton.styleFrom(

@@ -117,6 +117,13 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
     final Uri url = Uri.parse("$baseUrl/auth/login");
 
     try {
+      debugPrint('\n🔐 ==========================================');
+      debugPrint('🔐 LOGIN ATTEMPT STARTED');
+      debugPrint('🔐 ==========================================');
+      debugPrint('🔐 Phone: $phoneWithCountryCode');
+      debugPrint('🔐 Remember me: $_rememberMe');
+      debugPrint('🔐 Backend URL: $url');
+
       final response = await http.post(
         url,
         headers: {"Content-Type": "application/json"},
@@ -129,37 +136,61 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
 
       final responseData = jsonDecode(response.body);
 
+      debugPrint('🔐 Response status: ${response.statusCode}');
+
       if (response.statusCode == 200) {
+        debugPrint('✅ ==========================================');
+        debugPrint('✅ LOGIN SUCCESSFUL');
+        debugPrint('✅ ==========================================');
+
         SharedPreferences prefs = await SharedPreferences.getInstance();
 
         // ✅ Save all user data
         await prefs.setString("accessToken", responseData["accessToken"]);
+        await prefs.setString("auth_token", responseData["accessToken"]); // Also save as auth_token for consistency
         await prefs.setString("user", jsonEncode(responseData["user"]));
+        debugPrint('💾 Access token saved');
+        debugPrint('💾 User data saved');
 
-        // ✅ Save refresh token from response
+        // ✅ Save refresh token
         if (responseData["refreshToken"] != null) {
           await prefs.setString("refreshToken", responseData["refreshToken"]);
-          debugPrint('✅ Saved refresh token');
+          debugPrint('💾 Refresh token saved');
         }
 
-        // ✅ Save user_id separately for PIN service
+        // ✅ Save user_id separately for PIN service and FCM
         await prefs.setInt("user_id", responseData["user"]["id"]);
-        debugPrint('✅ Login successful - Saved user_id: ${responseData["user"]["id"]}');
+        debugPrint('💾 User ID saved: ${responseData["user"]["id"]}');
 
-        // ✅ Register notification token
-        await NotificationService.registerToken();
+        // ✅ Register notification token with backend
+        debugPrint('\n📲 ==========================================');
+        debugPrint('📲 REGISTERING NOTIFICATION TOKEN');
+        debugPrint('📲 ==========================================');
+        try {
+          await NotificationService.registerToken();
+          debugPrint('✅ Notification token registration completed');
+        } catch (notifError) {
+          debugPrint('⚠️ Notification registration error: $notifError');
+          debugPrint('⚠️ Continuing with login...');
+        }
+        debugPrint('📲 ==========================================\n');
 
-        // 🆕 CRITICAL: Retry pending FCM token (iOS)
+        // 🎯 CRITICAL: Retry pending FCM token (iOS)
+        debugPrint('\n🔄 ==========================================');
+        debugPrint('🔄 RETRYING PENDING FCM TOKEN');
+        debugPrint('🔄 ==========================================');
         try {
           await FCMService.retryPendingToken();
-          debugPrint('✅ FCM token retry completed');
+          debugPrint('✅ FCM token retry completed successfully');
         } catch (fcmError) {
           debugPrint('⚠️ FCM token retry failed: $fcmError');
-          // Don't block login if FCM fails
+          debugPrint('⚠️ This is non-blocking - continuing with login');
         }
+        debugPrint('🔄 ==========================================\n');
 
         // ✅ Check if user needs to change password (first login)
         bool isFirstLogin = responseData["isFirstLogin"] ?? false;
+        debugPrint('🔐 First login: $isFirstLogin');
 
         setState(() {
           _isLoading = false;
@@ -168,7 +199,11 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
         if (mounted) {
           // ✅ If first login, navigate to Reset Password screen
           if (isFirstLogin) {
-            debugPrint('🔐 First login detected - navigating to password reset');
+            debugPrint('\n🔑 ==========================================');
+            debugPrint('🔑 FIRST LOGIN DETECTED');
+            debugPrint('🔑 Navigating to password reset screen...');
+            debugPrint('🔑 ==========================================\n');
+
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
@@ -181,21 +216,40 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
             return;
           }
 
-          // ✅ Otherwise, fetch vehicles and navigate to debug screen then dashboard
+          // ✅ Otherwise, fetch vehicles and navigate to debug screen
           int userId = responseData["user"]["id"];
+
+          debugPrint('\n🚗 ==========================================');
+          debugPrint('🚗 FETCHING USER VEHICLES');
+          debugPrint('🚗 ==========================================');
+          debugPrint('🚗 User ID: $userId');
 
           final vehiclesResponse = await http.get(
             Uri.parse("$baseUrl/voitures/user/$userId"),
           );
 
+          debugPrint('🚗 Response status: ${vehiclesResponse.statusCode}');
+
           if (vehiclesResponse.statusCode == 200) {
             final vehiclesData = jsonDecode(vehiclesResponse.body);
             List vehicles = vehiclesData["vehicles"];
 
+            debugPrint('✅ Found ${vehicles.length} vehicle(s)');
+
             if (vehicles.isNotEmpty) {
               int firstVehicleId = vehicles[0]["id"];
 
-              debugPrint('✅ Navigating to FCM debug screen with vehicle ID: $firstVehicleId');
+              // Save current vehicle ID
+              await prefs.setInt('current_vehicle_id', firstVehicleId);
+              debugPrint('💾 Current vehicle ID saved: $firstVehicleId');
+
+              debugPrint('\n🐛 ==========================================');
+              debugPrint('🐛 NAVIGATING TO DEBUG SCREEN');
+              debugPrint('🐛 ==========================================');
+              debugPrint('🐛 Vehicle ID: $firstVehicleId');
+              debugPrint('🐛 User ID: $userId');
+              debugPrint('🐛 This screen will auto-redirect to dashboard');
+              debugPrint('🐛 ==========================================\n');
 
               // ✅ Navigate to FCM Debug Screen (will auto-redirect to dashboard)
               Navigator.pushReplacement(
@@ -208,14 +262,26 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
                 ),
               );
             } else {
+              debugPrint('❌ No vehicles found for this account');
               _showErrorSnackbar("No vehicles found for this account");
             }
+          } else {
+            debugPrint('❌ Failed to fetch vehicles: ${vehiclesResponse.statusCode}');
+            debugPrint('❌ Response: ${vehiclesResponse.body}');
+            _showErrorSnackbar("Failed to load vehicles. Please try again.");
           }
         }
       } else {
         setState(() {
           _isLoading = false;
         });
+
+        debugPrint('\n❌ ==========================================');
+        debugPrint('❌ LOGIN FAILED');
+        debugPrint('❌ ==========================================');
+        debugPrint('❌ Status code: ${response.statusCode}');
+        debugPrint('❌ Response body: ${response.body}');
+        debugPrint('❌ ==========================================\n');
 
         // ✅ IMPROVED ERROR HANDLING - Show backend validation errors
         String errorMessage = "Login failed";
@@ -233,12 +299,19 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
 
         _showErrorSnackbar(errorMessage);
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       setState(() {
         _isLoading = false;
       });
+
+      debugPrint('\n❌ ==========================================');
+      debugPrint('❌ LOGIN EXCEPTION');
+      debugPrint('❌ ==========================================');
+      debugPrint('❌ Error: $error');
+      debugPrint('❌ Stack trace: $stackTrace');
+      debugPrint('❌ ==========================================\n');
+
       _showErrorSnackbar("Connection error. Please try again.");
-      debugPrint("❌ Login error: $error");
     }
   }
 
