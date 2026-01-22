@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'dart:io' show Platform;
 
 import '../../core/utility/app_theme.dart';
 import '../../services/notification_service.dart';
@@ -27,17 +28,18 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
   String? _fcmToken;
   String? _savedToken;
   String? _apnsToken;
+  String? _pendingToken;
   bool _isRegistered = false;
   bool _permissionGranted = false;
-  int _countdown = 10; // 10 seconds countdown
+  int _countdown = 15; // 15 seconds countdown
   Timer? _countdownTimer;
   Map<String, dynamic> _debugInfo = {};
+  List<String> _setupSteps = [];
 
   @override
   void initState() {
     super.initState();
-    _loadDebugInfo();
-    _startCountdown();
+    _initializeDebug();
   }
 
   @override
@@ -46,7 +48,17 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
     super.dispose();
   }
 
+  Future<void> _initializeDebug() async {
+    debugPrint('\n🐛 ========================================');
+    debugPrint('🐛 FCM DEBUG SCREEN INITIALIZATION');
+    debugPrint('🐛 ========================================');
+
+    await _loadDebugInfo();
+    _startCountdown();
+  }
+
   void _startCountdown() {
+    debugPrint('⏱️ Starting ${_countdown}s countdown to dashboard...');
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_countdown > 0) {
         setState(() {
@@ -54,12 +66,14 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
         });
       } else {
         timer.cancel();
+        debugPrint('⏱️ Countdown finished - navigating to dashboard');
         _navigateToDashboard();
       }
     });
   }
 
   void _navigateToDashboard() {
+    debugPrint('🚗 Navigating to dashboard with vehicleId: ${widget.vehicleId}');
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
@@ -70,68 +84,133 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
 
   Future<void> _loadDebugInfo() async {
     try {
-      // Get FCM instance
-      final messaging = FirebaseMessaging.instance;
+      _setupSteps.clear();
 
-      // Check notification permission
+      debugPrint('\n📋 STEP 1: Getting Firebase Messaging instance...');
+      final messaging = FirebaseMessaging.instance;
+      _addStep('✅ Firebase Messaging instance obtained');
+
+      debugPrint('📋 STEP 2: Checking notification permission...');
       final settings = await messaging.getNotificationSettings();
       _permissionGranted = settings.authorizationStatus == AuthorizationStatus.authorized;
+      debugPrint('📋 Permission status: ${settings.authorizationStatus}');
+      debugPrint('📋 Permission granted: $_permissionGranted');
+      _addStep(_permissionGranted
+          ? '✅ Notification permission GRANTED'
+          : '❌ Notification permission DENIED');
 
-      // Get current FCM token
+      debugPrint('\n📋 STEP 3: Fetching current FCM token...');
       _fcmToken = await messaging.getToken();
+      debugPrint('📋 FCM Token: ${_fcmToken ?? "NULL"}');
+      if (_fcmToken != null) {
+        debugPrint('📋 Token length: ${_fcmToken!.length} characters');
+        debugPrint('📋 Token preview: ${_fcmToken!.substring(0, _fcmToken!.length > 30 ? 30 : _fcmToken!.length)}...');
+        _addStep('✅ FCM token received (${_fcmToken!.length} chars)');
+      } else {
+        _addStep('❌ FCM token is NULL');
+      }
 
-      // Get APNS token (iOS only)
-      _apnsToken = await messaging.getAPNSToken();
+      if (Platform.isIOS) {
+        debugPrint('\n📋 STEP 4: Fetching APNs token (iOS only)...');
+        _apnsToken = await messaging.getAPNSToken();
+        debugPrint('📋 APNs Token: ${_apnsToken ?? "NULL"}');
+        if (_apnsToken != null) {
+          debugPrint('📋 APNs token length: ${_apnsToken!.length} characters');
+          _addStep('✅ APNs token received (${_apnsToken!.length} chars)');
+        } else {
+          _addStep('⚠️ APNs token is NULL (may still be loading)');
+        }
+      }
 
-      // Get saved token from SharedPreferences
+      debugPrint('\n📋 STEP 5: Reading saved tokens from SharedPreferences...');
       final prefs = await SharedPreferences.getInstance();
+
       _savedToken = prefs.getString('fcm_token');
+      debugPrint('📋 Saved FCM token: ${_savedToken ?? "NULL"}');
+      _addStep(_savedToken != null
+          ? '✅ Token saved locally'
+          : '⚠️ No token saved locally yet');
 
-      // Check if token was registered with backend
+      _pendingToken = prefs.getString('pending_fcm_token');
+      debugPrint('📋 Pending FCM token: ${_pendingToken ?? "NULL"}');
+      if (_pendingToken != null) {
+        _addStep('⏳ Pending token waiting to be sent to backend');
+      }
+
       final registeredToken = prefs.getString('registered_fcm_token');
+      debugPrint('📋 Registered FCM token: ${registeredToken ?? "NULL"}');
       _isRegistered = registeredToken != null && registeredToken == _fcmToken;
+      debugPrint('📋 Token is registered: $_isRegistered');
+      _addStep(_isRegistered
+          ? '✅ Token registered with backend'
+          : '⚠️ Token NOT registered with backend yet');
 
-      // Gather all debug info
+      debugPrint('\n📋 STEP 6: Compiling debug information...');
       _debugInfo = {
-        'User ID': widget.userId,
-        'Vehicle ID': widget.vehicleId,
-        'Permission Status': settings.authorizationStatus.toString(),
-        'Permission Granted': _permissionGranted ? 'YES ✅' : 'NO ❌',
-        'FCM Token Available': _fcmToken != null ? 'YES ✅' : 'NO ❌',
-        'APNS Token (iOS)': _apnsToken ?? 'Not available',
-        'Token Saved Locally': _savedToken != null ? 'YES ✅' : 'NO ❌',
-        'Token Registered': _isRegistered ? 'YES ✅' : 'NO ❌',
-        'Tokens Match': (_fcmToken != null && _savedToken != null && _fcmToken == _savedToken) ? 'YES ✅' : 'NO ❌',
+        '👤 User ID': widget.userId.toString(),
+        '🚗 Vehicle ID': widget.vehicleId.toString(),
+        '📱 Platform': Platform.isIOS ? 'iOS' : (Platform.isAndroid ? 'Android' : 'Unknown'),
+        '🔔 Permission Status': settings.authorizationStatus.toString().split('.').last,
+        '✅ Permission Granted': _permissionGranted ? 'YES ✅' : 'NO ❌',
+        '🔑 FCM Token Available': _fcmToken != null ? 'YES ✅' : 'NO ❌',
       };
+
+      if (Platform.isIOS) {
+        _debugInfo['🍎 APNs Token (iOS)'] = _apnsToken != null ? 'Available ✅' : 'Not available ❌';
+      }
+
+      _debugInfo.addAll({
+        '💾 Token Saved Locally': _savedToken != null ? 'YES ✅' : 'NO ❌',
+        '⏳ Pending Token': _pendingToken != null ? 'YES ⚠️' : 'NO ✅',
+        '📡 Token Registered': _isRegistered ? 'YES ✅' : 'NO ❌',
+        '🔄 Tokens Match': (_fcmToken != null && _savedToken != null && _fcmToken == _savedToken) ? 'YES ✅' : 'NO ❌',
+      });
 
       setState(() {});
 
-      debugPrint('\n========== FCM DEBUG INFO ==========');
-      debugPrint('📱 Platform: ${Theme.of(context).platform}');
-      debugPrint('👤 User ID: ${widget.userId}');
-      debugPrint('🚗 Vehicle ID: ${widget.vehicleId}');
-      debugPrint('🔔 Permission: ${settings.authorizationStatus}');
-      debugPrint('✅ Permission Granted: $_permissionGranted');
-      debugPrint('🔑 FCM Token: ${_fcmToken ?? "NULL"}');
-      debugPrint('🍎 APNS Token: ${_apnsToken ?? "NULL"}');
-      debugPrint('💾 Saved Token: ${_savedToken ?? "NULL"}');
-      debugPrint('📡 Registered: $_isRegistered');
-      debugPrint('====================================\n');
+      debugPrint('\n✅ ========================================');
+      debugPrint('✅ DEBUG INFO LOADED SUCCESSFULLY');
+      debugPrint('✅ ========================================');
+      _debugInfo.forEach((key, value) {
+        debugPrint('$key: $value');
+      });
+      debugPrint('✅ ========================================\n');
 
-    } catch (e) {
-      debugPrint('❌ Error loading debug info: $e');
+    } catch (e, stackTrace) {
+      debugPrint('❌ ========================================');
+      debugPrint('❌ ERROR LOADING DEBUG INFO');
+      debugPrint('❌ ========================================');
+      debugPrint('❌ Error: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+      debugPrint('❌ ========================================\n');
+
       setState(() {
-        _debugInfo['Error'] = e.toString();
+        _debugInfo['❌ Error'] = e.toString();
+        _addStep('❌ Error occurred: ${e.toString()}');
       });
     }
+  }
+
+  void _addStep(String step) {
+    setState(() {
+      _setupSteps.add(step);
+    });
+    debugPrint('📝 Setup step: $step');
   }
 
   void _copyToken() {
     if (_fcmToken != null) {
       Clipboard.setData(ClipboardData(text: _fcmToken!));
+      debugPrint('📋 Token copied to clipboard: ${_fcmToken!.substring(0, 20)}...');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Token copied to clipboard'),
+          content: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.white),
+              SizedBox(width: 12),
+              Text('Token copied to clipboard'),
+            ],
+          ),
           backgroundColor: AppColors.success,
           behavior: SnackBarBehavior.floating,
         ),
@@ -151,7 +230,6 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
           style: AppTypography.h3.copyWith(color: AppColors.black),
         ),
         actions: [
-          // Countdown timer
           Center(
             child: Container(
               margin: EdgeInsets.only(right: AppSizes.spacingM),
@@ -179,27 +257,24 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Status Card
             _buildStatusCard(),
-
             SizedBox(height: AppSizes.spacingL),
 
-            // Debug Info Cards
+            _buildSetupStepsCard(),
+            SizedBox(height: AppSizes.spacingL),
+
             _buildDebugInfoCards(),
-
             SizedBox(height: AppSizes.spacingL),
 
-            // Token Display
             if (_fcmToken != null) _buildTokenCard(),
+            if (_fcmToken != null) SizedBox(height: AppSizes.spacingL),
 
-            SizedBox(height: AppSizes.spacingL),
+            if (_apnsToken != null && Platform.isIOS) _buildApnsTokenCard(),
+            if (_apnsToken != null && Platform.isIOS) SizedBox(height: AppSizes.spacingL),
 
-            // Action Buttons
             _buildActionButtons(),
-
             SizedBox(height: AppSizes.spacingL),
 
-            // Auto-redirect info
             _buildAutoRedirectInfo(),
           ],
         ),
@@ -219,6 +294,13 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
               : [AppColors.error, AppColors.error.withOpacity(0.8)],
         ),
         borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        boxShadow: [
+          BoxShadow(
+            color: (isHealthy ? AppColors.success : AppColors.error).withOpacity(0.3),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -248,7 +330,7 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
                 SizedBox(height: AppSizes.spacingXS),
                 Text(
                   isHealthy
-                      ? 'Notifications are configured correctly'
+                      ? 'Notifications configured correctly'
                       : 'Some notification features may not work',
                   style: AppTypography.body2.copyWith(
                     color: AppColors.white.withOpacity(0.9),
@@ -257,6 +339,60 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSetupStepsCard() {
+    if (_setupSteps.isEmpty) {
+      return SizedBox.shrink();
+    }
+
+    return Container(
+      padding: EdgeInsets.all(AppSizes.spacingL),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.list_alt_rounded, color: AppColors.primary),
+              SizedBox(width: AppSizes.spacingS),
+              Text(
+                'Setup Steps',
+                style: AppTypography.h3,
+              ),
+            ],
+          ),
+          SizedBox(height: AppSizes.spacingM),
+          Divider(height: 1, color: AppColors.border),
+          SizedBox(height: AppSizes.spacingM),
+          ..._setupSteps.map((step) => Padding(
+            padding: EdgeInsets.only(bottom: AppSizes.spacingS),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '•',
+                  style: AppTypography.body1.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(width: AppSizes.spacingS),
+                Expanded(
+                  child: Text(
+                    step,
+                    style: AppTypography.body2,
+                  ),
+                ),
+              ],
+            ),
+          )).toList(),
         ],
       ),
     );
@@ -305,11 +441,11 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
 
   Widget _buildTokenCard() {
     return Container(
-      padding: EdgeInsets.all(AppSizes.spacingM),
+      padding: EdgeInsets.all(AppSizes.spacingL),
       decoration: BoxDecoration(
         color: AppColors.white,
-        borderRadius: BorderRadius.circular(AppSizes.radiusM),
-        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        border: Border.all(color: AppColors.primary.withOpacity(0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -317,11 +453,15 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'FCM Token',
-                style: AppTypography.body1.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+              Row(
+                children: [
+                  Icon(Icons.key, color: AppColors.primary, size: 20),
+                  SizedBox(width: AppSizes.spacingS),
+                  Text(
+                    'FCM Token',
+                    style: AppTypography.h3,
+                  ),
+                ],
               ),
               IconButton(
                 onPressed: _copyToken,
@@ -331,19 +471,76 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
               ),
             ],
           ),
-          SizedBox(height: AppSizes.spacingS),
+          SizedBox(height: AppSizes.spacingM),
           Container(
             padding: EdgeInsets.all(AppSizes.spacingM),
             decoration: BoxDecoration(
               color: AppColors.background,
               borderRadius: BorderRadius.circular(AppSizes.radiusS),
             ),
-            child: Text(
+            child: SelectableText(
               _fcmToken!,
               style: AppTypography.caption.copyWith(
                 fontFamily: 'monospace',
                 color: AppColors.textSecondary,
+                height: 1.5,
               ),
+            ),
+          ),
+          SizedBox(height: AppSizes.spacingS),
+          Text(
+            'Length: ${_fcmToken!.length} characters',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildApnsTokenCard() {
+    return Container(
+      padding: EdgeInsets.all(AppSizes.spacingL),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(AppSizes.radiusL),
+        border: Border.all(color: AppColors.success.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.apple, color: AppColors.success, size: 20),
+              SizedBox(width: AppSizes.spacingS),
+              Text(
+                'APNs Token (iOS)',
+                style: AppTypography.h3,
+              ),
+            ],
+          ),
+          SizedBox(height: AppSizes.spacingM),
+          Container(
+            padding: EdgeInsets.all(AppSizes.spacingM),
+            decoration: BoxDecoration(
+              color: AppColors.background,
+              borderRadius: BorderRadius.circular(AppSizes.radiusS),
+            ),
+            child: SelectableText(
+              _apnsToken!,
+              style: AppTypography.caption.copyWith(
+                fontFamily: 'monospace',
+                color: AppColors.textSecondary,
+                height: 1.5,
+              ),
+            ),
+          ),
+          SizedBox(height: AppSizes.spacingS),
+          Text(
+            'Length: ${_apnsToken!.length} characters',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
             ),
           ),
         ],
@@ -354,43 +551,45 @@ class _FCMDebugScreenState extends State<FCMDebugScreen> {
   Widget _buildActionButtons() {
     return Column(
       children: [
-        // Skip countdown button
         SizedBox(
           width: double.infinity,
           height: 50,
-          child: ElevatedButton(
+          child: ElevatedButton.icon(
             onPressed: _navigateToDashboard,
+            icon: Icon(Icons.dashboard, color: AppColors.black),
+            label: Text(
+              'Skip & Go to Dashboard',
+              style: AppTypography.button.copyWith(color: AppColors.black),
+            ),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppSizes.radiusM),
               ),
             ),
-            child: Text(
-              'Skip & Go to Dashboard',
-              style: AppTypography.button.copyWith(color: AppColors.black),
-            ),
           ),
         ),
         SizedBox(height: AppSizes.spacingM),
-        // Retry registration button
         SizedBox(
           width: double.infinity,
           height: 50,
-          child: OutlinedButton(
+          child: OutlinedButton.icon(
             onPressed: () async {
+              debugPrint('🔄 Retrying token registration...');
               await NotificationService.registerToken();
               await _loadDebugInfo();
+              debugPrint('✅ Token registration retry complete');
             },
+            icon: Icon(Icons.refresh, color: AppColors.primary),
+            label: Text(
+              'Retry Token Registration',
+              style: AppTypography.button.copyWith(color: AppColors.primary),
+            ),
             style: OutlinedButton.styleFrom(
-              side: BorderSide(color: AppColors.primary),
+              side: BorderSide(color: AppColors.primary, width: 2),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppSizes.radiusM),
               ),
-            ),
-            child: Text(
-              'Retry Token Registration',
-              style: AppTypography.button.copyWith(color: AppColors.primary),
             ),
           ),
         ),
