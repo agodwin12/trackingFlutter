@@ -6,7 +6,7 @@ import FirebaseMessaging
 import UserNotifications
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
+@objc class AppDelegate: FlutterAppDelegate, MessagingDelegate {
 
     override func application(
     _ application: UIApplication,
@@ -69,7 +69,7 @@ import UserNotifications
     }
 
     // MARK: - Foreground notification display
-    func userNotificationCenter(
+    override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
@@ -85,7 +85,7 @@ import UserNotifications
     }
 
     // MARK: - User tapped notification
-    func userNotificationCenter(
+    override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
