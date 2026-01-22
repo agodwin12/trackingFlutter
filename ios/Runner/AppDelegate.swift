@@ -8,6 +8,8 @@ import UserNotifications
 @main
 @objc class AppDelegate: FlutterAppDelegate, MessagingDelegate {
 
+    private var methodChannel: FlutterMethodChannel?
+
     override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -16,22 +18,37 @@ import UserNotifications
         // Google Maps
         GMSServices.provideAPIKey("AIzaSyBn88TP5X-xaRCYo5gYxvGnVy_0WYotZWo")
 
-        // Firebase
+        // Firebase - MUST be first
         FirebaseApp.configure()
 
-        // Delegates
+        // Set delegates BEFORE requesting permissions
         UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
 
-        // Ask notification permission
-        UNUserNotificationCenter.current().requestAuthorization(
-            options: [.alert, .badge, .sound]
-        ) { granted, error in
-            print("🔔 Notification permission granted: \(granted), error: \(String(describing: error))")
-        }
+        // Setup Flutter Method Channel
+        let controller = window?.rootViewController as! FlutterViewController
+        methodChannel = FlutterMethodChannel(
+            name: "com.proxym.tracking/fcm",
+            binaryMessenger: controller.binaryMessenger
+        )
 
-        // Register for APNs
-        application.registerForRemoteNotifications()
+        // Request notification permissions
+        if #available(iOS 10.0, *) {
+            UNUserNotificationCenter.current().requestAuthorization(
+                options: [.alert, .badge, .sound]
+            ) { granted, error in
+                print("🔔 Notification permission granted: \(granted)")
+                if granted {
+                    DispatchQueue.main.async {
+                        application.registerForRemoteNotifications()
+                    }
+                }
+            }
+        } else {
+            let settings = UIUserNotificationSettings(types: [.alert, .badge, .sound], categories: nil)
+            application.registerUserNotificationSettings(settings)
+            application.registerForRemoteNotifications()
+        }
 
         // Flutter plugins
         GeneratedPluginRegistrant.register(with: self)
@@ -44,28 +61,26 @@ import UserNotifications
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
-        // IMPORTANT: set token type correctly (Debug = sandbox, Release/TestFlight = prod)
+        print("📱 APNs device token received")
+
+        // Set APNs token with correct type
         #if DEBUG
         Messaging.messaging().setAPNSToken(deviceToken, type: .sandbox)
+        print("🔧 Environment: DEBUG (Sandbox)")
         #else
         Messaging.messaging().setAPNSToken(deviceToken, type: .prod)
+        print("🔧 Environment: RELEASE (Production)")
         #endif
 
-        // Also set apnsToken (safe to keep)
-        Messaging.messaging().apnsToken = deviceToken
-
         let hexToken = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        print("✅ APNs token registered: \(hexToken)")
-
-        super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+        print("✅ APNs token set: \(hexToken)")
     }
 
     override func application(
     _ application: UIApplication,
     didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        print("❌ Failed to register for remote notifications: \(error)")
-        super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+        print("❌ Failed to register for remote notifications: \(error.localizedDescription)")
     }
 
     // MARK: - Foreground notification display
@@ -95,19 +110,28 @@ import UserNotifications
         completionHandler()
     }
 
-    // MARK: - Background / data messages (helps for data-only or background handling)
+    // MARK: - Background / data messages
     override func application(
     _ application: UIApplication,
     didReceiveRemoteNotification userInfo: [AnyHashable : Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        print("🌙 didReceiveRemoteNotification: \(userInfo)")
+        print("🌙 Background notification: \(userInfo)")
+        Messaging.messaging().appDidReceiveMessage(userInfo)
         completionHandler(.newData)
     }
 
     // MARK: - FCM token
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        print("✅ Firebase registration token (FCM): \(String(describing: fcmToken))")
-        // If you send token to backend, do it here.
+        print("✅ FCM token received: \(fcmToken ?? "nil")")
+
+        guard let token = fcmToken else {
+            print("⚠️ FCM token is nil")
+            return
+        }
+
+        // Send to Flutter via Method Channel
+        methodChannel?.invokeMethod("onTokenRefresh", arguments: token)
+        print("📤 FCM token sent to Flutter: \(token)")
     }
 }

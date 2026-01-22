@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 // Firebase
 import 'package:firebase_core/firebase_core.dart';
@@ -27,6 +30,88 @@ import 'package:tracking/src/services/notification_service.dart';
 import 'package:tracking/src/services/pin_service.dart';
 import 'package:tracking/src/services/connectivity_service.dart';
 import 'package:tracking/src/services/app_lifecycle_service.dart';
+
+/// =====================================================
+///  FCM Service for iOS Token Handling
+/// =====================================================
+class FCMService {
+  static const platform = MethodChannel('com.proxym.tracking/fcm');
+
+  // Initialize FCM listener
+  static Future<void> initialize() async {
+    // Listen for token from iOS
+    platform.setMethodCallHandler((call) async {
+      if (call.method == 'onTokenRefresh') {
+        String token = call.arguments as String;
+        debugPrint('📱 FCM Token received from iOS: $token');
+        await _sendTokenToBackend(token);
+      }
+    });
+
+    debugPrint('✅ FCM Service initialized');
+  }
+
+  // Send token to backend
+  static Future<void> _sendTokenToBackend(String fcmToken) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getInt('user_id');
+      final authToken = prefs.getString('auth_token');
+
+      if (userId == null || authToken == null) {
+        debugPrint('⚠️ User not logged in, skipping token send');
+        // Save token locally for later
+        await prefs.setString('pending_fcm_token', fcmToken);
+        return;
+      }
+
+      final baseUrl = EnvConfig.baseUrl;
+      final response = await http.post(
+        Uri.parse('$baseUrl/users/fcm-token'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({
+          'user_id': userId,
+          'fcm_token': fcmToken,
+          'device_type': 'ios',
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        debugPrint('✅ FCM token sent to backend successfully');
+        await prefs.setString('fcm_token', fcmToken);
+        // Remove pending token
+        await prefs.remove('pending_fcm_token');
+      } else {
+        debugPrint('❌ Failed to send FCM token: ${response.statusCode}');
+        // Save as pending for retry
+        await prefs.setString('pending_fcm_token', fcmToken);
+      }
+    } catch (e) {
+      debugPrint('❌ Error sending FCM token: $e');
+      // Save token locally for retry
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('pending_fcm_token', fcmToken);
+    }
+  }
+
+  // Retry sending pending token (call after login)
+  static Future<void> retryPendingToken() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final pendingToken = prefs.getString('pending_fcm_token');
+
+      if (pendingToken != null) {
+        debugPrint('🔄 Retrying pending FCM token...');
+        await _sendTokenToBackend(pendingToken);
+      }
+    } catch (e) {
+      debugPrint('❌ Error retrying pending token: $e');
+    }
+  }
+}
 
 /// =====================================================
 ///  Firebase Background Notification Handler
@@ -86,24 +171,33 @@ void main() async {
       debugPrint('ℹ️ App will continue without Firebase push notifications');
     }
 
-    // ✅ Step 3: Initialize Notification Service
+    // ✅ Step 3: Initialize FCM Service (iOS token handling)
+    debugPrint('📲 Initializing FCM service for iOS...');
+    try {
+      await FCMService.initialize();
+      debugPrint('✅ FCM service initialized');
+    } catch (fcmError) {
+      debugPrint('⚠️ FCM service initialization failed: $fcmError');
+    }
+
+    // ✅ Step 4: Initialize Notification Service
     debugPrint('🔔 Initializing notification service...');
     await NotificationService.initialize();
     debugPrint('✅ Notification service initialized');
 
-    // ✅ Step 4: Initialize Connectivity Service
+    // ✅ Step 5: Initialize Connectivity Service
     debugPrint('🌐 Initializing connectivity service...');
     await ConnectivityService().initialize();
     debugPrint('✅ Connectivity service initialized');
 
-    // ✅ Step 5: Initialize App Lifecycle Service
+    // ✅ Step 6: Initialize App Lifecycle Service
     debugPrint('🔄 Initializing lifecycle service...');
     AppLifecycleService().initialize();
     debugPrint('✅ Lifecycle service initialized');
 
     debugPrint('🚀 ========== APP INITIALIZATION COMPLETE ==========\n');
 
-    // ✅ Step 6: Launch app with Splash Screen
+    // ✅ Step 7: Launch app with Splash Screen
     runApp(const MyApp());
   } catch (error) {
     debugPrint('❌ ========== FATAL INITIALIZATION ERROR ==========');

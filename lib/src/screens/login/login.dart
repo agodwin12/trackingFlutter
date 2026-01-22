@@ -12,6 +12,9 @@ import '../dashboard/dashboard.dart';
 import '../debug/debug screen.dart';
 import '../forgot_password/forgot_password.dart';
 
+// ✅ Import main.dart to access FCMService
+import '../../../main.dart' show FCMService;
+
 class Country {
   final String name;
   final String code;
@@ -42,8 +45,8 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
   // ✅ Central African Countries + Togo + Nigeria
   final List<Country> _centralAfricanCountries = [
     Country(name: 'Cameroon', code: '+237', flag: '🇨🇲'),
-    Country(name: 'Nigeria', code: '+234', flag: '🇳🇬'), // ✅ ADDED
-    Country(name: 'Togo', code: '+228', flag: '🇹🇬'),    // ✅ ADDED
+    Country(name: 'Nigeria', code: '+234', flag: '🇳🇬'),
+    Country(name: 'Togo', code: '+228', flag: '🇹🇬'),
     Country(name: 'Central African Republic', code: '+236', flag: '🇨🇫'),
     Country(name: 'Chad', code: '+235', flag: '🇹🇩'),
     Country(name: 'Republic of the Congo', code: '+242', flag: '🇨🇬'),
@@ -133,19 +136,27 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
         await prefs.setString("accessToken", responseData["accessToken"]);
         await prefs.setString("user", jsonEncode(responseData["user"]));
 
-        // ✅ NEW: Save refresh token from response
+        // ✅ Save refresh token from response
         if (responseData["refreshToken"] != null) {
           await prefs.setString("refreshToken", responseData["refreshToken"]);
           debugPrint('✅ Saved refresh token');
         }
 
-        // 🆕 CRITICAL: Save user_id separately for PIN service
+        // ✅ Save user_id separately for PIN service
         await prefs.setInt("user_id", responseData["user"]["id"]);
-
         debugPrint('✅ Login successful - Saved user_id: ${responseData["user"]["id"]}');
 
         // ✅ Register notification token
         await NotificationService.registerToken();
+
+        // 🆕 CRITICAL: Retry pending FCM token (iOS)
+        try {
+          await FCMService.retryPendingToken();
+          debugPrint('✅ FCM token retry completed');
+        } catch (fcmError) {
+          debugPrint('⚠️ FCM token retry failed: $fcmError');
+          // Don't block login if FCM fails
+        }
 
         // ✅ Check if user needs to change password (first login)
         bool isFirstLogin = responseData["isFirstLogin"] ?? false;
@@ -186,7 +197,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
 
               debugPrint('✅ Navigating to FCM debug screen with vehicle ID: $firstVehicleId');
 
-              // ✅ CHANGED: Navigate to FCM Debug Screen (will auto-redirect to dashboard)
+              // ✅ Navigate to FCM Debug Screen (will auto-redirect to dashboard)
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
@@ -535,7 +546,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
 
           SizedBox(height: AppSizes.spacingL),
 
-          // ✅ ADDED: Copyright Footer with Dynamic Year
+          // Copyright Footer
           _buildCopyrightFooter(),
 
           SizedBox(height: AppSizes.spacingL),
@@ -544,7 +555,6 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
     );
   }
 
-  // ✅ NEW: Copyright Footer Widget
   Widget _buildCopyrightFooter() {
     final currentYear = DateTime.now().year;
 
