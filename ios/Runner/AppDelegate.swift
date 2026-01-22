@@ -3,84 +3,111 @@ import Flutter
 import GoogleMaps
 import FirebaseCore
 import FirebaseMessaging
+import UserNotifications
 
 @main
-@objc class AppDelegate: FlutterAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
+
     override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
-        // ✅ CORRECT API KEY
+
+        // Google Maps
         GMSServices.provideAPIKey("AIzaSyBn88TP5X-xaRCYo5gYxvGnVy_0WYotZWo")
 
+        // Firebase
         FirebaseApp.configure()
+
+        // Delegates
+        UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
 
-        if #available(iOS 10.0, *) {
-            UNUserNotificationCenter.current().delegate = self
-            let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
-            UNUserNotificationCenter.current().requestAuthorization(
-                options: authOptions,
-                completionHandler: { granted, error in
-                    if let error = error {
-                        print("Error requesting notification authorization: \(error)")
-                    } else {
-                        print("Notification authorization granted: \(granted)")
-                    }
-                }
-            )
-        } else {
-            let settings: UIUserNotificationSettings =
-            UIUserNotificationSettings(types: [.alert, .badge, .sound], categories: nil)
-            application.registerUserNotificationSettings(settings)
+        // Ask notification permission
+        UNUserNotificationCenter.current().requestAuthorization(
+            options: [.alert, .badge, .sound]
+        ) { granted, error in
+            print("🔔 Notification permission granted: \(granted), error: \(String(describing: error))")
         }
 
+        // Register for APNs
         application.registerForRemoteNotifications()
+
+        // Flutter plugins
         GeneratedPluginRegistrant.register(with: self)
+
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    override func application(_ application: UIApplication,
-    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    // MARK: - APNs token -> Firebase
+    override func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        // IMPORTANT: set token type correctly (Debug = sandbox, Release/TestFlight = prod)
+        #if DEBUG
+        Messaging.messaging().setAPNSToken(deviceToken, type: .sandbox)
+        #else
+        Messaging.messaging().setAPNSToken(deviceToken, type: .prod)
+        #endif
+
+        // Also set apnsToken (safe to keep)
         Messaging.messaging().apnsToken = deviceToken
-        print("APNs token registered")
+
+        let hexToken = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+        print("✅ APNs token registered: \(hexToken)")
+
+        super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
     }
 
-    override func application(_ application: UIApplication,
-    didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        print("Failed to register for remote notifications: \(error)")
+    override func application(
+    _ application: UIApplication,
+    didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        print("❌ Failed to register for remote notifications: \(error)")
+        super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
     }
 
-    override func userNotificationCenter(_ center: UNUserNotificationCenter,
+    // MARK: - Foreground notification display
+    func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
     willPresent notification: UNNotification,
-    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
         let userInfo = notification.request.content.userInfo
-        print("Notification received in foreground: \(userInfo)")
+        print("📩 Notification received in foreground: \(userInfo)")
 
         if #available(iOS 14.0, *) {
-            completionHandler([[.banner, .sound, .badge]])
+            completionHandler([.banner, .sound, .badge])
         } else {
-            completionHandler([[.alert, .sound, .badge]])
+            completionHandler([.alert, .sound, .badge])
         }
     }
 
-    override func userNotificationCenter(_ center: UNUserNotificationCenter,
+    // MARK: - User tapped notification
+    func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
     didReceive response: UNNotificationResponse,
-    withCompletionHandler completionHandler: @escaping () -> Void) {
+    withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
         let userInfo = response.notification.request.content.userInfo
-        print("Notification tapped: \(userInfo)")
+        print("👆 Notification tapped: \(userInfo)")
         completionHandler()
     }
-}
 
-extension AppDelegate: MessagingDelegate {
+    // MARK: - Background / data messages (helps for data-only or background handling)
+    override func application(
+    _ application: UIApplication,
+    didReceiveRemoteNotification userInfo: [AnyHashable : Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        print("🌙 didReceiveRemoteNotification: \(userInfo)")
+        completionHandler(.newData)
+    }
+
+    // MARK: - FCM token
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        print("Firebase registration token: \(String(describing: fcmToken))")
-        let dataDict: [String: String] = ["token": fcmToken ?? ""]
-        NotificationCenter.default.post(
-            name: Notification.Name("FCMToken"),
-            object: nil,
-            userInfo: dataDict
-        )
+        print("✅ Firebase registration token (FCM): \(String(describing: fcmToken))")
+        // If you send token to backend, do it here.
     }
 }

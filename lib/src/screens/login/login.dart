@@ -9,6 +9,7 @@ import '../../services/env_config.dart';
 import '../../services/notification_service.dart';
 import '../change password/change_password.dart';
 import '../dashboard/dashboard.dart';
+import '../debug/debug screen.dart';
 import '../forgot_password/forgot_password.dart';
 
 class Country {
@@ -62,7 +63,6 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
   void initState() {
     super.initState();
 
-
     // Setup animations
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 1200),
@@ -96,9 +96,6 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
     _passwordController.dispose();
     super.dispose();
   }
-
-
-
 
   void _login() async {
     if (_phoneController.text.trim().isEmpty || _passwordController.text.trim().isEmpty) {
@@ -173,7 +170,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
             return;
           }
 
-          // ✅ Otherwise, fetch vehicles and navigate to dashboard
+          // ✅ Otherwise, fetch vehicles and navigate to debug screen then dashboard
           int userId = responseData["user"]["id"];
 
           final vehiclesResponse = await http.get(
@@ -187,13 +184,16 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
             if (vehicles.isNotEmpty) {
               int firstVehicleId = vehicles[0]["id"];
 
-              debugPrint('✅ Navigating to dashboard with vehicle ID: $firstVehicleId');
+              debugPrint('✅ Navigating to FCM debug screen with vehicle ID: $firstVehicleId');
 
-              // Navigate to Modern Dashboard
+              // ✅ CHANGED: Navigate to FCM Debug Screen (will auto-redirect to dashboard)
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => ModernDashboard(vehicleId: firstVehicleId),
+                  builder: (context) => FCMDebugScreen(
+                    vehicleId: firstVehicleId,
+                    userId: userId,
+                  ),
                 ),
               );
             } else {
@@ -534,8 +534,6 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
           _buildLoginButton(),
 
           SizedBox(height: AppSizes.spacingL),
-
-
 
           // ✅ ADDED: Copyright Footer with Dynamic Year
           _buildCopyrightFooter(),

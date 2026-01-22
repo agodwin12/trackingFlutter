@@ -61,6 +61,10 @@ dependencies {
 
     // ✅ Required for flutter_local_notifications (Java 8+/17 APIs)
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
+
+    // ✅ Google Play In-App Updates - handles automatic and flexible update flows
+    implementation 'com.google.android.play:app-update:2.1.0'
+    implementation 'com.google.android.play:app-update-ktx:2.1.0'
 }
 
 flutter {
