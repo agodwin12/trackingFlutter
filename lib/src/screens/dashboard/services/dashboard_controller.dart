@@ -805,7 +805,7 @@ class DashboardController extends ChangeNotifier {
     });
   }
 
-  // ✅ UPDATED: Report stolen with offline check
+// ✅ UPDATED: Report stolen with offline check
   Future<bool> reportStolen() async {
     if (isOffline) {
       debugPrint('❌ Cannot report stolen while offline');
@@ -835,6 +835,7 @@ class DashboardController extends ChangeNotifier {
         "longitude": _vehicleLng,
       };
 
+      // 1️⃣ Create/fetch stolen alert
       final alertResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/alerts/report-stolen"),
         headers: {"Content-Type": "application/json"},
@@ -851,27 +852,39 @@ class DashboardController extends ChangeNotifier {
       final bool alreadyReported = alertData['alreadyReported'] ?? false;
       final List<dynamic> nearbyPolice = alertData['nearbyPolice'] ?? [];
 
-      if (!alreadyReported) {
-        final commandResponse = await http.post(
-          Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
-          headers: {"Content-Type": "application/json"},
-          body: json.encode({
-            "vehicleId": _selectedVehicleId,
-            "command": "CLOSERELAY",
-            "params": "",
-            "password": "",
-            "sendTime": "",
-          }),
-        );
+      debugPrint('🚨 Alert ${alreadyReported ? "already exists" : "created"}. Securing vehicle...');
 
-        final commandData = jsonDecode(commandResponse.body);
-        final bool commandOk = commandData['success'] == true ||
-            (commandData['response'] is Map && commandData['response']['success'] == 'true');
+      // 2️⃣ ✅ ALWAYS send CLOSERELAY command (removed the if (!alreadyReported) check)
+      final commandResponse = await http.post(
+        Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "vehicleId": _selectedVehicleId,
+          "command": "CLOSERELAY",
+          "params": "",
+          "password": "",
+          "sendTime": "",
+        }),
+      );
 
-        if (commandResponse.statusCode == 200 && commandOk) {
-          _engineOn = false;
-          _startEngineStatePolling(false);
-        }
+      final commandData = jsonDecode(commandResponse.body);
+      final bool commandOk = commandData['success'] == true ||
+          (commandData['response'] is Map && commandData['response']['success'] == 'true');
+
+      if (commandResponse.statusCode == 200 && commandOk) {
+        debugPrint('✅ Engine CLOSERELAY command sent successfully');
+        _engineOn = false;
+
+        // ✅ Update cache
+        await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
+          'geofenceEnabled': _geofenceEnabled,
+          'safeZoneEnabled': _safeZoneEnabled,
+          'engineOn': _engineOn,
+        });
+
+        _startEngineStatePolling(false);
+      } else {
+        debugPrint('⚠️ Engine command failed or returned error');
       }
 
       _isReportingStolen = false;

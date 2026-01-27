@@ -1,4 +1,4 @@
-// lib/src/screens/trips/trip_map_screen.dart
+// lib/src/screens/trips/trip_map_screen.dart - FIXED OVERFLOW + SMOOTH PLAYBACK + ROAD ROUTES
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -54,10 +54,19 @@ class _TripMapScreenState extends State<TripMapScreen> {
   int _totalWaypoints = 0;
   int _sampledWaypoints = 0;
   bool _isSampled = false;
+  bool _isSnappedToRoads = false; // 🆕 Track if route follows roads
 
   // Map type control
   MapType _currentMapType = MapType.normal;
   bool _showMapTypeMenu = false;
+
+  // 🎬 SMOOTH PLAYBACK CONTROLS
+  bool _isPlaying = false;
+  double _currentPlaybackPosition = 0.0; // 🆕 Use double for smooth interpolation
+  Timer? _playbackTimer;
+  double _playbackSpeed = 1.0; // 1x, 2x, 4x
+  bool _showPlaybackControls = false;
+  LatLng? _currentVehiclePosition;
 
   // Default zoom level
   static const double DEFAULT_ZOOM = 15.0;
@@ -66,12 +75,12 @@ class _TripMapScreenState extends State<TripMapScreen> {
   void initState() {
     super.initState();
     _loadTripData();
-
     _connectivityService.addListener(_onConnectivityChanged);
   }
 
   @override
   void dispose() {
+    _playbackTimer?.cancel();
     _connectivityService.removeListener(_onConnectivityChanged);
     super.dispose();
   }
@@ -106,6 +115,332 @@ class _TripMapScreenState extends State<TripMapScreen> {
     }
   }
 
+  // 🎬 SMOOTH PLAYBACK METHODS
+
+  void _togglePlayback() {
+    if (_routePoints.isEmpty) return;
+
+    setState(() {
+      _isPlaying = !_isPlaying;
+      _showPlaybackControls = true;
+
+      // Initialize vehicle position if not set
+      if (_currentVehiclePosition == null && _routePoints.isNotEmpty) {
+        _currentVehiclePosition = _routePoints[0];
+        _currentPlaybackPosition = 0.0;
+      }
+    });
+
+    // Update markers immediately to show the blue marker
+    _updateMarkersForPlayback();
+
+    if (_isPlaying) {
+      _startPlayback();
+    } else {
+      _pausePlayback();
+    }
+  }
+
+  void _startPlayback() {
+    _playbackTimer?.cancel();
+
+    // 🆕 SMOOTHER: Use 60 FPS for smooth animation
+    final baseInterval = 16; // ~60 FPS (16ms per frame)
+    final interval = (baseInterval / _playbackSpeed).round();
+
+    // Calculate step size based on route length and desired completion time
+    // Adjust this to control overall playback speed
+    final stepsPerSecond = 1000 / baseInterval;
+    final stepSize = (_routePoints.length / (30.0 / _playbackSpeed)) / stepsPerSecond; // Complete in ~30 seconds
+
+    _playbackTimer = Timer.periodic(Duration(milliseconds: interval), (timer) {
+      if (_currentPlaybackPosition < _routePoints.length - 1) {
+        setState(() {
+          _currentPlaybackPosition += stepSize;
+          if (_currentPlaybackPosition >= _routePoints.length - 1) {
+            _currentPlaybackPosition = _routePoints.length - 1;
+          }
+
+          // 🆕 INTERPOLATE between points for smooth movement
+          _currentVehiclePosition = _getInterpolatedPosition(_currentPlaybackPosition);
+        });
+
+        _updateMarkersForPlayback();
+
+        // 🆕 Only update camera every few frames to reduce jank
+        if (timer.tick % 3 == 0) {
+          _moveCameraToVehicle(smooth: true);
+        }
+      } else {
+        // Reached end
+        _pausePlayback();
+        setState(() {
+          _isPlaying = false;
+        });
+      }
+    });
+  }
+
+  // 🆕 INTERPOLATE position between waypoints for smooth animation
+  LatLng _getInterpolatedPosition(double position) {
+    if (position <= 0) return _routePoints[0];
+    if (position >= _routePoints.length - 1) return _routePoints[_routePoints.length - 1];
+
+    final index = position.floor();
+    final fraction = position - index;
+
+    if (index >= _routePoints.length - 1) {
+      return _routePoints[_routePoints.length - 1];
+    }
+
+    final start = _routePoints[index];
+    final end = _routePoints[index + 1];
+
+    // Linear interpolation
+    final lat = start.latitude + (end.latitude - start.latitude) * fraction;
+    final lng = start.longitude + (end.longitude - start.longitude) * fraction;
+
+    return LatLng(lat, lng);
+  }
+
+  void _pausePlayback() {
+    _playbackTimer?.cancel();
+  }
+
+  void _resetPlayback() {
+    _pausePlayback();
+    setState(() {
+      _currentPlaybackPosition = 0.0;
+      _isPlaying = false;
+      _currentVehiclePosition = _routePoints.isNotEmpty ? _routePoints[0] : null;
+    });
+    _updateMarkersForPlayback();
+    _moveCameraToVehicle(smooth: false);
+  }
+
+  void _changePlaybackSpeed() {
+    setState(() {
+      if (_playbackSpeed == 1.0) {
+        _playbackSpeed = 2.0;
+      } else if (_playbackSpeed == 2.0) {
+        _playbackSpeed = 4.0;
+      } else {
+        _playbackSpeed = 1.0;
+      }
+    });
+
+    // Restart playback with new speed
+    if (_isPlaying) {
+      _pausePlayback();
+      _startPlayback();
+    }
+  }
+
+  void _onSliderChanged(double value) {
+    _pausePlayback();
+    setState(() {
+      _isPlaying = false;
+      _currentPlaybackPosition = value;
+      _currentVehiclePosition = _getInterpolatedPosition(value);
+    });
+    _updateMarkersForPlayback();
+    _moveCameraToVehicle(smooth: false);
+  }
+
+  Future<void> _moveCameraToVehicle({bool smooth = true}) async {
+    if (_currentVehiclePosition == null) return;
+
+    try {
+      final controller = await _controller.future;
+
+      if (smooth) {
+        // Smooth camera movement
+        await controller.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: _currentVehiclePosition!,
+              zoom: 17.0,
+              tilt: 45.0,
+              bearing: _calculateBearing(),
+            ),
+          ),
+        );
+      } else {
+        // Instant camera movement
+        await controller.moveCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(
+              target: _currentVehiclePosition!,
+              zoom: 17.0,
+              tilt: 45.0,
+              bearing: _calculateBearing(),
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("⚠️ Error moving camera: $e");
+    }
+  }
+
+  // 🆕 Calculate bearing for camera rotation based on movement direction
+  double _calculateBearing() {
+    if (_routePoints.length < 2 || _currentPlaybackPosition < 1) return 0.0;
+
+    final currentIndex = _currentPlaybackPosition.floor();
+    if (currentIndex >= _routePoints.length - 1) return 0.0;
+
+    final from = _routePoints[currentIndex];
+    final to = _routePoints[currentIndex + 1];
+
+    final lat1 = from.latitude * math.pi / 180;
+    final lat2 = to.latitude * math.pi / 180;
+    final lng1 = from.longitude * math.pi / 180;
+    final lng2 = to.longitude * math.pi / 180;
+
+    final dLng = lng2 - lng1;
+
+    final y = math.sin(dLng) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
+
+    final bearing = math.atan2(y, x);
+    return (bearing * 180 / math.pi + 360) % 360;
+  }
+
+  void _updateMarkersForPlayback() {
+    _markers.clear();
+    _polylines.clear();
+
+    if (_startLocation == null || _endLocation == null) return;
+
+    // Start marker (green)
+    _markers.add(
+      Marker(
+        markerId: const MarkerId('start'),
+        position: _startLocation!,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        infoWindow: InfoWindow(
+          title: 'Start',
+          snippet: _getDisplayAddress(_tripData?['startLocation']['address'], _startLocation),
+        ),
+      ),
+    );
+
+    // End marker (red)
+    _markers.add(
+      Marker(
+        markerId: const MarkerId('end'),
+        position: _endLocation!,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+        infoWindow: InfoWindow(
+          title: 'Destination',
+          snippet: _getDisplayAddress(_tripData?['endLocation']['address'], _endLocation),
+        ),
+      ),
+    );
+
+    // 🚗 Current vehicle position (blue marker)
+    if (_currentVehiclePosition != null) {
+      _markers.add(
+        Marker(
+          markerId: const MarkerId('vehicle'),
+          position: _currentVehiclePosition!,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          anchor: Offset(0.5, 0.5),
+          rotation: _calculateBearing(), // 🆕 Rotate marker based on direction
+          infoWindow: InfoWindow(
+            title: 'Current Position',
+            snippet: _getCurrentSpeed(),
+          ),
+        ),
+      );
+    }
+
+    final currentIndex = _currentPlaybackPosition.floor();
+
+    // Completed route (green)
+    if (currentIndex > 0) {
+      _polylines.add(
+        Polyline(
+          polylineId: const PolylineId('completed_route'),
+          points: _routePoints.sublist(0, currentIndex + 1),
+          color: AppColors.success,
+          width: 5,
+          geodesic: true,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+        ),
+      );
+    }
+
+    // Remaining route (light gray)
+    if (currentIndex < _routePoints.length - 1) {
+      _polylines.add(
+        Polyline(
+          polylineId: const PolylineId('remaining_route'),
+          points: _routePoints.sublist(currentIndex),
+          color: AppColors.border,
+          width: 4,
+          geodesic: true,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+        ),
+      );
+    }
+
+    setState(() {});
+  }
+
+  String _getCurrentSpeed() {
+    if (_tripData == null) return '0 km/h';
+    return '${_tripData!['avgSpeedKmh']} km/h';
+  }
+
+  String _getCurrentTime() {
+    if (_tripData == null || _routePoints.isEmpty) return '--:--';
+
+    try {
+      final startTime = DateTime.parse(_tripData!['startTime']);
+      final endTime = DateTime.parse(_tripData!['endTime']);
+      final totalDuration = endTime.difference(startTime).inSeconds;
+
+      final progress = _currentPlaybackPosition / (_routePoints.length - 1);
+      final currentDuration = (totalDuration * progress).round();
+
+      final currentTime = startTime.add(Duration(seconds: currentDuration));
+      return _formatTime(currentTime.toIso8601String());
+    } catch (e) {
+      return '--:--';
+    }
+  }
+
+  // Helper method to get proper display address
+  String _getDisplayAddress(String? address, LatLng? coordinates) {
+    if (address == null || address.isEmpty) {
+      if (coordinates != null) {
+        return '${coordinates.latitude.toStringAsFixed(4)}°, ${coordinates.longitude.toStringAsFixed(4)}°';
+      }
+      return 'Unknown location';
+    }
+
+    if (address == 'Geocoding...') {
+      return 'Loading address...';
+    }
+
+    if (address.contains('°') || (address.contains(',') && address.split(',').every((part) => double.tryParse(part.trim()) != null))) {
+      if (coordinates != null) {
+        return '${coordinates.latitude.toStringAsFixed(4)}°, ${coordinates.longitude.toStringAsFixed(4)}°';
+      }
+    }
+
+    return address;
+  }
+
+  // EXISTING METHODS
+
   Future<void> _loadTripData() async {
     setState(() {
       _isLoading = true;
@@ -119,10 +454,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
         return;
       }
 
-      debugPrint("📡 Fetching trip ${widget.tripId}...");
+      debugPrint("📡 Fetching trip ${widget.tripId} with road-following route...");
 
+      // 🆕 ADD snapToRoads=true parameter
       final response = await http.get(
-        Uri.parse("$baseUrl/trips/${widget.tripId}/details-with-route"),
+        Uri.parse("$baseUrl/trips/${widget.tripId}/details-with-route?snapToRoads=true"),
       );
 
       debugPrint("📡 Trip details response: ${response.statusCode}");
@@ -136,7 +472,8 @@ class _TripMapScreenState extends State<TripMapScreen> {
           final metadata = data['data']['metadata'];
 
           debugPrint("✅ Trip loaded: ${trip['id']}");
-          debugPrint("📍 GPS waypoints received: ${waypoints.length}");
+          debugPrint("📍 Waypoints received: ${waypoints.length}");
+          debugPrint("🗺️ Road-snapped: ${metadata?['isSnappedToRoads'] ?? false}");
 
           if (waypoints.isEmpty) {
             setState(() {
@@ -151,6 +488,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
             _totalWaypoints = metadata?['totalWaypoints'] ?? waypoints.length;
             _sampledWaypoints = metadata?['returnedWaypoints'] ?? waypoints.length;
             _isSampled = metadata?['isSampled'] ?? false;
+            _isSnappedToRoads = metadata?['isSnappedToRoads'] ?? false;
             _isLoadedFromCache = false;
 
             _startLocation = LatLng(
@@ -163,29 +501,53 @@ class _TripMapScreenState extends State<TripMapScreen> {
               (trip['endLocation']['longitude'] as num).toDouble(),
             );
 
-            // Store GPS waypoints
-            _gpsWaypoints = waypoints.map((wp) {
+            _routePoints = waypoints.map((wp) {
               return LatLng(
                 (wp['latitude'] as num).toDouble(),
                 (wp['longitude'] as num).toDouble(),
               );
             }).toList();
 
-            debugPrint("🗺️ GPS waypoints: ${_gpsWaypoints.length} points");
+            _gpsWaypoints = _routePoints;
+            _currentVehiclePosition = _routePoints.isNotEmpty ? _routePoints[0] : null;
+
+            debugPrint("🗺️ Route: ${_routePoints.length} ${_isSnappedToRoads ? '(roads)' : '(GPS)'} points");
           });
 
-          // ✅ Use exact GPS waypoints (no OSRM)
-          await _generateRoadFollowingRoute();
+          _buildMarkersAndPolylines();
 
           setState(() {
             _isLoading = false;
           });
 
-          // Fit map to route
           await Future.delayed(const Duration(milliseconds: 300));
           _fitMapToRoute();
 
-          debugPrint("✅ Exact route map loaded!");
+          if (_isSnappedToRoads && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.white, size: 20),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        '✅ Route follows roads (${_routePoints.length} points)',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+                backgroundColor: AppColors.success,
+                behavior: SnackBarBehavior.floating,
+                duration: Duration(seconds: 2),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                margin: EdgeInsets.all(16),
+              ),
+            );
+          }
+
+          debugPrint("✅ Road-following map loaded!");
         }
       } else {
         setState(() {
@@ -263,10 +625,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
           (trip['endLongitude'] as num).toDouble(),
         );
 
-        _gpsWaypoints = [_startLocation!, _endLocation!];
         _routePoints = [_startLocation!, _endLocation!];
+        _currentVehiclePosition = _routePoints[0];
 
         _isLoadedFromCache = true;
+        _isSnappedToRoads = false;
       });
 
       _buildMarkersAndPolylines();
@@ -279,7 +642,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
       _fitMapToRoute();
 
       debugPrint('✅ Loaded trip from cache (offline mode)');
-
     } catch (e) {
       debugPrint('❌ Error loading trip from cache: $e');
       setState(() {
@@ -287,18 +649,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
         _errorMessage = "Error loading cached trip: $e";
       });
     }
-  }
-
-  // ✅ EXACT ROUTE: Use all GPS waypoints for precise path accuracy
-  Future<void> _generateRoadFollowingRoute() async {
-    debugPrint('📍 Using EXACT GPS waypoints - no sampling, no routing API');
-
-    setState(() {
-      _routePoints = _gpsWaypoints; // Use ALL GPS points for exact accuracy
-    });
-
-    debugPrint("✅ Exact route loaded: ${_routePoints.length} GPS waypoints");
-    _buildMarkersAndPolylines();
   }
 
   Future<void> _handleRefresh() async {
@@ -371,7 +721,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
         infoWindow: InfoWindow(
           title: 'Start',
-          snippet: _tripData?['startLocation']['address'] ?? 'Start location',
+          snippet: _getDisplayAddress(_tripData?['startLocation']['address'], _startLocation),
         ),
       ),
     );
@@ -384,12 +734,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
         infoWindow: InfoWindow(
           title: 'Destination',
-          snippet: _tripData?['endLocation']['address'] ?? 'End location',
+          snippet: _getDisplayAddress(_tripData?['endLocation']['address'], _endLocation),
         ),
       ),
     );
 
-    // ✅ Create main polyline without arrows
     if (_routePoints.isNotEmpty) {
       _createPolylineWithArrows();
     }
@@ -397,11 +746,11 @@ class _TripMapScreenState extends State<TripMapScreen> {
     setState(() {});
   }
 
-  // ✅ Create polyline connecting start to end
   void _createPolylineWithArrows() {
-    final Color routeColor = _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success;
+    final Color routeColor = _isLoadedFromCache
+        ? Color(0xFFF59E0B)
+        : (_isSnappedToRoads ? AppColors.primary : AppColors.success);
 
-    // Main continuous polyline
     _polylines.add(
       Polyline(
         polylineId: const PolylineId('main_route'),
@@ -415,7 +764,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
       ),
     );
 
-    debugPrint("✅ Drew route with ${_routePoints.length} GPS points");
+    debugPrint("✅ Drew route with ${_routePoints.length} points");
   }
 
   Future<void> _fitMapToRoute() async {
@@ -468,7 +817,6 @@ class _TripMapScreenState extends State<TripMapScreen> {
     });
   }
 
-  // ✅ FIXED: Convert UTC to local time
   String _formatTime(String? dateString) {
     if (dateString == null) return 'N/A';
     try {
@@ -515,7 +863,12 @@ class _TripMapScreenState extends State<TripMapScreen> {
           const OfflineBanner(),
           _buildTopBar(),
           _buildFloatingControls(),
-          _buildBottomCard(),
+
+          // 🎬 Show either playback controls or bottom card
+          if (_showPlaybackControls)
+            _buildPlaybackControls()
+          else
+            _buildBottomCard(),
 
           if (_isRefreshing)
             Positioned(
@@ -578,7 +931,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
           ),
           SizedBox(height: AppSizes.spacingM),
           Text(
-            isOffline ? "Loading cached route..." : "Loading exact route...",
+            isOffline ? "Loading cached route..." : "Loading road-following route...",
             style: AppTypography.body2,
           ),
         ],
@@ -604,9 +957,7 @@ class _TripMapScreenState extends State<TripMapScreen> {
               child: Icon(
                 isOffline ? Icons.cloud_off_rounded : Icons.error_outline_rounded,
                 size: 80,
-                color: isOffline
-                    ? Color(0xFFF59E0B)
-                    : AppColors.primary.withOpacity(0.5),
+                color: isOffline ? Color(0xFFF59E0B) : AppColors.primary.withOpacity(0.5),
               ),
             ),
             SizedBox(height: AppSizes.spacingL),
@@ -676,25 +1027,31 @@ class _TripMapScreenState extends State<TripMapScreen> {
               IconButton(
                 onPressed: () => Navigator.pop(context),
                 icon: Icon(Icons.arrow_back_rounded, color: AppColors.black),
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints(),
               ),
               SizedBox(width: AppSizes.spacingS),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Row(
                       children: [
-                        Text(
-                          'Trip Route',
-                          style: AppTypography.body1.copyWith(
-                            fontWeight: FontWeight.w700,
+                        Flexible(
+                          child: Text(
+                            'Trip Route',
+                            style: AppTypography.body1.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         if (_isLoadedFromCache) ...[
-                          SizedBox(width: 8),
+                          SizedBox(width: 6),
                           Container(
                             padding: EdgeInsets.symmetric(
-                              horizontal: 6,
+                              horizontal: 4,
                               vertical: 2,
                             ),
                             decoration: BoxDecoration(
@@ -702,12 +1059,44 @@ class _TripMapScreenState extends State<TripMapScreen> {
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
-                              'OFFLINE',
+                              'OFF',
                               style: AppTypography.caption.copyWith(
-                                fontSize: 9,
+                                fontSize: 8,
                                 color: Color(0xFFF59E0B),
                                 fontWeight: FontWeight.w700,
                               ),
+                            ),
+                          ),
+                        ],
+                        if (_isSnappedToRoads && !_isLoadedFromCache) ...[
+                          SizedBox(width: 6),
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.route,
+                                  size: 8,
+                                  color: AppColors.primary,
+                                ),
+                                SizedBox(width: 2),
+                                Text(
+                                  'RD',
+                                  style: AppTypography.caption.copyWith(
+                                    fontSize: 8,
+                                    color: AppColors.primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -716,11 +1105,28 @@ class _TripMapScreenState extends State<TripMapScreen> {
                     if (_tripData != null)
                       Text(
                         '${_tripData!['totalDistanceKm']} km • ${_tripData!['durationFormatted']}',
-                        style: AppTypography.caption,
+                        style: AppTypography.caption.copyWith(fontSize: 10),
+                        overflow: TextOverflow.ellipsis,
                       ),
                   ],
                 ),
               ),
+
+              // 🎬 Playback button
+              IconButton(
+                onPressed: _togglePlayback,
+                icon: Icon(
+                  _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                  color: AppColors.primary,
+                  size: 26,
+                ),
+                padding: EdgeInsets.all(4),
+                constraints: BoxConstraints(),
+                tooltip: _isPlaying ? 'Pause' : 'Play',
+              ),
+
+              SizedBox(width: 4),
+
               Opacity(
                 opacity: isOffline ? 0.5 : 1.0,
                 child: IconButton(
@@ -730,38 +1136,58 @@ class _TripMapScreenState extends State<TripMapScreen> {
                     color: (isOffline || _isRefreshing)
                         ? AppColors.textSecondary.withOpacity(0.5)
                         : AppColors.primary,
-                    size: 22,
+                    size: 20,
                   ),
+                  padding: EdgeInsets.all(4),
+                  constraints: BoxConstraints(),
                   tooltip: isOffline ? 'Offline' : 'Refresh',
                 ),
               ),
-              SizedBox(width: AppSizes.spacingXS),
-              Container(
-                padding: EdgeInsets.all(AppSizes.spacingS),
-                decoration: BoxDecoration(
-                  color: _isLoadedFromCache
-                      ? Color(0xFFF59E0B).withOpacity(0.1)
-                      : AppColors.success.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.navigation_rounded,
-                      color: _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success,
-                      size: 16,
-                    ),
-                    SizedBox(width: AppSizes.spacingXS),
-                    Text(
-                      '${_routePoints.length} pts',
-                      style: AppTypography.caption.copyWith(
-                        fontSize: 11,
-                        color: _isLoadedFromCache ? Color(0xFFF59E0B) : AppColors.success,
-                        fontWeight: FontWeight.w700,
+
+              SizedBox(width: 4),
+
+              // 🔧 FIXED: Constrain this container to prevent overflow
+              Flexible(
+                child: Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _isLoadedFromCache
+                        ? Color(0xFFF59E0B).withOpacity(0.1)
+                        : (_isSnappedToRoads
+                        ? AppColors.primary.withOpacity(0.1)
+                        : AppColors.success.withOpacity(0.1)),
+                    borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.navigation_rounded,
+                        color: _isLoadedFromCache
+                            ? Color(0xFFF59E0B)
+                            : (_isSnappedToRoads ? AppColors.primary : AppColors.success),
+                        size: 12,
                       ),
-                    ),
-                  ],
+                      SizedBox(width: 4),
+                      // 🔧 FIXED: Use Flexible to prevent overflow
+                      Flexible(
+                        child: Text(
+                          '${_routePoints.length}',
+                          style: AppTypography.caption.copyWith(
+                            fontSize: 10,
+                            color: _isLoadedFromCache
+                                ? Color(0xFFF59E0B)
+                                : (_isSnappedToRoads ? AppColors.primary : AppColors.success),
+                            fontWeight: FontWeight.w700,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -948,6 +1374,202 @@ class _TripMapScreenState extends State<TripMapScreen> {
     );
   }
 
+  // 🎬 PLAYBACK CONTROLS UI
+  Widget _buildPlaybackControls() {
+    if (_routePoints.isEmpty) return SizedBox.shrink();
+
+    return Positioned(
+      bottom: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        margin: EdgeInsets.all(AppSizes.spacingM),
+        padding: EdgeInsets.all(AppSizes.spacingL),
+        decoration: BoxDecoration(
+          color: AppColors.white,
+          borderRadius: BorderRadius.circular(AppSizes.radiusXL),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.black.withOpacity(0.15),
+              blurRadius: 30,
+              offset: const Offset(0, -4),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Current time and speed
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.access_time, size: 16, color: AppColors.textSecondary),
+                    SizedBox(width: AppSizes.spacingXS),
+                    Text(
+                      _getCurrentTime(),
+                      style: AppTypography.body2.copyWith(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    Icon(Icons.speed, size: 16, color: AppColors.primary),
+                    SizedBox(width: AppSizes.spacingXS),
+                    Text(
+                      _getCurrentSpeed(),
+                      style: AppTypography.body2.copyWith(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+
+            SizedBox(height: AppSizes.spacingM),
+
+            // Timeline slider
+            SliderTheme(
+              data: SliderThemeData(
+                trackHeight: 4,
+                thumbShape: RoundSliderThumbShape(enabledThumbRadius: 8),
+                overlayShape: RoundSliderOverlayShape(overlayRadius: 16),
+                activeTrackColor: AppColors.primary,
+                inactiveTrackColor: AppColors.border,
+                thumbColor: AppColors.primary,
+                overlayColor: AppColors.primary.withOpacity(0.2),
+              ),
+              child: Slider(
+                value: _currentPlaybackPosition,
+                min: 0,
+                max: (_routePoints.length - 1).toDouble(),
+                onChanged: _onSliderChanged,
+              ),
+            ),
+
+            // Progress text
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '${(_currentPlaybackPosition + 1).floor()} / ${_routePoints.length}',
+                  style: AppTypography.caption.copyWith(
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                Text(
+                  '${((_currentPlaybackPosition / (_routePoints.length - 1)) * 100).toStringAsFixed(0)}%',
+                  style: AppTypography.caption.copyWith(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ],
+            ),
+
+            SizedBox(height: AppSizes.spacingM),
+
+            // Control buttons
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Reset button
+                IconButton(
+                  onPressed: _resetPlayback,
+                  icon: Icon(Icons.replay_rounded, color: AppColors.textSecondary),
+                  tooltip: 'Reset',
+                ),
+
+                SizedBox(width: AppSizes.spacingL),
+
+                // Play/Pause button (larger)
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primary.withOpacity(0.3),
+                        blurRadius: 12,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: IconButton(
+                    onPressed: _togglePlayback,
+                    icon: Icon(
+                      _isPlaying ? Icons.pause : Icons.play_arrow,
+                      color: AppColors.white,
+                      size: 32,
+                    ),
+                    iconSize: 32,
+                  ),
+                ),
+
+                SizedBox(width: AppSizes.spacingL),
+
+                // Speed control button
+                InkWell(
+                  onTap: _changePlaybackSpeed,
+                  borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: AppSizes.spacingM,
+                      vertical: AppSizes.spacingS,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.background,
+                      borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: Text(
+                      '${_playbackSpeed}x',
+                      style: AppTypography.body2.copyWith(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            SizedBox(height: AppSizes.spacingS),
+
+            // Close playback button
+            TextButton.icon(
+              onPressed: () {
+                _pausePlayback();
+                setState(() {
+                  _showPlaybackControls = false;
+                  _isPlaying = false;
+                });
+                _buildMarkersAndPolylines();
+              },
+              icon: Icon(Icons.close, size: 16, color: AppColors.textSecondary),
+              label: Text(
+                'Close Playback',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBottomCard() {
     if (_tripData == null) return const SizedBox.shrink();
 
@@ -976,7 +1598,10 @@ class _TripMapScreenState extends State<TripMapScreen> {
               icon: Icons.radio_button_checked_rounded,
               iconColor: AppColors.success,
               title: 'Start',
-              address: _tripData!['startLocation']['address'] ?? 'Unknown',
+              address: _getDisplayAddress(
+                _tripData!['startLocation']['address'],
+                _startLocation,
+              ),
               time: _formatTime(_tripData!['startTime']),
             ),
             Container(
@@ -1038,7 +1663,10 @@ class _TripMapScreenState extends State<TripMapScreen> {
               icon: Icons.location_on_rounded,
               iconColor: AppColors.error,
               title: 'Destination',
-              address: _tripData!['endLocation']['address'] ?? 'Unknown',
+              address: _getDisplayAddress(
+                _tripData!['endLocation']['address'],
+                _endLocation,
+              ),
               time: _formatTime(_tripData!['endTime']),
             ),
           ],

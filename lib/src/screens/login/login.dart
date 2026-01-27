@@ -9,7 +9,6 @@ import '../../services/env_config.dart';
 import '../../services/notification_service.dart';
 import '../change password/change_password.dart';
 import '../dashboard/dashboard.dart';
-import '../debug/debug screen.dart';
 import '../forgot_password/forgot_password.dart';
 
 // ✅ Import main.dart to access FCMService
@@ -216,7 +215,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
             return;
           }
 
-          // ✅ Otherwise, fetch vehicles and navigate to debug screen
+          // ✅ Otherwise, fetch vehicles and navigate directly to dashboard
           int userId = responseData["user"]["id"];
 
           debugPrint('\n🚗 ==========================================');
@@ -243,21 +242,19 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
               await prefs.setInt('current_vehicle_id', firstVehicleId);
               debugPrint('💾 Current vehicle ID saved: $firstVehicleId');
 
-              debugPrint('\n🐛 ==========================================');
-              debugPrint('🐛 NAVIGATING TO DEBUG SCREEN');
-              debugPrint('🐛 ==========================================');
-              debugPrint('🐛 Vehicle ID: $firstVehicleId');
-              debugPrint('🐛 User ID: $userId');
-              debugPrint('🐛 This screen will auto-redirect to dashboard');
-              debugPrint('🐛 ==========================================\n');
+              debugPrint('\n🎯 ==========================================');
+              debugPrint('🎯 NAVIGATING TO DASHBOARD');
+              debugPrint('🎯 ==========================================');
+              debugPrint('🎯 Vehicle ID: $firstVehicleId');
+              debugPrint('🎯 User ID: $userId');
+              debugPrint('🎯 ==========================================\n');
 
-              // ✅ Navigate to FCM Debug Screen (will auto-redirect to dashboard)
+              // ✅ Navigate directly to Dashboard
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => FCMDebugScreen(
+                  builder: (context) => ModernDashboard(
                     vehicleId: firstVehicleId,
-                    userId: userId,
                   ),
                 ),
               );
@@ -551,7 +548,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen> with SingleTicker
 
           // Tagline
           Text(
-            'Track your vehicle anywhere',
+            'Track your vehicle from anywhere',
             style: AppTypography.body2,
           ),
 

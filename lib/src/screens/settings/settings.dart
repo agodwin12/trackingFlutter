@@ -38,7 +38,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _tripTracking = false;
 
   // Language
-  String _selectedLanguage = 'en'; // Default to English
+  String _selectedLanguage = 'en';
+
+  // ✅ NEW: PIN Status
+  bool _hasPinSet = false;
+  bool _isCheckingPin = false;
 
   String get baseUrl => EnvConfig.baseUrl;
 
@@ -63,7 +67,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-
   Future<void> _loadLanguagePreference() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -71,8 +74,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
     debugPrint('✅ Loaded language preference: $_selectedLanguage');
   }
-
-
 
   Future<void> _changeLanguage(String languageCode) async {
     final prefs = await SharedPreferences.getInstance();
@@ -84,18 +85,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     debugPrint('✅ Language changed to: $languageCode');
 
-    // Close the bottom sheet
     Navigator.pop(context);
 
-    // Wait a brief moment for the sheet to close, then return to Dashboard with result
     await Future.delayed(Duration(milliseconds: 100));
 
-    // Pop back to Dashboard with language_changed result
     if (mounted) {
       Navigator.pop(context, 'language_changed');
     }
   }
-
 
   void _showLanguageSelector() {
     showModalBottomSheet(
@@ -113,7 +110,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Handle bar
             Container(
               width: 40,
               height: 4,
@@ -123,39 +119,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             SizedBox(height: AppSizes.spacingL),
-
             Text(
               _selectedLanguage == 'en' ? 'Select Language' : 'Choisir la langue',
               style: AppTypography.h3.copyWith(fontSize: 18),
             ),
             SizedBox(height: AppSizes.spacingL),
-
-            // English Option
             _buildLanguageOption(
               languageCode: 'en',
               languageName: 'English',
               flagEmoji: '🇺🇸',
               isSelected: _selectedLanguage == 'en',
             ),
-
             SizedBox(height: AppSizes.spacingM),
-
-            // French Option
             _buildLanguageOption(
               languageCode: 'fr',
               languageName: 'Français',
               flagEmoji: '🇫🇷',
               isSelected: _selectedLanguage == 'fr',
             ),
-
             SizedBox(height: AppSizes.spacingL),
           ],
         ),
       ),
     );
   }
-
-
 
   Widget _buildLanguageOption({
     required String languageCode,
@@ -180,7 +167,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         child: Row(
           children: [
-            // Flag
             Container(
               width: 50,
               height: 50,
@@ -197,8 +183,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             SizedBox(width: AppSizes.spacingM),
-
-            // Language Name
             Expanded(
               child: Text(
                 languageName,
@@ -209,8 +193,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ),
-
-            // Check mark if selected
             if (isSelected)
               Icon(
                 Icons.check_circle,
@@ -222,8 +204,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
-
-
 
   Future<void> _loadUserData() async {
     try {
@@ -244,6 +224,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
 
         debugPrint('✅ User data loaded: $_userName (ID: $_userId)');
+
+        // ✅ Check PIN status after user data is loaded
+        await _checkPinStatus();
+
         await _fetchUserVehicle();
       } else {
         debugPrint('⚠️ No user data found in SharedPreferences');
@@ -255,6 +239,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
       debugPrint('🔥 Error loading user data: $e');
       if (mounted) {
         setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  // ✅ NEW: Check if user has PIN set
+  Future<void> _checkPinStatus() async {
+    if (_userId == null) return;
+
+    setState(() {
+      _isCheckingPin = true;
+    });
+
+    try {
+      debugPrint('🔍 Checking PIN status for user: $_userId');
+
+      final response = await http.get(
+        Uri.parse('$baseUrl/pin/exists/$_userId'),
+      );
+
+      debugPrint('📡 PIN check response: ${response.statusCode}');
+      debugPrint('📡 PIN check body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        if (mounted) {
+          setState(() {
+            _hasPinSet = data['hasPinSet'] ?? false;
+            _isCheckingPin = false;
+          });
+        }
+
+        debugPrint('✅ PIN status: ${_hasPinSet ? "HAS PIN ✅" : "NO PIN ❌"}');
+      } else {
+        debugPrint('⚠️ Failed to check PIN status: ${response.statusCode}');
+        if (mounted) {
+          setState(() {
+            _isCheckingPin = false;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('🔥 Error checking PIN status: $e');
+      if (mounted) {
+        setState(() {
+          _isCheckingPin = false;
+        });
       }
     }
   }
@@ -549,9 +580,343 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ========================================
-  // CHANGE PIN DIALOG
-  // ========================================
+  // ✅ NEW: CREATE PIN DIALOG (Simplified - No Current PIN)
+  void _showCreatePinDialog() {
+    final TextEditingController newPinController = TextEditingController();
+    final TextEditingController confirmPinController = TextEditingController();
+
+    bool isNewPinVisible = false;
+    bool isConfirmPinVisible = false;
+    bool isLoading = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppSizes.radiusL),
+              ),
+              contentPadding: EdgeInsets.all(AppSizes.spacingL),
+              title: Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.lock_outline,
+                      color: AppColors.primary,
+                      size: 20,
+                    ),
+                  ),
+                  SizedBox(width: AppSizes.spacingM),
+                  Text(
+                    _selectedLanguage == 'en' ? 'Create PIN' : 'Créer un PIN',
+                    style: AppTypography.subtitle1.copyWith(fontSize: 16),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _selectedLanguage == 'en'
+                          ? 'Set up a 4-digit PIN for app security'
+                          : 'Configurez un code PIN à 4 chiffres pour la sécurité',
+                      style: AppTypography.body2.copyWith(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingL),
+
+                    // New PIN Field
+                    Text(
+                      _selectedLanguage == 'en' ? 'New PIN' : 'Nouveau PIN',
+                      style: AppTypography.body2.copyWith(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingS),
+                    TextField(
+                      controller: newPinController,
+                      keyboardType: TextInputType.number,
+                      maxLength: 4,
+                      obscureText: !isNewPinVisible,
+                      decoration: InputDecoration(
+                        hintText: '••••',
+                        counterText: '',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: AppSizes.spacingM,
+                          vertical: AppSizes.spacingS,
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            isNewPinVisible
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            setDialogState(() {
+                              isNewPinVisible = !isNewPinVisible;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingM),
+
+                    // Confirm PIN Field
+                    Text(
+                      _selectedLanguage == 'en'
+                          ? 'Confirm PIN'
+                          : 'Confirmer le PIN',
+                      style: AppTypography.body2.copyWith(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    SizedBox(height: AppSizes.spacingS),
+                    TextField(
+                      controller: confirmPinController,
+                      keyboardType: TextInputType.number,
+                      maxLength: 4,
+                      obscureText: !isConfirmPinVisible,
+                      decoration: InputDecoration(
+                        hintText: '••••',
+                        counterText: '',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: AppSizes.spacingM,
+                          vertical: AppSizes.spacingS,
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            isConfirmPinVisible
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            setDialogState(() {
+                              isConfirmPinVisible = !isConfirmPinVisible;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isLoading
+                      ? null
+                      : () => Navigator.pop(dialogContext),
+                  child: Text(
+                    _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
+                    style: AppTypography.body2.copyWith(
+                      color: AppColors.textSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: isLoading
+                      ? null
+                      : () async {
+                    // Validate inputs
+                    if (newPinController.text.length != 4) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _selectedLanguage == 'en'
+                                ? 'PIN must be 4 digits'
+                                : 'Le PIN doit contenir 4 chiffres',
+                          ),
+                          backgroundColor: AppColors.error,
+                        ),
+                      );
+                      return;
+                    }
+
+                    if (newPinController.text != confirmPinController.text) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            _selectedLanguage == 'en'
+                                ? 'PINs do not match'
+                                : 'Les PINs ne correspondent pas',
+                          ),
+                          backgroundColor: AppColors.error,
+                        ),
+                      );
+                      return;
+                    }
+
+                    setDialogState(() {
+                      isLoading = true;
+                    });
+
+                    try {
+                      await _createPin(newPinController.text);
+
+                      Navigator.pop(dialogContext);
+
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Row(
+                              children: [
+                                Icon(Icons.check_circle, color: AppColors.white, size: 20),
+                                SizedBox(width: AppSizes.spacingM),
+                                Expanded(
+                                  child: Text(
+                                    _selectedLanguage == 'en'
+                                        ? 'PIN created successfully'
+                                        : 'PIN créé avec succès',
+                                    style: AppTypography.body2.copyWith(color: AppColors.white),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            backgroundColor: AppColors.success,
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                            ),
+                            margin: EdgeInsets.all(AppSizes.spacingM),
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      setDialogState(() {
+                        isLoading = false;
+                      });
+
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Row(
+                              children: [
+                                Icon(Icons.error_outline, color: AppColors.white, size: 20),
+                                SizedBox(width: AppSizes.spacingM),
+                                Expanded(
+                                  child: Text(
+                                    e.toString(),
+                                    style: AppTypography.body2.copyWith(color: AppColors.white),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            backgroundColor: AppColors.error,
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                            ),
+                            margin: EdgeInsets.all(AppSizes.spacingM),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                    ),
+                    elevation: 0,
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  ),
+                  child: isLoading
+                      ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.white,
+                    ),
+                  )
+                      : Text(
+                    _selectedLanguage == 'en' ? 'Create' : 'Créer',
+                    style: AppTypography.body2.copyWith(
+                      color: AppColors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ✅ NEW: Create PIN API Call
+  Future<void> _createPin(String pin) async {
+    try {
+      debugPrint('🔐 Creating PIN for user: $_userId');
+
+      final response = await http.post(
+        Uri.parse('$baseUrl/pin/set'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'userId': _userId,
+          'pin': pin,
+        }),
+      );
+
+      debugPrint('📡 Create PIN Response status: ${response.statusCode}');
+      debugPrint('📡 Create PIN Response body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+
+        if (data['success'] == true) {
+          debugPrint('✅ PIN created successfully');
+
+          // ✅ Update local state
+          setState(() {
+            _hasPinSet = true;
+          });
+
+          return;
+        } else {
+          throw Exception(
+            _selectedLanguage == 'en'
+                ? (data['message'] ?? 'Failed to create PIN')
+                : (data['message'] ?? 'Échec de la création du PIN'),
+          );
+        }
+      } else {
+        throw Exception(
+          _selectedLanguage == 'en'
+              ? 'Failed to create PIN. Please try again.'
+              : 'Échec de la création du PIN. Veuillez réessayer.',
+        );
+      }
+    } catch (e) {
+      debugPrint('🔥 Error creating PIN: $e');
+      rethrow;
+    }
+  }
+
+  // ========== CHANGE PIN DIALOG (Existing - No Changes) ==========
   void _showChangePinDialog() {
     final TextEditingController currentPinController = TextEditingController();
     final TextEditingController newPinController = TextEditingController();
@@ -753,7 +1118,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onPressed: isLoading
                       ? null
                       : () async {
-                    // Validate inputs
                     if (currentPinController.text.length != 4) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -1039,15 +1403,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      // Auth/session
       await prefs.remove('user');
       await prefs.remove('accessToken');
-      await prefs.remove('refreshToken'); // (if you store it)
-      await prefs.remove('userId');       // (optional legacy)
-
-      // ✅ PIN service keys
-      await prefs.remove('user_id');              // <--- THIS fixes your case
-      await prefs.remove('failed_pin_attempts');  // <--- reset lock/attempts
+      await prefs.remove('refreshToken');
+      await prefs.remove('userId');
+      await prefs.remove('user_id');
+      await prefs.remove('failed_pin_attempts');
 
       debugPrint('✅ User logged out successfully');
 
@@ -1063,12 +1424,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-
-
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const SettingsSkeleton();  // ✅ Use skeleton instead
+      return const SettingsSkeleton();
     }
 
     return Scaffold(
@@ -1076,7 +1435,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Header with Language Selector
             Container(
               color: AppColors.white,
               padding: EdgeInsets.symmetric(
@@ -1098,7 +1456,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       style: AppTypography.h3.copyWith(fontSize: 18),
                     ),
                   ),
-                  // Language Flag Button
                   InkWell(
                     onTap: _showLanguageSelector,
                     borderRadius: BorderRadius.circular(12),
@@ -1145,7 +1502,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: ListView(
                 padding: EdgeInsets.all(AppSizes.spacingL),
                 children: [
-                  // Alerts Section
                   _buildSectionHeader(
                     _selectedLanguage == 'en' ? 'ALERTS' : 'ALERTES',
                   ),
@@ -1231,23 +1587,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // Security Section
+                  // ✅ DYNAMIC SECURITY SECTION
                   _buildSectionHeader(
                     _selectedLanguage == 'en' ? 'SECURITY' : 'SÉCURITÉ',
                   ),
                   SizedBox(height: AppSizes.spacingM),
                   _buildSettingsTile(
-                    icon: Icons.lock_reset,
-                    title: _selectedLanguage == 'en' ? 'Change PIN' : 'Changer le PIN',
-                    subtitle: _selectedLanguage == 'en'
+                    icon: _hasPinSet ? Icons.lock_reset : Icons.lock_outline,
+                    title: _hasPinSet
+                        ? (_selectedLanguage == 'en' ? 'Change PIN' : 'Changer le PIN')
+                        : (_selectedLanguage == 'en' ? 'Create PIN' : 'Créer un PIN'),
+                    subtitle: _hasPinSet
+                        ? (_selectedLanguage == 'en'
                         ? 'Update your app security PIN'
-                        : 'Mettre à jour votre PIN de sécurité',
-                    onTap: _showChangePinDialog,
+                        : 'Mettre à jour votre PIN de sécurité')
+                        : (_selectedLanguage == 'en'
+                        ? 'Set up a security PIN for app protection'
+                        : 'Configurer un PIN de sécurité pour protéger l\'application'),
+                    onTap: _hasPinSet ? _showChangePinDialog : _showCreatePinDialog,
                   ),
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // Account Section
                   _buildSectionHeader(
                     _selectedLanguage == 'en' ? 'ACCOUNT' : 'COMPTE',
                   ),
@@ -1298,7 +1659,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // Support Section
                   _buildSectionHeader(
                     _selectedLanguage == 'en' ? 'SUPPORT' : 'SUPPORT',
                   ),
@@ -1321,12 +1681,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // Logout Button
                   _buildLogoutButton(),
 
                   SizedBox(height: AppSizes.spacingL),
 
-                  // Version Info
                   Center(
                     child: Text(
                       'Version 1.0.0',
