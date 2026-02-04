@@ -699,7 +699,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
                     ),
                   ),
                   TextSpan(
-                    text: 'Tracking',
+                    text: 'GROUP',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,

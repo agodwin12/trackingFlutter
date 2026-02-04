@@ -6,24 +6,24 @@ import 'dart:convert' as ui;
 import 'dart:typed_data';
 import 'dart:ui';
 import 'dart:ui' as ui hide Codec;
+import 'package:FLEETRA/src/screens/dashboard/services/safe_zone_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:tracking/src/screens/dashboard/services/safe_zone_service.dart';
 import '../../../services/env_config.dart';
 import '../../../services/socket_service.dart';
-import '../../../services/connectivity_service.dart'; // ✅ NEW
-import '../../../services/cache_service.dart'; // ✅ NEW
+import '../../../services/connectivity_service.dart';
+import '../../../services/cache_service.dart';
 import '../models/vehicle_model.dart';
 import 'dashboard_service.dart';
 
 class DashboardController extends ChangeNotifier {
   // Services
-  final ConnectivityService _connectivityService = ConnectivityService(); // ✅ NEW
-  final CacheService _cacheService = CacheService(); // ✅ NEW
+  final ConnectivityService _connectivityService = ConnectivityService();
+  final CacheService _cacheService = CacheService();
   final SocketService _socketService = SocketService();
 
   // State Variables
@@ -44,7 +44,7 @@ class DashboardController extends ChangeNotifier {
   List<Vehicle> _vehicles = [];
   BitmapDescriptor? _customCarIcon;
   GoogleMapController? _mapController;
-  DateTime? _lastLocationUpdate; // ✅ NEW - Track when location was last updated
+  DateTime? _lastLocationUpdate;
 
   // Battery State Variables
   int _batteryPercentage = 0;
@@ -80,14 +80,14 @@ class DashboardController extends ChangeNotifier {
   GoogleMapController? get mapController => _mapController;
   List<dynamic> _nearbyPolice = [];
   List<dynamic> get nearbyPolice => _nearbyPolice;
-  DateTime? get lastLocationUpdate => _lastLocationUpdate; // ✅ NEW
+  DateTime? get lastLocationUpdate => _lastLocationUpdate;
 
   // Battery Getters
   int get batteryPercentage => _batteryPercentage;
   double get batteryVoltage => _batteryVoltage;
   bool get isLowBattery => _isLowBattery;
 
-  // ✅ NEW: Check if we're online
+  // Connectivity Getters
   bool get isOnline => _connectivityService.isOnline;
   bool get isOffline => _connectivityService.isOffline;
 
@@ -103,7 +103,38 @@ class DashboardController extends ChangeNotifier {
     _selectedVehicleId = vehicleId;
   }
 
-  // ✅ UPDATED: Initialize with offline support
+  // ✅ NEW: Validate and update vehicle ID after vehicles are loaded
+  Future<void> _validateAndUpdateVehicleId(int requestedVehicleId) async {
+    if (_vehicles.isEmpty) {
+      debugPrint('⚠️ No vehicles available');
+      return;
+    }
+
+    // Check if requested vehicle exists
+    final vehicleExists = _vehicles.any((v) => v.id == requestedVehicleId);
+
+    if (vehicleExists) {
+      _selectedVehicleId = requestedVehicleId;
+      debugPrint('✅ Vehicle ID $requestedVehicleId exists and is selected');
+    } else {
+      // Fall back to first available vehicle
+      _selectedVehicleId = _vehicles.first.id;
+      debugPrint('⚠️ Vehicle ID $requestedVehicleId not found. Falling back to vehicle ID: $_selectedVehicleId');
+
+      // Update SharedPreferences with the fallback vehicle
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt('current_vehicle_id', _selectedVehicleId);
+        debugPrint('✅ Updated SharedPreferences with fallback vehicle ID: $_selectedVehicleId');
+      } catch (e) {
+        debugPrint('⚠️ Error updating SharedPreferences: $e');
+      }
+    }
+
+    notifyListeners();
+  }
+
+  // Initialize with offline support
   Future<void> initialize() async {
     try {
       debugPrint('⚡ Starting dashboard initialization...');
@@ -113,11 +144,11 @@ class DashboardController extends ChangeNotifier {
       await loadCustomMarker();
 
       if (isOffline) {
-        // ✅ OFFLINE MODE: Load from cache
+        // OFFLINE MODE: Load from cache
         debugPrint('📱 OFFLINE MODE - Loading from cache...');
         await _loadFromCache();
       } else {
-        // ✅ ONLINE MODE: Load from API and cache it
+        // ONLINE MODE: Load from API and cache it
         debugPrint('🌐 ONLINE MODE - Loading from API...');
         await initializeDashboard();
 
@@ -134,7 +165,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ NEW: Load data from cache (offline mode)
+  // Load data from cache (offline mode)
   Future<void> _loadFromCache() async {
     try {
       debugPrint('📦 Loading cached data...');
@@ -144,6 +175,9 @@ class DashboardController extends ChangeNotifier {
       if (cachedVehicles != null && cachedVehicles.isNotEmpty) {
         _vehicles = cachedVehicles.map((v) => Vehicle.fromJson(v)).toList();
         debugPrint('✅ Loaded ${_vehicles.length} vehicles from cache');
+
+        // ✅ Validate vehicle ID after loading vehicles
+        await _validateAndUpdateVehicleId(_selectedVehicleId);
       }
 
       // Load vehicle details from cache
@@ -204,7 +238,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Create markers
+  // Create markers (kept for compatibility, but dashboard.dart uses its own animated version)
   Set<Marker> createMarkers() {
     if (selectedVehicle == null || _customCarIcon == null) return {};
 
@@ -224,7 +258,7 @@ class DashboardController extends ChangeNotifier {
     };
   }
 
-  // ✅ UPDATED: Initialize dashboard with caching
+  // Initialize dashboard with caching
   Future<void> initializeDashboard() async {
     try {
       debugPrint('⚡ Starting dashboard initialization...');
@@ -234,6 +268,9 @@ class DashboardController extends ChangeNotifier {
         fetchVehicles(),
         _fetchInitialLocation(),
       ]);
+
+      // ✅ Validate vehicle ID after vehicles are loaded
+      await _validateAndUpdateVehicleId(_selectedVehicleId);
 
       debugPrint('✅ Critical data loaded! Showing map now...');
 
@@ -266,7 +303,6 @@ class DashboardController extends ChangeNotifier {
         _vehicleLng = result['longitude'] ?? 9.7679;
         _lastLocationUpdate = DateTime.now();
 
-        // ✅ Cache the location
         await _cacheService.cacheLastLocation(
           _selectedVehicleId,
           _vehicleLat,
@@ -300,7 +336,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ UPDATED: Refresh with offline check
+  // Refresh with offline check
   Future<void> refresh() async {
     if (isOffline) {
       debugPrint('📱 Cannot refresh while offline');
@@ -325,7 +361,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ UPDATED: Fetch vehicles with caching
+  // Fetch vehicles with caching
   Future<void> fetchVehicles() async {
     if (isOffline) {
       debugPrint('📱 Offline - using cached vehicles');
@@ -339,16 +375,15 @@ class DashboardController extends ChangeNotifier {
 
     _vehicles = vehiclesData.map((v) => Vehicle.fromJson(v)).toList();
 
-    // ✅ Cache the vehicle list with proper casting
     await _cacheService.cacheVehicleList(
-        vehiclesData.map((v) => v as Map<String, dynamic>).toList()  // ✅ FIXED
+        vehiclesData.map((v) => v as Map<String, dynamic>).toList()
     );
 
     debugPrint("✅ Loaded ${_vehicles.length} vehicles and cached them");
     notifyListeners();
   }
 
-  // ✅ UPDATED: Fetch dashboard data with caching
+  // Fetch dashboard data with caching
   Future<void> fetchDashboardData() async {
     try {
       if (isOffline) {
@@ -358,7 +393,6 @@ class DashboardController extends ChangeNotifier {
 
       debugPrint('📡 ========== FETCHING DASHBOARD DATA ==========');
 
-      // Fetch geofencing status
       final geofencingActive =
       await DashboardService.fetchGeofencingStatus(_selectedVehicleId);
 
@@ -369,7 +403,6 @@ class DashboardController extends ChangeNotifier {
         _geofenceEnabled = true;
       }
 
-      // Fetch safe zone status
       final safeZoneResult = await SafeZoneService.getSafeZone(_selectedVehicleId);
 
       if (safeZoneResult['success']) {
@@ -379,7 +412,6 @@ class DashboardController extends ChangeNotifier {
         _safeZoneEnabled = false;
       }
 
-      // ✅ Cache vehicle details
       await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
         'geofenceEnabled': _geofenceEnabled,
         'safeZoneEnabled': _safeZoneEnabled,
@@ -395,7 +427,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-// ✅ UPDATED: Fetch ACTUAL engine status from GPS device
+  // Fetch ACTUAL engine status from GPS device
   Future<void> fetchRealtimeEngineStatus() async {
     try {
       if (isOffline) {
@@ -405,7 +437,6 @@ class DashboardController extends ChangeNotifier {
 
       debugPrint('🔍 Fetching ACTUAL engine status from GPS device...');
 
-      // ✅ Use the /location endpoint to get real GPS status
       final url = '${EnvConfig.baseUrl}/gps/location/$_selectedVehicleId';
       final response = await http.get(Uri.parse(url));
 
@@ -413,22 +444,18 @@ class DashboardController extends ChangeNotifier {
         final data = jsonDecode(response.body);
 
         if (data['success'] == true) {
-          // ✅ Get engine_status from API (ON or OFF)
           final String engineStatus = data['engine_status'] ?? 'OFF';
           final bool newEngineState = (engineStatus == 'ON');
 
           debugPrint('✅ Actual GPS Engine Status: $engineStatus');
           debugPrint('✅ Engine boolean: $newEngineState');
 
-          // ✅ Update the engine state
           _engineOn = newEngineState;
 
-          // ✅ Parse battery if available
           if (data['raw_status'] != null && data['raw_status'].isNotEmpty) {
             _parseVehicleStatus(data['raw_status']);
           }
 
-          // ✅ Update cache
           await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
             'geofenceEnabled': _geofenceEnabled,
             'safeZoneEnabled': _safeZoneEnabled,
@@ -479,7 +506,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ UPDATED: Fetch location with caching
+  // Fetch location with caching
   Future<void> fetchCurrentLocation({bool silent = false}) async {
     if (isOffline) {
       if (!silent) debugPrint('📱 Offline - using cached location');
@@ -493,7 +520,6 @@ class DashboardController extends ChangeNotifier {
       _vehicleLng = result['longitude'] ?? 9.7679;
       _lastLocationUpdate = DateTime.now();
 
-      // ✅ Cache the location
       await _cacheService.cacheLastLocation(
         _selectedVehicleId,
         _vehicleLat,
@@ -563,7 +589,6 @@ class DashboardController extends ChangeNotifier {
           _vehicleLng = lon is double ? lon : (lon as num).toDouble();
           _lastLocationUpdate = DateTime.now();
 
-          // ✅ Cache real-time location
           _cacheService.cacheLastLocation(
             _selectedVehicleId,
             _vehicleLat,
@@ -596,7 +621,7 @@ class DashboardController extends ChangeNotifier {
     });
   }
 
-  // ✅ UPDATED: Toggle geofence with offline check
+  // Toggle geofence with offline check
   Future<bool> toggleGeofence() async {
     if (isOffline) {
       debugPrint('❌ Cannot toggle geofence while offline');
@@ -615,7 +640,6 @@ class DashboardController extends ChangeNotifier {
       if (response.statusCode == 200 || response.statusCode == 201) {
         _geofenceEnabled = !_geofenceEnabled;
 
-        // ✅ Update cache
         await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
           'geofenceEnabled': _geofenceEnabled,
           'safeZoneEnabled': _safeZoneEnabled,
@@ -635,7 +659,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-// ✅ UPDATED: Toggle safe zone with offline check
+  // Toggle safe zone with offline check
   Future<Map<String, dynamic>> toggleSafeZone() async {
     if (isOffline) {
       debugPrint('❌ Cannot toggle safe zone while offline');
@@ -654,7 +678,7 @@ class DashboardController extends ChangeNotifier {
           latitude: _vehicleLat,
           longitude: _vehicleLng,
           name: 'Home',
-          radiusMeters: 10,  // ✅ CHANGED FROM 100 TO 10
+          radiusMeters: 10,
         );
 
         _isTogglingSafeZone = false;
@@ -662,7 +686,6 @@ class DashboardController extends ChangeNotifier {
         if (createResult['success']) {
           _safeZoneEnabled = true;
 
-          // ✅ Update cache
           await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
             'geofenceEnabled': _geofenceEnabled,
             'safeZoneEnabled': _safeZoneEnabled,
@@ -682,7 +705,6 @@ class DashboardController extends ChangeNotifier {
         if (deleteResult['success']) {
           _safeZoneEnabled = false;
 
-          // ✅ Update cache
           await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
             'geofenceEnabled': _geofenceEnabled,
             'safeZoneEnabled': _safeZoneEnabled,
@@ -702,7 +724,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ UPDATED: Toggle engine with offline check
+  // Toggle engine with offline check
   Future<bool> toggleEngine() async {
     if (isOffline) {
       debugPrint('❌ Cannot control engine while offline');
@@ -738,7 +760,6 @@ class DashboardController extends ChangeNotifier {
         _engineOn = expectedNewState;
         _isTogglingEngine = false;
 
-        // ✅ Update cache
         await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
           'geofenceEnabled': _geofenceEnabled,
           'safeZoneEnabled': _safeZoneEnabled,
@@ -782,7 +803,6 @@ class DashboardController extends ChangeNotifier {
             if (actualState == expectedState) {
               _engineOn = actualState;
 
-              // ✅ Update cache
               _cacheService.cacheVehicleDetails(_selectedVehicleId, {
                 'geofenceEnabled': _geofenceEnabled,
                 'safeZoneEnabled': _safeZoneEnabled,
@@ -805,7 +825,7 @@ class DashboardController extends ChangeNotifier {
     });
   }
 
-// ✅ UPDATED: Report stolen with offline check
+  // Report stolen with offline check
   Future<bool> reportStolen() async {
     if (isOffline) {
       debugPrint('❌ Cannot report stolen while offline');
@@ -835,7 +855,6 @@ class DashboardController extends ChangeNotifier {
         "longitude": _vehicleLng,
       };
 
-      // 1️⃣ Create/fetch stolen alert
       final alertResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/alerts/report-stolen"),
         headers: {"Content-Type": "application/json"},
@@ -854,7 +873,6 @@ class DashboardController extends ChangeNotifier {
 
       debugPrint('🚨 Alert ${alreadyReported ? "already exists" : "created"}. Securing vehicle...');
 
-      // 2️⃣ ✅ ALWAYS send CLOSERELAY command (removed the if (!alreadyReported) check)
       final commandResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
         headers: {"Content-Type": "application/json"},
@@ -875,7 +893,6 @@ class DashboardController extends ChangeNotifier {
         debugPrint('✅ Engine CLOSERELAY command sent successfully');
         _engineOn = false;
 
-        // ✅ Update cache
         await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
           'geofenceEnabled': _geofenceEnabled,
           'safeZoneEnabled': _safeZoneEnabled,
@@ -901,7 +918,8 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  void onVehicleSelected(int vehicleId) {
+  // ✅ UPDATED: Vehicle selection with validation
+  void onVehicleSelected(int vehicleId) async {
     if (_selectedVehicleId != vehicleId) {
       _socketService.leaveVehicleTracking(_selectedVehicleId);
 

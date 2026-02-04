@@ -1,3 +1,21 @@
+import 'package:FLEETRA/src/screens/change%20password%20in%20app/change_password.dart';
+import 'package:FLEETRA/src/screens/contact%20us/contact_us.dart';
+import 'package:FLEETRA/src/screens/dashboard/dashboard.dart';
+import 'package:FLEETRA/src/screens/lock%20screen/lock_screen.dart';
+import 'package:FLEETRA/src/screens/login/login.dart';
+import 'package:FLEETRA/src/screens/notification/notification_screen.dart';
+import 'package:FLEETRA/src/screens/onBoarding/onBoardingScreen.dart';
+import 'package:FLEETRA/src/screens/profile/profile.dart';
+import 'package:FLEETRA/src/screens/settings/settings.dart';
+import 'package:FLEETRA/src/screens/splash/splash_screen.dart';
+import 'package:FLEETRA/src/screens/track/VehicleTrackingMap.dart';
+import 'package:FLEETRA/src/screens/trip%20map/trip_map.dart';
+import 'package:FLEETRA/src/screens/trip/trip_screen.dart';
+import 'package:FLEETRA/src/services/app_lifecycle_service.dart';
+import 'package:FLEETRA/src/services/connectivity_service.dart';
+import 'package:FLEETRA/src/services/env_config.dart';
+import 'package:FLEETRA/src/services/notification_service.dart';
+import 'package:FLEETRA/src/services/pin_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,28 +27,12 @@ import 'dart:io' show Platform;
 // Firebase
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:tracking/src/screens/change%20password%20in%20app/change_password.dart';
-import 'package:tracking/src/screens/login/login.dart';
 
 // Screens
-import 'package:tracking/src/screens/splash/splash_screen.dart';
-import 'package:tracking/src/screens/onBoarding/onBoardingScreen.dart';
-import 'package:tracking/src/screens/dashboard/dashboard.dart';
-import 'package:tracking/src/screens/profile/profile.dart';
-import 'package:tracking/src/screens/settings/settings.dart';
-import 'package:tracking/src/screens/track/VehicleTrackingMap.dart';
-import 'package:tracking/src/screens/trip map/trip_map.dart';
-import 'package:tracking/src/screens/trip/trip_screen.dart';
-import 'package:tracking/src/screens/notification/notification_screen.dart';
-import 'package:tracking/src/screens/contact us/contact_us.dart';
-import 'package:tracking/src/screens/lock screen/lock_screen.dart';
+
 
 // Services
-import 'package:tracking/src/services/env_config.dart';
-import 'package:tracking/src/services/notification_service.dart';
-import 'package:tracking/src/services/pin_service.dart';
-import 'package:tracking/src/services/connectivity_service.dart';
-import 'package:tracking/src/services/app_lifecycle_service.dart';
+
 
 /// =====================================================
 ///  FCM Service - Handles token lifecycle with listeners
@@ -442,7 +444,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PROXYM TRACKING',
+      title: 'FLEETRA',
       debugShowCheckedModeBanner: false,
       navigatorKey: NotificationService.navigatorKey,
       theme: ThemeData(

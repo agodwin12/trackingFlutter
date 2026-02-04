@@ -1,15 +1,36 @@
 // lib/src/screens/contact/contact_screen.dart
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/utility/app_theme.dart';
 
-class ContactScreen extends StatelessWidget {
+class ContactScreen extends StatefulWidget {
   const ContactScreen({Key? key}) : super(key: key);
 
+  @override
+  State<ContactScreen> createState() => _ContactScreenState();
+}
+
+class _ContactScreenState extends State<ContactScreen> {
+  String _selectedLanguage = 'en';
+
   // PROXYM TRACKING Contact Details
-  static const String phoneNumber = '+237694587675'; // Replace with actual number
-  static const String email = 'accueil@proxymgroup.com'; // Replace with actual email
-  static const String website = 'https://proxymtracking.com'; // Replace with actual website
+  static const String phoneNumber = '+237694587675';
+  static const String email = 'accueil@proxymgroup.com';
+  static const String website = 'https://proxymtracking.com';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLanguagePreference();
+  }
+
+  Future<void> _loadLanguagePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _selectedLanguage = prefs.getString('language') ?? 'en';
+    });
+  }
 
   Future<void> _makePhoneCall(BuildContext context) async {
     final Uri phoneUri = Uri(scheme: 'tel', path: phoneNumber);
@@ -18,10 +39,20 @@ class ContactScreen extends StatelessWidget {
       if (await canLaunchUrl(phoneUri)) {
         await launchUrl(phoneUri);
       } else {
-        _showErrorSnackbar(context, 'Could not open phone dialer');
+        _showErrorSnackbar(
+          context,
+          _selectedLanguage == 'en'
+              ? 'Could not open phone dialer'
+              : 'Impossible d\'ouvrir le composeur',
+        );
       }
     } catch (e) {
-      _showErrorSnackbar(context, 'Error opening phone dialer');
+      _showErrorSnackbar(
+        context,
+        _selectedLanguage == 'en'
+            ? 'Error opening phone dialer'
+            : 'Erreur lors de l\'ouverture du composeur',
+      );
     }
   }
 
@@ -36,10 +67,20 @@ class ContactScreen extends StatelessWidget {
       if (await canLaunchUrl(emailUri)) {
         await launchUrl(emailUri);
       } else {
-        _showErrorSnackbar(context, 'Could not open email app');
+        _showErrorSnackbar(
+          context,
+          _selectedLanguage == 'en'
+              ? 'Could not open email app'
+              : 'Impossible d\'ouvrir l\'application email',
+        );
       }
     } catch (e) {
-      _showErrorSnackbar(context, 'Error opening email app');
+      _showErrorSnackbar(
+        context,
+        _selectedLanguage == 'en'
+            ? 'Error opening email app'
+            : 'Erreur lors de l\'ouverture de l\'email',
+      );
     }
   }
 
@@ -50,10 +91,20 @@ class ContactScreen extends StatelessWidget {
       if (await canLaunchUrl(websiteUri)) {
         await launchUrl(websiteUri, mode: LaunchMode.externalApplication);
       } else {
-        _showErrorSnackbar(context, 'Could not open website');
+        _showErrorSnackbar(
+          context,
+          _selectedLanguage == 'en'
+              ? 'Could not open website'
+              : 'Impossible d\'ouvrir le site web',
+        );
       }
     } catch (e) {
-      _showErrorSnackbar(context, 'Error opening website');
+      _showErrorSnackbar(
+        context,
+        _selectedLanguage == 'en'
+            ? 'Error opening website'
+            : 'Erreur lors de l\'ouverture du site web',
+      );
     }
   }
 
@@ -92,7 +143,7 @@ class ContactScreen extends StatelessWidget {
                   SizedBox(width: AppSizes.spacingM),
                   Expanded(
                     child: Text(
-                      'Contact Us',
+                      _selectedLanguage == 'en' ? 'Contact Us' : 'Nous Contacter',
                       style: AppTypography.h3.copyWith(fontSize: 18),
                     ),
                   ),
@@ -163,7 +214,7 @@ class ContactScreen extends StatelessWidget {
                                   ),
                                 ),
                                 TextSpan(
-                                  text: 'TRACKING',
+                                  text: 'GROUP',
                                   style: AppTypography.h2.copyWith(
                                     color: AppColors.white,
                                     fontSize: 24,
@@ -175,7 +226,9 @@ class ContactScreen extends StatelessWidget {
                           ),
                           SizedBox(height: AppSizes.spacingS),
                           Text(
-                            'We\'re here to help you 24/7',
+                            _selectedLanguage == 'en'
+                                ? 'We\'re here to help you 24/7'
+                                : 'Nous sommes là pour vous aider 24/7',
                             style: AppTypography.body1.copyWith(
                               color: AppColors.white.withOpacity(0.9),
                               fontSize: 14,
@@ -190,12 +243,14 @@ class ContactScreen extends StatelessWidget {
 
                     // Contact Options
                     Text(
-                      'Get in Touch',
+                      _selectedLanguage == 'en' ? 'Get in Touch' : 'Contactez-nous',
                       style: AppTypography.h3.copyWith(fontSize: 18),
                     ),
                     SizedBox(height: AppSizes.spacingM),
                     Text(
-                      'Choose your preferred way to reach us',
+                      _selectedLanguage == 'en'
+                          ? 'Choose your preferred way to reach us'
+                          : 'Choisissez votre méthode de contact préférée',
                       style: AppTypography.body2.copyWith(
                         color: AppColors.textSecondary,
                         fontSize: 13,
@@ -209,9 +264,11 @@ class ContactScreen extends StatelessWidget {
                     _buildContactCard(
                       context: context,
                       icon: Icons.phone_rounded,
-                      title: 'Call Us',
+                      title: _selectedLanguage == 'en' ? 'Call Us' : 'Appelez-nous',
                       subtitle: phoneNumber,
-                      description: 'Tap to call our support team',
+                      description: _selectedLanguage == 'en'
+                          ? 'Tap to call our support team'
+                          : 'Appuyez pour appeler notre équipe',
                       color: AppColors.success,
                       onTap: () => _makePhoneCall(context),
                     ),
@@ -222,9 +279,11 @@ class ContactScreen extends StatelessWidget {
                     _buildContactCard(
                       context: context,
                       icon: Icons.email_rounded,
-                      title: 'Email Us',
+                      title: _selectedLanguage == 'en' ? 'Email Us' : 'Envoyez un email',
                       subtitle: email,
-                      description: 'Send us your questions',
+                      description: _selectedLanguage == 'en'
+                          ? 'Send us your questions'
+                          : 'Envoyez-nous vos questions',
                       color: AppColors.primary,
                       onTap: () => _sendEmail(context),
                     ),
@@ -235,9 +294,11 @@ class ContactScreen extends StatelessWidget {
                     _buildContactCard(
                       context: context,
                       icon: Icons.language_rounded,
-                      title: 'Visit Website',
+                      title: _selectedLanguage == 'en' ? 'Visit Website' : 'Visitez le site web',
                       subtitle: website,
-                      description: 'Learn more about our services',
+                      description: _selectedLanguage == 'en'
+                          ? 'Learn more about our services'
+                          : 'En savoir plus sur nos services',
                       color: Color(0xFF8B5CF6),
                       onTap: () => _openWebsite(context),
                     ),
@@ -268,7 +329,9 @@ class ContactScreen extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Business Hours',
+                                  _selectedLanguage == 'en'
+                                      ? 'Business Hours'
+                                      : 'Heures d\'ouverture',
                                   style: AppTypography.subtitle1.copyWith(
                                     fontSize: 14,
                                     color: AppColors.primary,
@@ -276,7 +339,9 @@ class ContactScreen extends StatelessWidget {
                                 ),
                                 SizedBox(height: 4),
                                 Text(
-                                  'Monday - Friday: 8:00 AM - 6:00 PM\nSaturday: 9:00 AM - 2:00 PM',
+                                  _selectedLanguage == 'en'
+                                      ? 'Monday - Friday: 8:00 AM - 6:00 PM\nSaturday: 9:00 AM - 2:00 PM'
+                                      : 'Lundi - Vendredi: 8h00 - 18h00\nSamedi: 9h00 - 14h00',
                                   style: AppTypography.body2.copyWith(
                                     fontSize: 12,
                                     height: 1.5,

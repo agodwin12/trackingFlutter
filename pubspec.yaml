@@ -1,11 +1,11 @@
-name: tracking
-description: "A new Flutter project."
+name: FLEETRA
+description: "FLEETRA - GPS Vehicle Tracking System"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 
-version: 1.2.3+180
+version: 1.2.3+190
 
 environment:
   sdk: ^3.6.2

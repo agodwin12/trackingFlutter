@@ -2,13 +2,15 @@
 
 import 'dart:async';
 import 'dart:ui';
+import 'dart:math' as math;
+import 'package:FLEETRA/src/screens/dashboard/services/dashboard_controller.dart';
+import 'package:FLEETRA/src/screens/dashboard/widgets/dashboard_skeleton.dart';
+import 'package:FLEETRA/src/screens/dashboard/widgets/dashboard_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:tracking/src/screens/dashboard/services/dashboard_controller.dart';
-import 'package:tracking/src/screens/dashboard/widgets/dashboard_widget.dart';
-import 'package:tracking/src/screens/dashboard/widgets/dashboard_skeleton.dart';
+
 import '../../core/utility/app_theme.dart';
 import '../../widgets/offline_barner.dart';
 import '../settings/settings.dart';
@@ -25,20 +27,43 @@ class ModernDashboard extends StatefulWidget {
 }
 
 class _ModernDashboardState extends State<ModernDashboard> with TickerProviderStateMixin {
-  late DashboardController _controller;
+  DashboardController? _controller; // ✅ Changed from late to nullable
   StreamSubscription<Map<String, dynamic>>? _alertSubscription;
   String _selectedLanguage = 'en';
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
+  // ✅ Marker animation variables
+  late AnimationController _markerAnimationController;
+  Animation<double>? _latAnimation;
+  Animation<double>? _lngAnimation;
+  Animation<double>? _rotationAnimation;
+  double _currentMarkerLat = 4.0511; // ✅ Default to Cameroon coordinates
+  double _currentMarkerLng = 9.7679;
+  double _currentRotation = 0.0;
+
   @override
   void initState() {
     super.initState();
-    _saveCurrentVehicleId();
-    _loadLanguagePreference();
-    _controller = DashboardController(widget.vehicleId);
-    _controller.initialize();
+    _initializeApp();
+  }
+
+  // ✅ Initialize app with saved vehicle
+  Future<void> _initializeApp() async {
+    await _loadSavedVehicleId(); // Load saved vehicle first
+    await _loadLanguagePreference();
+
+    _controller = DashboardController(_savedVehicleId ?? widget.vehicleId);
+    await _controller!.initialize();
+
+    // ✅ Initialize current marker position AFTER controller loads and trigger setState
+    if (mounted) {
+      setState(() {
+        _currentMarkerLat = _controller!.vehicleLat;
+        _currentMarkerLng = _controller!.vehicleLng;
+      });
+    }
 
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1500),
@@ -49,11 +74,154 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    _alertSubscription = _controller.safeZoneAlertStream.listen((alertData) {
+    // ✅ Marker animation controller
+    _markerAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 1500), // Will be dynamic
+      vsync: this,
+    );
+
+    _alertSubscription = _controller!.safeZoneAlertStream.listen((alertData) {
       if (mounted) {
         _showSafeZoneAlert(alertData);
       }
     });
+
+    // ✅ Listen for location updates to animate marker
+    _setupLocationListener();
+  }
+
+  int? _savedVehicleId;
+
+  // ✅ Load saved vehicle ID from SharedPreferences
+  Future<void> _loadSavedVehicleId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedId = prefs.getInt('current_vehicle_id');
+      if (savedId != null) {
+        _savedVehicleId = savedId;
+        debugPrint('✅ Loaded saved vehicle ID: $savedId');
+      } else {
+        debugPrint('ℹ️ No saved vehicle ID, using constructor parameter');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error loading saved vehicle ID: $e');
+    }
+  }
+
+  // ✅ Setup listener for location updates to trigger smooth animation
+  void _setupLocationListener() {
+    _controller?.addListener(() {
+      if (_controller!.vehicleLat != _currentMarkerLat ||
+          _controller!.vehicleLng != _currentMarkerLng) {
+        _animateMarkerToNewPosition(
+          _controller!.vehicleLat,
+          _controller!.vehicleLng,
+        );
+      }
+    });
+  }
+
+  // ✅ Calculate bearing between two coordinates for rotation
+  double _calculateBearing(double startLat, double startLng, double endLat, double endLng) {
+    final dLon = (endLng - startLng) * (3.14159265359 / 180);
+    final startLatRad = startLat * (3.14159265359 / 180);
+    final endLatRad = endLat * (3.14159265359 / 180);
+
+    final y = math.sin(dLon) * math.cos(endLatRad);
+    final x = math.cos(startLatRad) * math.sin(endLatRad) -
+        math.sin(startLatRad) * math.cos(endLatRad) * math.cos(dLon);
+
+    final bearing = math.atan2(y, x) * (180 / 3.14159265359);
+    return (bearing + 360) % 360; // Normalize to 0-360
+  }
+
+  // ✅ Calculate distance in meters between two coordinates
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double earthRadius = 6371000; // meters
+    final dLat = (lat2 - lat1) * (3.14159265359 / 180);
+    final dLon = (lon2 - lon1) * (3.14159265359 / 180);
+
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1 * (3.14159265359 / 180)) *
+            math.cos(lat2 * (3.14159265359 / 180)) *
+            math.sin(dLon / 2) * math.sin(dLon / 2);
+
+    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  // ✅ Animate marker smoothly to new position
+  void _animateMarkerToNewPosition(double newLat, double newLng) {
+    // Calculate distance to determine animation duration
+    final distance = _calculateDistance(
+      _currentMarkerLat,
+      _currentMarkerLng,
+      newLat,
+      newLng,
+    );
+
+    // Dynamic duration based on distance
+    // Close movements (< 10m): 500ms
+    // Medium movements (10-100m): 1000-2000ms
+    // Far movements (> 100m): 2500ms max
+    int durationMs;
+    if (distance < 10) {
+      durationMs = 500;
+    } else if (distance < 100) {
+      durationMs = (1000 + (distance * 10)).clamp(1000, 2000).toInt();
+    } else {
+      durationMs = 2500;
+    }
+
+    // Calculate rotation (bearing)
+    final bearing = _calculateBearing(
+      _currentMarkerLat,
+      _currentMarkerLng,
+      newLat,
+      newLng,
+    );
+
+    // Update animation duration
+    _markerAnimationController.duration = Duration(milliseconds: durationMs);
+
+    // Create animations
+    _latAnimation = Tween<double>(
+      begin: _currentMarkerLat,
+      end: newLat,
+    ).animate(CurvedAnimation(
+      parent: _markerAnimationController,
+      curve: Curves.easeInOut,
+    ));
+
+    _lngAnimation = Tween<double>(
+      begin: _currentMarkerLng,
+      end: newLng,
+    ).animate(CurvedAnimation(
+      parent: _markerAnimationController,
+      curve: Curves.easeInOut,
+    ));
+
+    _rotationAnimation = Tween<double>(
+      begin: _currentRotation,
+      end: bearing,
+    ).animate(CurvedAnimation(
+      parent: _markerAnimationController,
+      curve: Curves.easeInOut,
+    ));
+
+    // Listen to animation updates
+    _markerAnimationController.addListener(() {
+      if (_latAnimation != null && _lngAnimation != null && _rotationAnimation != null) {
+        setState(() {
+          _currentMarkerLat = _latAnimation!.value;
+          _currentMarkerLng = _lngAnimation!.value;
+          _currentRotation = _rotationAnimation!.value;
+        });
+      }
+    });
+
+    // Start animation
+    _markerAnimationController.forward(from: 0.0);
   }
 
   String _getLastSeenText(DateTime lastUpdate) {
@@ -76,6 +244,32 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     }
   }
 
+  // ✅ Create markers with animated position and rotation
+  Set<Marker> _createAnimatedMarkers() {
+    if (_controller == null || _controller!.selectedVehicle == null || _controller!.customCarIcon == null) {
+      debugPrint('⚠️ Cannot create marker: controller=${_controller != null}, vehicle=${_controller?.selectedVehicle != null}, icon=${_controller?.customCarIcon != null}');
+      return {};
+    }
+
+    debugPrint('🎯 Creating marker at: $_currentMarkerLat, $_currentMarkerLng, rotation: $_currentRotation');
+
+    return {
+      Marker(
+        markerId: const MarkerId('vehicle'),
+        position: LatLng(_currentMarkerLat, _currentMarkerLng), // ✅ Use animated position
+        icon: _controller!.customCarIcon!,
+        anchor: const Offset(0.5, 0.5),
+        rotation: _currentRotation, // ✅ Use animated rotation
+        infoWindow: InfoWindow(
+          title: _controller!.selectedVehicle!.nickname.isNotEmpty
+              ? _controller!.selectedVehicle!.nickname
+              : '${_controller!.selectedVehicle!.brand} ${_controller!.selectedVehicle!.model}',
+          snippet: _controller!.selectedVehicle!.immatriculation,
+        ),
+      ),
+    };
+  }
+
   Future<void> _saveCurrentVehicleId() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -96,8 +290,9 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   @override
   void dispose() {
     _pulseController.dispose();
+    _markerAnimationController.dispose();
     _alertSubscription?.cancel();
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
@@ -185,9 +380,9 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   }
 
   void _handleGeofenceToggle() async {
-    if (_controller.isTogglingGeofence) return;
+    if (_controller == null || _controller!.isTogglingGeofence) return;
 
-    final success = await _controller.toggleGeofence();
+    final success = await _controller!.toggleGeofence();
 
     if (!mounted) return;
 
@@ -204,7 +399,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
             Expanded(
               child: Text(
                 success
-                    ? (_controller.geofenceEnabled
+                    ? (_controller!.geofenceEnabled
                     ? (_selectedLanguage == 'en' ? 'Geofencing enabled' : 'Géofence activée')
                     : (_selectedLanguage == 'en' ? 'Geofencing disabled' : 'Géofence désactivée'))
                     : (_selectedLanguage == 'en' ? 'Failed to toggle geofencing' : 'Échec'),
@@ -214,7 +409,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
           ],
         ),
         backgroundColor: success
-            ? (_controller.geofenceEnabled ? const Color(0xFF10B981) : const Color(0xFF64748B))
+            ? (_controller!.geofenceEnabled ? const Color(0xFF10B981) : const Color(0xFF64748B))
             : AppColors.error,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
@@ -225,14 +420,14 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   }
 
   void _handleSafeZoneToggle() async {
-    if (_controller.isTogglingSafeZone) return;
+    if (_controller == null || _controller!.isTogglingSafeZone) return;
 
-    final result = await _controller.toggleSafeZone();
+    final result = await _controller!.toggleSafeZone();
 
     if (!mounted) return;
 
     if (result['success']) {
-      final bool wasCreated = _controller.safeZoneEnabled;
+      final bool wasCreated = _controller!.safeZoneEnabled;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -243,8 +438,8 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               Expanded(
                 child: Text(
                   wasCreated
-                      ? (_selectedLanguage == 'en' ? 'Safe Zone created!' : 'Zone sécurisée créée!')
-                      : (_selectedLanguage == 'en' ? 'Safe Zone deleted' : 'Zone supprimée'),
+                      ? (_selectedLanguage == 'en' ? 'Safe Zone created!' : 'zone de sécurité créée!')
+                      : (_selectedLanguage == 'en' ? 'Safe Zone deleted' : 'zone de sécurité supprimée'),
                   style: AppTypography.body2.copyWith(color: Colors.white),
                 ),
               ),
@@ -272,7 +467,9 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   }
 
   void _handleEngineToggle() async {
-    final success = await _controller.toggleEngine();
+    if (_controller == null) return;
+
+    final success = await _controller!.toggleEngine();
 
     if (!mounted) return;
 
@@ -289,7 +486,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
             Expanded(
               child: Text(
                 success
-                    ? (_controller.engineOn
+                    ? (_controller!.engineOn
                     ? (_selectedLanguage == 'en' ? 'Engine unlocked' : 'Moteur déverrouillé')
                     : (_selectedLanguage == 'en' ? 'Engine locked' : 'Moteur verrouillé'))
                     : (_selectedLanguage == 'en' ? 'Failed to toggle engine' : 'Échec'),
@@ -299,7 +496,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
           ],
         ),
         backgroundColor: success
-            ? (_controller.engineOn ? const Color(0xFF10B981) : AppColors.error)
+            ? (_controller!.engineOn ? const Color(0xFF10B981) : AppColors.error)
             : AppColors.error,
         behavior: SnackBarBehavior.floating,
         duration: Duration(seconds: success ? 2 : 3),
@@ -310,6 +507,8 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   }
 
   Future<void> _handleReportStolen() async {
+    if (_controller == null) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -448,7 +647,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       ),
     );
 
-    final success = await _controller.reportStolen();
+    final success = await _controller!.reportStolen();
 
     if (!mounted) return;
     Navigator.pop(context);
@@ -458,13 +657,13 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
         context,
         MaterialPageRoute(
           builder: (context) => StolenAlertScreen(
-            vehicleId: _controller.selectedVehicleId,
-            vehicleLat: _controller.vehicleLat,
-            vehicleLng: _controller.vehicleLng,
-            vehicleName: _controller.selectedVehicle?.nickname.isNotEmpty == true
-                ? _controller.selectedVehicle!.nickname
-                : '${_controller.selectedVehicle?.brand ?? ''} ${_controller.selectedVehicle?.model ?? ''}'.trim(),
-            nearbyPolice: _controller.nearbyPolice,
+            vehicleId: _controller!.selectedVehicleId,
+            vehicleLat: _controller!.vehicleLat,
+            vehicleLng: _controller!.vehicleLng,
+            vehicleName: _controller!.selectedVehicle?.nickname.isNotEmpty == true
+                ? _controller!.selectedVehicle!.nickname
+                : '${_controller!.selectedVehicle?.brand ?? ''} ${_controller!.selectedVehicle?.model ?? ''}'.trim(),
+            nearbyPolice: _controller!.nearbyPolice,
           ),
         ),
       );
@@ -541,15 +740,17 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (context) => _buildCompactVehicleSelector(),
+      builder: (context) => _buildMinimalistVehicleSelector(),
     );
   }
 
   void _showEngineConfirmDialog() {
+    if (_controller == null) return;
+
     showDialog(
       context: context,
       builder: (context) => EngineConfirmDialog(
-        controller: _controller,
+        controller: _controller!,
         onConfirm: _handleEngineToggle,
         selectedLanguage: _selectedLanguage,
       ),
@@ -557,10 +758,12 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
   }
 
   void _showReportStolenDialog() {
+    if (_controller == null) return;
+
     showDialog(
       context: context,
       builder: (context) => ReportStolenDialog(
-        controller: _controller,
+        controller: _controller!,
         onConfirm: _handleReportStolen,
         selectedLanguage: _selectedLanguage,
       ),
@@ -569,8 +772,13 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
 
   @override
   Widget build(BuildContext context) {
+    // ✅ Show loading skeleton if controller is not ready
+    if (_controller == null) {
+      return const DashboardSkeleton();
+    }
+
     return ChangeNotifierProvider.value(
-      value: _controller,
+      value: _controller!,
       child: Consumer<DashboardController>(
         builder: (context, controller, child) {
           if (controller.isLoading || controller.selectedVehicle == null) {
@@ -593,7 +801,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                             target: LatLng(controller.vehicleLat, controller.vehicleLng),
                             zoom: 16,
                           ),
-                          markers: controller.createMarkers(),
+                          markers: _createAnimatedMarkers(), // ✅ Use animated markers
                           mapType: controller.currentMapType,
                           onMapCreated: (mapController) {
                             controller.setMapController(mapController);
@@ -624,7 +832,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  // ✅ COMPACT HEADER (FLEETRA with gradient back)
+  // ✅ COMPACT HEADER (FLEETRA with gradient)
   Widget _buildCompactHeader(DashboardController controller) {
     return Container(
       decoration: BoxDecoration(
@@ -643,15 +851,19 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
         children: [
           // ✅ FLEETRA Logo with GRADIENT
           ShaderMask(
-            shaderCallback: (bounds) => LinearGradient(
-              colors: [AppColors.primary, AppColors.primary.withOpacity(0.7)],
+            shaderCallback: (bounds) => const LinearGradient(
+              colors: [Color(0xFFD85119), Color(0xFFD85119)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ).createShader(bounds),
+            blendMode: BlendMode.srcIn,
             child: Text(
               'FLEETRA',
-              style: AppTypography.h3.copyWith(
-                fontSize: 16,
+              style: TextStyle(
+                fontSize: 19,
                 fontWeight: FontWeight.w900,
-                color: Colors.white,
+                fontFamily: 'Roboto',
+                color: Colors.white, // This acts as the mask
               ),
             ),
           ),
@@ -769,7 +981,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  // ✅ COMPACT VEHICLE SELECTOR BUTTON
+  // ✅ RESTORED ORIGINAL SIMPLE TOP SELECTOR BUTTON
   Widget _buildCompactVehicleSelectorButton(DashboardController controller) {
     return Positioned(
       top: 12,
@@ -982,7 +1194,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  // ✅ PURE GLASSMORPHISM BOTTOM CONTROLS (More transparent - see map clearly)
+  // ✅ PURE GLASSMORPHISM BOTTOM CONTROLS
   Widget _buildPureGlassmorphicBottomControls(DashboardController controller) {
     return Positioned(
       bottom: 0,
@@ -994,7 +1206,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05), // ✅ Much more transparent
+              color: Colors.white.withOpacity(0.05),
               borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
               border: Border(
                 top: BorderSide(
@@ -1022,7 +1234,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                 Expanded(
                   child: _buildGlassFeatureButton(
                     icon: Icons.shield_rounded,
-                    label: _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone Sûre',
+                    label: _selectedLanguage == 'en' ? 'Safe Zone' : 'zone de sécurité',
                     isActive: controller.safeZoneEnabled,
                     isLoading: controller.isTogglingSafeZone,
                     onTap: _handleSafeZoneToggle,
@@ -1053,23 +1265,25 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  // ✅ COMPACT VEHICLE SELECTOR MODAL (Scrollable for 5+ cars)
-  Widget _buildCompactVehicleSelector() {
+  // ✅ NEW MINIMALIST GOOGLE MAPS-STYLE VEHICLE SELECTOR
+  Widget _buildMinimalistVehicleSelector() {
+    if (_controller == null) return const SizedBox.shrink();
+
     return Container(
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.5,
       ),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Handle bar
+          // Drag Handle
           Container(
-            margin: const EdgeInsets.only(top: 12),
-            width: 40,
+            margin: const EdgeInsets.only(top: 8),
+            width: 32,
             height: 4,
             decoration: BoxDecoration(
               color: Colors.grey.shade300,
@@ -1079,79 +1293,97 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
 
           // Title
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-            child: Text(
-              _selectedLanguage == 'en' ? 'Select Vehicle' : 'Sélectionner véhicule',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: Colors.black87,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _selectedLanguage == 'en' ? 'Select Vehicle' : 'Sélectionner véhicule',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
+                ),
               ),
             ),
           ),
 
-          // Scrollable vehicle list
-          Flexible(
-            child: ListView.builder(
-              shrinkWrap: true,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              itemCount: _controller.vehicles.length,
-              itemBuilder: (context, index) {
-                final vehicle = _controller.vehicles[index];
-                final isSelected = vehicle.id == _controller.selectedVehicleId;
+          Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
 
-                return GestureDetector(
-                  onTap: () {
-                    _controller.onVehicleSelected(vehicle.id);
+          // Vehicle List
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              itemCount: _controller!.vehicles.length,
+              separatorBuilder: (context, index) => Divider(
+                height: 1,
+                thickness: 1,
+                color: Colors.grey.shade100,
+              ),
+              itemBuilder: (context, index) {
+                final vehicle = _controller!.vehicles[index];
+                final isSelected = vehicle.id == _controller!.selectedVehicleId;
+
+                return InkWell(
+                  onTap: () async {
+                    // ✅ Save selected vehicle ID to SharedPreferences
+                    try {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setInt('current_vehicle_id', vehicle.id);
+                      debugPrint('✅ Saved selected vehicle ID: ${vehicle.id}');
+                    } catch (e) {
+                      debugPrint('⚠️ Error saving vehicle ID: $e');
+                    }
+
+                    _controller!.onVehicleSelected(vehicle.id);
+
+                    // ✅ Update current marker position immediately to new vehicle location
+                    setState(() {
+                      _currentMarkerLat = _controller!.vehicleLat;
+                      _currentMarkerLng = _controller!.vehicleLng;
+                      _currentRotation = 0.0;
+                    });
+
                     Navigator.pop(context);
                   },
                   child: Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: isSelected ? AppColors.primary.withOpacity(0.08) : Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: isSelected ? AppColors.primary : Colors.grey.shade200,
-                        width: isSelected ? 2 : 1,
-                      ),
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    color: isSelected ? AppColors.primary.withOpacity(0.05) : Colors.transparent,
                     child: Row(
                       children: [
-                        // Car icon
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: _controller.hexToColor(vehicle.color).withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Icon(
-                            Icons.directions_car,
-                            color: _controller.hexToColor(vehicle.color),
-                            size: 20,
-                          ),
+                        // Car Icon
+                        Icon(
+                          Icons.directions_car,
+                          color: isSelected ? AppColors.primary : Colors.grey.shade600,
+                          size: 20,
                         ),
                         const SizedBox(width: 12),
 
-                        // Vehicle info
+                        // Vehicle Details
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              // Main Title (Nickname or Brand Model)
                               Text(
-                                vehicle.nickname.isNotEmpty ? vehicle.nickname : vehicle.immatriculation,
+                                vehicle.nickname.isNotEmpty
+                                    ? vehicle.nickname
+                                    : '${vehicle.brand} ${vehicle.model}',
                                 style: TextStyle(
-                                  fontWeight: FontWeight.w700,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
                                   color: isSelected ? AppColors.primary : Colors.black87,
-                                  fontSize: 13,
                                 ),
                               ),
                               const SizedBox(height: 2),
+
+                              // Subtitle (Brand Model -- Immatriculation)
                               Text(
-                                '${vehicle.brand} ${vehicle.model}',
+                                vehicle.nickname.isNotEmpty
+                                    ? '${vehicle.brand} ${vehicle.model} -- ${vehicle.immatriculation}'
+                                    : vehicle.immatriculation,
                                 style: TextStyle(
-                                  fontSize: 11,
+                                  fontSize: 12,
                                   color: Colors.grey.shade600,
                                 ),
                               ),
@@ -1159,17 +1391,27 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
                           ),
                         ),
 
-                        // Selected checkmark
-                        if (isSelected)
-                          Container(
-                            width: 24,
-                            height: 24,
-                            decoration: BoxDecoration(
-                              color: AppColors.primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(Icons.check, color: Colors.white, size: 16),
+                        // Online Status Indicator
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: vehicle.isOnline
+                                ? const Color(0xFF10B981)
+                                : Colors.grey.shade400,
+                            shape: BoxShape.circle,
                           ),
+                        ),
+
+                        // Selected Check
+                        if (isSelected) ...[
+                          const SizedBox(width: 12),
+                          Icon(
+                            Icons.check_circle,
+                            color: AppColors.primary,
+                            size: 20,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1177,8 +1419,6 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
               },
             ),
           ),
-
-          const SizedBox(height: 12),
         ],
       ),
     );
@@ -1195,7 +1435,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  // ✅ HELPER: Glass Feature Button (Geofence & Safe Zone) - MORE READABLE
+  // ✅ HELPER: Glass Feature Button
   Widget _buildGlassFeatureButton({
     required IconData icon,
     required String label,
@@ -1203,13 +1443,12 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     required bool isLoading,
     required VoidCallback onTap,
   }) {
-    // ✅ Green for ON, Red for OFF
-    final Color activeColor = const Color(0xFF10B981); // Green
-    final Color inactiveColor = const Color(0xFFEF4444); // Red
+    final Color activeColor = const Color(0xFF10B981);
+    final Color inactiveColor = const Color(0xFFEF4444);
 
     return GestureDetector(
       onTap: () {
-        if (_controller.isOffline) {
+        if (_controller?.isOffline ?? false) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Row(
@@ -1237,18 +1476,16 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
       },
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 200),
-        opacity: _controller.isOffline || isLoading ? 0.5 : 1.0,
+        opacity: (_controller?.isOffline ?? false) || isLoading ? 0.5 : 1.0,
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
           decoration: BoxDecoration(
-            // ✅ More opaque background for better readability
             color: Colors.white.withOpacity(0.25),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: Colors.white.withOpacity(0.5),
               width: 1.5,
             ),
-            // ✅ Add subtle shadow for depth
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.1),
@@ -1260,62 +1497,74 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Icon
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.35),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: isLoading
-                    ? Center(
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
+              // ✅ Icon with status indicator beside it
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.35),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: isLoading
+                        ? Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    )
+                        : Icon(
+                      icon,
                       color: Colors.black87,
+                      size: 20,
                     ),
                   ),
-                )
-                    : Icon(
-                  icon,
-                  color: Colors.black87,
-                  size: 18,
-                ),
-              ),
-              const SizedBox(height: 6),
-
-              // Label - MORE READABLE
-              Text(
-                label,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.black87,
-                  height: 1.2,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 6),
-
-              // ✅ Status Dot (Green for ON, Red for OFF)
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: isActive ? activeColor : inactiveColor,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: (isActive ? activeColor : inactiveColor).withOpacity(0.6),
-                      blurRadius: 6,
-                      spreadRadius: 2,
+                  // ✅ Status dot positioned beside icon (top-right)
+                  Positioned(
+                    top: -2,
+                    right: -2,
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: isActive ? activeColor : inactiveColor,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white,
+                          width: 2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: (isActive ? activeColor : inactiveColor).withOpacity(0.6),
+                            blurRadius: 4,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
                     ),
-                  ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              // ✅ Larger, more readable label
+              Flexible(
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87,
+                    height: 1.1,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -1325,7 +1574,7 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     );
   }
 
-  // ✅ HELPER: Glass Action Button (Trip History) - ORANGE/PRIMARY COLOR
+  // ✅ HELPER: Glass Action Button
   Widget _buildGlassActionButton({
     required IconData icon,
     required String label,
@@ -1334,16 +1583,14 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
         decoration: BoxDecoration(
-          // ✅ PRIMARY/ORANGE COLOR - Solid and readable
           color: AppColors.primary,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: AppColors.primary.withOpacity(0.8),
             width: 1.5,
           ),
-          // ✅ Add shadow for depth
           boxShadow: [
             BoxShadow(
               color: AppColors.primary.withOpacity(0.4),
@@ -1355,38 +1602,29 @@ class _ModernDashboardState extends State<ModernDashboard> with TickerProviderSt
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Icon
             Container(
-              width: 34,
-              height: 34,
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.2),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon, color: Colors.white, size: 18),
+              child: Icon(icon, color: Colors.white, size: 20),
             ),
             const SizedBox(height: 6),
-
-            // Label - WHITE AND BOLD
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.w800,
-                color: Colors.white,
-                height: 1.2,
+            Flexible(
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  height: 1.1,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 6),
-
-            // Arrow indicator
-            Icon(
-              Icons.arrow_forward_rounded,
-              color: Colors.white,
-              size: 12,
             ),
           ],
         ),
