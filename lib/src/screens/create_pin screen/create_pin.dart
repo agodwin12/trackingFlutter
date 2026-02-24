@@ -1,12 +1,10 @@
 // lib/screens/auth/create_pin_screen.dart
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 import '../../services/pin_service.dart';
-import '../../services/env_config.dart';
 import '../../core/utility/app_theme.dart';
+import '../dashboard/dashboard.dart';
 
 class CreatePinScreen extends StatefulWidget {
   final int userId;
@@ -29,8 +27,6 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
   String _errorMessage = '';
   String _selectedLanguage = 'en';
 
-  String get baseUrl => EnvConfig.baseUrl;
-
   @override
   void initState() {
     super.initState();
@@ -39,9 +35,11 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
 
   Future<void> _loadLanguagePreference() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _selectedLanguage = prefs.getString('language') ?? 'en';
-    });
+    if (mounted) {
+      setState(() {
+        _selectedLanguage = prefs.getString('language') ?? 'en';
+      });
+    }
   }
 
   void _onNumberPressed(String number) {
@@ -53,11 +51,8 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
         if (_pin.length < 4) {
           _pin += number;
           if (_pin.length == 4) {
-            // Move to confirm step
             Future.delayed(const Duration(milliseconds: 300), () {
-              setState(() {
-                _isConfirmStep = true;
-              });
+              if (mounted) setState(() => _isConfirmStep = true);
             });
           }
         }
@@ -65,7 +60,6 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
         if (_confirmPin.length < 4) {
           _confirmPin += number;
           if (_confirmPin.length == 4) {
-            // Verify and save PIN
             _verifyAndSavePin();
           }
         }
@@ -103,12 +97,9 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       return;
     }
 
-    setState(() {
-      _isCreatingPin = true;
-    });
+    setState(() => _isCreatingPin = true);
 
     try {
-      // Save PIN
       final success = await _pinService.createPin(_pin);
 
       if (!success) {
@@ -124,10 +115,12 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
         return;
       }
 
-      debugPrint('✅ PIN created successfully - fetching vehicles');
+      debugPrint('✅ PIN created successfully — navigating to dashboard');
 
-      // Fetch user's vehicles to get first vehicle ID
-      await _fetchVehiclesAndNavigate();
+      // ✅ FIX: Read vehicle from SharedPreferences instead of calling
+      // /voitures/user/:userId which fails for chauffeurs and is redundant
+      // since login already saved vehicles_list to SharedPreferences
+      await _navigateToDashboard();
     } catch (e) {
       debugPrint('❌ Error in _verifyAndSavePin: $e');
       setState(() {
@@ -142,62 +135,62 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
     }
   }
 
-  Future<void> _fetchVehiclesAndNavigate() async {
+  // ========== NAVIGATE TO DASHBOARD ==========
+  // ✅ Reads vehicle ID from SharedPreferences — saved at login
+  // Works for both regular users and chauffeurs
+  Future<void> _navigateToDashboard() async {
     try {
-      debugPrint('📡 Fetching vehicles for user: ${widget.userId}');
+      final prefs = await SharedPreferences.getInstance();
 
-      final response = await http.get(
-        Uri.parse("$baseUrl/voitures/user/${widget.userId}"),
-      ).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          throw TimeoutException('Request timeout');
-        },
-      );
+      // ✅ Primary: use current_vehicle_id saved at login
+      final int? vehicleId = prefs.getInt('current_vehicle_id');
 
-      debugPrint('📥 Response status: ${response.statusCode}');
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        List vehicles = data["vehicles"];
-
-        if (vehicles.isNotEmpty) {
-          int firstVehicleId = vehicles[0]["id"];
-
-          debugPrint('✅ Found ${vehicles.length} vehicles, navigating to dashboard with vehicle ID: $firstVehicleId');
-
-          if (mounted) {
-            // Save vehicle ID first
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setInt('current_vehicle_id', firstVehicleId);
-            debugPrint('🚗 Saved vehicle ID: $firstVehicleId');
-
-            // Navigate to dashboard
-            Navigator.pushReplacementNamed(
-              context,
-              '/dashboard',
-              arguments: firstVehicleId,
-            );
-          }
-        } else {
-          // No vehicles found
-          debugPrint('⚠️ No vehicles found');
-          setState(() {
-            _isCreatingPin = false;
-            _errorMessage = _selectedLanguage == 'en'
-                ? 'No vehicles found for this account'
-                : 'Aucun véhicule trouvé pour ce compte';
-            _pin = '';
-            _confirmPin = '';
-            _isConfirmStep = false;
-          });
-        }
-      } else {
-        throw Exception('Failed to fetch vehicles: ${response.statusCode}');
+      if (vehicleId != null) {
+        debugPrint('🚗 Navigating to dashboard with vehicle ID: $vehicleId');
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ModernDashboard(vehicleId: vehicleId),
+          ),
+        );
+        return;
       }
-    } catch (error) {
-      debugPrint('❌ Error fetching vehicles: $error');
 
+      // ✅ Fallback: read from vehicles_list saved at login
+      final vehiclesJson = prefs.getString('vehicles_list');
+      if (vehiclesJson != null) {
+        final List vehicles = jsonDecode(vehiclesJson);
+        if (vehicles.isNotEmpty) {
+          final int firstVehicleId = vehicles[0]["id"];
+          await prefs.setInt('current_vehicle_id', firstVehicleId);
+
+          debugPrint('🚗 Fallback vehicle ID: $firstVehicleId');
+          if (!mounted) return;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) =>
+                  ModernDashboard(vehicleId: firstVehicleId),
+            ),
+          );
+          return;
+        }
+      }
+
+      // No vehicle found at all
+      debugPrint('⚠️ No vehicle found in SharedPreferences');
+      setState(() {
+        _isCreatingPin = false;
+        _errorMessage = _selectedLanguage == 'en'
+            ? 'No vehicles found for this account'
+            : 'Aucun véhicule trouvé pour ce compte';
+        _pin = '';
+        _confirmPin = '';
+        _isConfirmStep = false;
+      });
+    } catch (error) {
+      debugPrint('❌ Error navigating to dashboard: $error');
       setState(() {
         _isCreatingPin = false;
         _errorMessage = _selectedLanguage == 'en'
@@ -247,7 +240,9 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
                   // Title
                   Center(
                     child: Text(
-                      _selectedLanguage == 'en' ? 'Create Your PIN' : 'Créer votre PIN',
+                      _selectedLanguage == 'en'
+                          ? 'Create Your PIN'
+                          : 'Créer votre PIN',
                       style: AppTypography.h2,
                       textAlign: TextAlign.center,
                     ),
@@ -258,7 +253,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
                       !_isConfirmStep
                           ? (_selectedLanguage == 'en'
                           ? 'Choose a 4-digit PIN for security'
-                          : 'Choisissez un code PIN à 4 chiffres pour la sécurité')
+                          : 'Choisissez un code PIN à 4 chiffres')
                           : (_selectedLanguage == 'en'
                           ? 'Confirm your 4-digit PIN'
                           : 'Confirmez votre code PIN à 4 chiffres'),
@@ -269,20 +264,24 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // PIN Dots Display
+                  // PIN Dots
                   Center(
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: List.generate(4, (index) {
-                        final currentPin = !_isConfirmStep ? _pin : _confirmPin;
+                        final currentPin =
+                        !_isConfirmStep ? _pin : _confirmPin;
                         final isFilled = index < currentPin.length;
                         return Container(
-                          margin: EdgeInsets.symmetric(horizontal: AppSizes.spacingM),
+                          margin: EdgeInsets.symmetric(
+                              horizontal: AppSizes.spacingM),
                           width: 20,
                           height: 20,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: isFilled ? AppColors.primary : Colors.transparent,
+                            color: isFilled
+                                ? AppColors.primary
+                                : Colors.transparent,
                             border: Border.all(
                               color: AppColors.primary,
                               width: 2,
@@ -301,18 +300,16 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
                       padding: EdgeInsets.all(AppSizes.spacingM),
                       decoration: BoxDecoration(
                         color: AppColors.error.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        borderRadius:
+                        BorderRadius.circular(AppSizes.radiusM),
                         border: Border.all(
                           color: AppColors.error.withOpacity(0.3),
                         ),
                       ),
                       child: Row(
                         children: [
-                          Icon(
-                            Icons.error_outline,
-                            color: AppColors.error,
-                            size: 20,
-                          ),
+                          Icon(Icons.error_outline,
+                              color: AppColors.error, size: 20),
                           SizedBox(width: AppSizes.spacingS),
                           Expanded(
                             child: Text(
@@ -333,7 +330,8 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
                       padding: EdgeInsets.all(AppSizes.spacingM),
                       decoration: BoxDecoration(
                         color: AppColors.primaryLight,
-                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        borderRadius:
+                        BorderRadius.circular(AppSizes.radiusM),
                       ),
                       child: Row(
                         children: [
@@ -393,7 +391,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: numbers.map((number) {
         if (number.isEmpty) {
-          return SizedBox(width: 80, height: 56);
+          return const SizedBox(width: 80, height: 56);
         }
 
         if (number == 'delete') {
@@ -406,16 +404,10 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
               decoration: BoxDecoration(
                 color: AppColors.background,
                 borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                border: Border.all(
-                  color: AppColors.border,
-                  width: 1.5,
-                ),
+                border: Border.all(color: AppColors.border, width: 1.5),
               ),
-              child: Icon(
-                Icons.backspace_outlined,
-                color: AppColors.textSecondary,
-                size: 24,
-              ),
+              child: Icon(Icons.backspace_outlined,
+                  color: AppColors.textSecondary, size: 24),
             ),
           );
         }
@@ -429,10 +421,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
             decoration: BoxDecoration(
               color: AppColors.background,
               borderRadius: BorderRadius.circular(AppSizes.radiusM),
-              border: Border.all(
-                color: AppColors.border,
-                width: 1.5,
-              ),
+              border: Border.all(color: AppColors.border, width: 1.5),
             ),
             child: Center(
               child: Text(
@@ -448,9 +437,4 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       }).toList(),
     );
   }
-}
-
-class TimeoutException implements Exception {
-  final String message;
-  TimeoutException(this.message);
 }

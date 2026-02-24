@@ -2,7 +2,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:convert' as ui;
 import 'dart:typed_data';
 import 'dart:ui';
 import 'dart:ui' as ui hide Codec;
@@ -45,6 +44,7 @@ class DashboardController extends ChangeNotifier {
   BitmapDescriptor? _customCarIcon;
   GoogleMapController? _mapController;
   DateTime? _lastLocationUpdate;
+  String _userType = 'regular'; // ✅ Track user type
 
   // Battery State Variables
   int _batteryPercentage = 0;
@@ -81,6 +81,8 @@ class DashboardController extends ChangeNotifier {
   List<dynamic> _nearbyPolice = [];
   List<dynamic> get nearbyPolice => _nearbyPolice;
   DateTime? get lastLocationUpdate => _lastLocationUpdate;
+  String get userType => _userType;
+  bool get isChauffeur => _userType == 'chauffeur';
 
   // Battery Getters
   int get batteryPercentage => _batteryPercentage;
@@ -103,29 +105,25 @@ class DashboardController extends ChangeNotifier {
     _selectedVehicleId = vehicleId;
   }
 
-  // ✅ NEW: Validate and update vehicle ID after vehicles are loaded
+  // ========== VALIDATE VEHICLE ID ==========
   Future<void> _validateAndUpdateVehicleId(int requestedVehicleId) async {
     if (_vehicles.isEmpty) {
       debugPrint('⚠️ No vehicles available');
       return;
     }
 
-    // Check if requested vehicle exists
     final vehicleExists = _vehicles.any((v) => v.id == requestedVehicleId);
 
     if (vehicleExists) {
       _selectedVehicleId = requestedVehicleId;
       debugPrint('✅ Vehicle ID $requestedVehicleId exists and is selected');
     } else {
-      // Fall back to first available vehicle
       _selectedVehicleId = _vehicles.first.id;
-      debugPrint('⚠️ Vehicle ID $requestedVehicleId not found. Falling back to vehicle ID: $_selectedVehicleId');
+      debugPrint('⚠️ Vehicle ID $requestedVehicleId not found. Falling back to: $_selectedVehicleId');
 
-      // Update SharedPreferences with the fallback vehicle
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setInt('current_vehicle_id', _selectedVehicleId);
-        debugPrint('✅ Updated SharedPreferences with fallback vehicle ID: $_selectedVehicleId');
       } catch (e) {
         debugPrint('⚠️ Error updating SharedPreferences: $e');
       }
@@ -134,7 +132,50 @@ class DashboardController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Initialize with offline support
+  // ========== LOAD USER TYPE FROM SHARED PREFERENCES ==========
+  Future<void> _loadUserType() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _userType = prefs.getString('user_type') ?? 'regular';
+      debugPrint('👤 User type loaded: $_userType');
+    } catch (e) {
+      debugPrint('⚠️ Error loading user type: $e');
+      _userType = 'regular';
+    }
+  }
+
+  // ========== LOAD VEHICLES FROM SHARED PREFERENCES ==========
+  // This works for BOTH regular users and chauffeurs
+  // Login screen saves the full vehicles list to SharedPreferences
+  Future<bool> _loadVehiclesFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final vehiclesJson = prefs.getString('vehicles_list');
+
+      if (vehiclesJson != null) {
+        final List<dynamic> vehiclesList = jsonDecode(vehiclesJson);
+        if (vehiclesList.isNotEmpty) {
+          _vehicles = vehiclesList.map((v) => Vehicle.fromJson(v)).toList();
+          debugPrint('✅ Loaded ${_vehicles.length} vehicles from SharedPreferences');
+
+          // Also cache for offline use
+          await _cacheService.cacheVehicleList(
+            vehiclesList.map((v) => v as Map<String, dynamic>).toList(),
+          );
+
+          return true;
+        }
+      }
+
+      debugPrint('⚠️ No vehicles found in SharedPreferences');
+      return false;
+    } catch (e) {
+      debugPrint('⚠️ Error loading vehicles from SharedPreferences: $e');
+      return false;
+    }
+  }
+
+  // ========== INITIALIZE ==========
   Future<void> initialize() async {
     try {
       debugPrint('⚡ Starting dashboard initialization...');
@@ -143,16 +184,15 @@ class DashboardController extends ChangeNotifier {
       // Load marker first (works offline)
       await loadCustomMarker();
 
+      // Load user type first — needed to decide fetch strategy
+      await _loadUserType();
+
       if (isOffline) {
-        // OFFLINE MODE: Load from cache
         debugPrint('📱 OFFLINE MODE - Loading from cache...');
         await _loadFromCache();
       } else {
-        // ONLINE MODE: Load from API and cache it
-        debugPrint('🌐 ONLINE MODE - Loading from API...');
+        debugPrint('🌐 ONLINE MODE - Loading from API/Prefs...');
         await initializeDashboard();
-
-        // Connect to real-time updates only when online
         connectSocketAndListenForUpdates();
         startCachePolling();
       }
@@ -165,22 +205,22 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Load data from cache (offline mode)
+  // ========== LOAD FROM CACHE (OFFLINE MODE) ==========
   Future<void> _loadFromCache() async {
     try {
       debugPrint('📦 Loading cached data...');
 
-      // Load vehicles from cache
       final cachedVehicles = await _cacheService.getCachedVehicleList();
       if (cachedVehicles != null && cachedVehicles.isNotEmpty) {
         _vehicles = cachedVehicles.map((v) => Vehicle.fromJson(v)).toList();
         debugPrint('✅ Loaded ${_vehicles.length} vehicles from cache');
-
-        // ✅ Validate vehicle ID after loading vehicles
+        await _validateAndUpdateVehicleId(_selectedVehicleId);
+      } else {
+        // Fallback: try SharedPreferences
+        await _loadVehiclesFromPrefs();
         await _validateAndUpdateVehicleId(_selectedVehicleId);
       }
 
-      // Load vehicle details from cache
       final cachedDetails = await _cacheService.getCachedVehicleDetails(_selectedVehicleId);
       if (cachedDetails != null) {
         _geofenceEnabled = cachedDetails['geofenceEnabled'] ?? true;
@@ -189,20 +229,17 @@ class DashboardController extends ChangeNotifier {
         debugPrint('✅ Loaded vehicle details from cache');
       }
 
-      // Load last known location from cache
       final cachedLocation = await _cacheService.getCachedLastLocation(_selectedVehicleId);
       if (cachedLocation != null) {
         _vehicleLat = cachedLocation['lat'];
         _vehicleLng = cachedLocation['lng'];
         _lastLocationUpdate = DateTime.parse(cachedLocation['timestamp']);
-
         final minutesAgo = DateTime.now().difference(_lastLocationUpdate!).inMinutes;
-        debugPrint('✅ Loaded location from cache (${minutesAgo} minutes ago)');
+        debugPrint('✅ Loaded location from cache ($minutesAgo minutes ago)');
       }
 
       _isLoading = false;
       notifyListeners();
-
       debugPrint('✅ Offline data loaded successfully');
     } catch (e) {
       debugPrint('❌ Error loading from cache: $e');
@@ -211,7 +248,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Load custom marker
+  // ========== LOAD CUSTOM MARKER ==========
   Future<void> loadCustomMarker() async {
     try {
       final ByteData data = await rootBundle.load('assets/carmarker.png');
@@ -226,8 +263,7 @@ class DashboardController extends ChangeNotifier {
       );
 
       if (resizedData != null) {
-        _customCarIcon =
-            BitmapDescriptor.fromBytes(resizedData.buffer.asUint8List());
+        _customCarIcon = BitmapDescriptor.fromBytes(resizedData.buffer.asUint8List());
         debugPrint('✅ Custom marker loaded (60x60)');
       } else {
         throw Exception('Failed to resize image');
@@ -238,7 +274,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Create markers (kept for compatibility, but dashboard.dart uses its own animated version)
+  // Create markers (kept for compatibility)
   Set<Marker> createMarkers() {
     if (selectedVehicle == null || _customCarIcon == null) return {};
 
@@ -258,18 +294,16 @@ class DashboardController extends ChangeNotifier {
     };
   }
 
-  // Initialize dashboard with caching
+  // ========== INITIALIZE DASHBOARD (ONLINE) ==========
   Future<void> initializeDashboard() async {
     try {
       debugPrint('⚡ Starting dashboard initialization...');
 
-      // Load critical data in parallel
       await Future.wait([
         fetchVehicles(),
         _fetchInitialLocation(),
       ]);
 
-      // ✅ Validate vehicle ID after vehicles are loaded
       await _validateAndUpdateVehicleId(_selectedVehicleId);
 
       debugPrint('✅ Critical data loaded! Showing map now...');
@@ -278,8 +312,6 @@ class DashboardController extends ChangeNotifier {
       notifyListeners();
 
       debugPrint('🗺️ Map displayed! Loading remaining data in background...');
-
-      // Load non-critical data in background
       _loadBackgroundData();
     } catch (error) {
       debugPrint("🔥 Error initializing dashboard: $error");
@@ -288,7 +320,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Fetch initial location
+  // ========== FETCH INITIAL LOCATION ==========
   Future<void> _fetchInitialLocation() async {
     try {
       if (isOffline) {
@@ -319,7 +351,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Load background data
+  // ========== LOAD BACKGROUND DATA ==========
   Future<void> _loadBackgroundData() async {
     try {
       await Future.wait([
@@ -336,7 +368,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Refresh with offline check
+  // ========== REFRESH ==========
   Future<void> refresh() async {
     if (isOffline) {
       debugPrint('📱 Cannot refresh while offline');
@@ -351,7 +383,6 @@ class DashboardController extends ChangeNotifier {
       await fetchRealtimeEngineStatus();
       await fetchCurrentLocation();
       await fetchUnreadNotifications();
-
       debugPrint("✅ Dashboard refreshed successfully");
     } catch (error) {
       debugPrint("🔥 Error refreshing dashboard: $error");
@@ -361,29 +392,58 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Fetch vehicles with caching
+  // ========== FETCH VEHICLES ==========
+  // ✅ Strategy:
+  // 1. Always load from SharedPreferences first (works for both regular + chauffeur)
+  // 2. If regular user AND online → also refresh from API in background
+  // 3. If chauffeur → never call /voitures/user/:id (not supported)
   Future<void> fetchVehicles() async {
     if (isOffline) {
       debugPrint('📱 Offline - using cached vehicles');
+      await _loadFromCache();
       return;
     }
 
-    final user = await DashboardService.loadUserData();
-    if (user == null) return;
+    // ✅ Step 1: Load from SharedPreferences immediately (fast, works for all)
+    final loadedFromPrefs = await _loadVehiclesFromPrefs();
 
-    final vehiclesData = await DashboardService.fetchVehicles(user["id"]);
+    if (loadedFromPrefs && _vehicles.isNotEmpty) {
+      debugPrint('✅ Vehicles loaded from SharedPreferences (${_vehicles.length})');
+      notifyListeners();
+    }
 
-    _vehicles = vehiclesData.map((v) => Vehicle.fromJson(v)).toList();
+    // ✅ Step 2: For regular users only — refresh from API in background
+    if (!isChauffeur) {
+      debugPrint('🌐 Regular user — refreshing vehicles from API...');
+      try {
+        final user = await DashboardService.loadUserData();
+        if (user != null) {
+          final vehiclesData = await DashboardService.fetchVehicles(user["id"]);
 
-    await _cacheService.cacheVehicleList(
-        vehiclesData.map((v) => v as Map<String, dynamic>).toList()
-    );
+          if (vehiclesData.isNotEmpty) {
+            _vehicles = vehiclesData.map((v) => Vehicle.fromJson(v)).toList();
 
-    debugPrint("✅ Loaded ${_vehicles.length} vehicles and cached them");
-    notifyListeners();
+            // Update SharedPreferences with fresh data
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('vehicles_list', jsonEncode(vehiclesData));
+
+            await _cacheService.cacheVehicleList(
+              vehiclesData.map((v) => v as Map<String, dynamic>).toList(),
+            );
+
+            debugPrint('✅ Vehicles refreshed from API (${_vehicles.length})');
+            notifyListeners();
+          }
+        }
+      } catch (e) {
+        debugPrint('⚠️ API vehicle refresh failed, using SharedPreferences data: $e');
+      }
+    } else {
+      debugPrint('👤 Chauffeur user — skipping API vehicle fetch, using SharedPreferences data');
+    }
   }
 
-  // Fetch dashboard data with caching
+  // ========== FETCH DASHBOARD DATA ==========
   Future<void> fetchDashboardData() async {
     try {
       if (isOffline) {
@@ -393,8 +453,7 @@ class DashboardController extends ChangeNotifier {
 
       debugPrint('📡 ========== FETCHING DASHBOARD DATA ==========');
 
-      final geofencingActive =
-      await DashboardService.fetchGeofencingStatus(_selectedVehicleId);
+      final geofencingActive = await DashboardService.fetchGeofencingStatus(_selectedVehicleId);
 
       if (geofencingActive != null) {
         _geofenceEnabled = geofencingActive;
@@ -427,7 +486,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Fetch ACTUAL engine status from GPS device
+  // ========== FETCH REALTIME ENGINE STATUS ==========
   Future<void> fetchRealtimeEngineStatus() async {
     try {
       if (isOffline) {
@@ -445,12 +504,9 @@ class DashboardController extends ChangeNotifier {
 
         if (data['success'] == true) {
           final String engineStatus = data['engine_status'] ?? 'OFF';
-          final bool newEngineState = (engineStatus == 'ON');
+          _engineOn = (engineStatus == 'ON');
 
-          debugPrint('✅ Actual GPS Engine Status: $engineStatus');
-          debugPrint('✅ Engine boolean: $newEngineState');
-
-          _engineOn = newEngineState;
+          debugPrint('✅ Engine Status: $engineStatus');
 
           if (data['raw_status'] != null && data['raw_status'].isNotEmpty) {
             _parseVehicleStatus(data['raw_status']);
@@ -464,8 +520,6 @@ class DashboardController extends ChangeNotifier {
 
           notifyListeners();
         }
-      } else {
-        debugPrint('⚠️ Failed to fetch engine status: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('🔥 Error fetching realtime engine status: $e');
@@ -489,8 +543,7 @@ class DashboardController extends ChangeNotifier {
             _isLowBattery = _batteryVoltage < 3.6;
 
             if (_batteryVoltage >= 3.3 && _batteryVoltage <= 4.2) {
-              _batteryPercentage =
-                  ((_batteryVoltage - 3.3) / (4.2 - 3.3) * 100).round();
+              _batteryPercentage = ((_batteryVoltage - 3.3) / (4.2 - 3.3) * 100).round();
             } else if (_batteryVoltage > 4.2) {
               _batteryPercentage = 100;
             } else {
@@ -506,7 +559,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Fetch location with caching
+  // ========== FETCH CURRENT LOCATION ==========
   Future<void> fetchCurrentLocation({bool silent = false}) async {
     if (isOffline) {
       if (!silent) debugPrint('📱 Offline - using cached location');
@@ -531,14 +584,12 @@ class DashboardController extends ChangeNotifier {
         CameraUpdate.newLatLng(LatLng(_vehicleLat, _vehicleLng)),
       );
 
-      if (!silent) {
-        debugPrint("📍 Location updated: $_vehicleLat, $_vehicleLng");
-      }
+      if (!silent) debugPrint("📍 Location updated: $_vehicleLat, $_vehicleLng");
       notifyListeners();
     }
   }
 
-  // Fetch unread notifications
+  // ========== FETCH UNREAD NOTIFICATIONS ==========
   Future<void> fetchUnreadNotifications() async {
     if (isOffline) return;
 
@@ -551,7 +602,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Connect socket
+  // ========== SOCKET CONNECTION ==========
   void connectSocketAndListenForUpdates() {
     if (isOffline) {
       debugPrint('📱 Offline - skipping socket connection');
@@ -559,7 +610,6 @@ class DashboardController extends ChangeNotifier {
     }
 
     final String socketUrl = dotenv.env['SOCKET_URL'] ?? 'http://10.0.2.2:5000';
-
     debugPrint('🔌 Connecting to Socket.IO at $socketUrl');
 
     _socketService.connect(socketUrl);
@@ -621,12 +671,9 @@ class DashboardController extends ChangeNotifier {
     });
   }
 
-  // Toggle geofence with offline check
+  // ========== TOGGLE GEOFENCE ==========
   Future<bool> toggleGeofence() async {
-    if (isOffline) {
-      debugPrint('❌ Cannot toggle geofence while offline');
-      return false;
-    }
+    if (isOffline) return false;
 
     _isTogglingGeofence = true;
     notifyListeners();
@@ -659,12 +706,9 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Toggle safe zone with offline check
+  // ========== TOGGLE SAFE ZONE ==========
   Future<Map<String, dynamic>> toggleSafeZone() async {
-    if (isOffline) {
-      debugPrint('❌ Cannot toggle safe zone while offline');
-      return {'success': false, 'message': 'No internet connection'};
-    }
+    if (isOffline) return {'success': false, 'message': 'No internet connection'};
 
     _isTogglingSafeZone = true;
     notifyListeners();
@@ -685,13 +729,11 @@ class DashboardController extends ChangeNotifier {
 
         if (createResult['success']) {
           _safeZoneEnabled = true;
-
           await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
             'geofenceEnabled': _geofenceEnabled,
             'safeZoneEnabled': _safeZoneEnabled,
             'engineOn': _engineOn,
           });
-
           notifyListeners();
         }
 
@@ -704,13 +746,11 @@ class DashboardController extends ChangeNotifier {
 
         if (deleteResult['success']) {
           _safeZoneEnabled = false;
-
           await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
             'geofenceEnabled': _geofenceEnabled,
             'safeZoneEnabled': _safeZoneEnabled,
             'engineOn': _engineOn,
           });
-
           notifyListeners();
         }
 
@@ -724,12 +764,9 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // Toggle engine with offline check
+  // ========== TOGGLE ENGINE ==========
   Future<bool> toggleEngine() async {
-    if (isOffline) {
-      debugPrint('❌ Cannot control engine while offline');
-      return false;
-    }
+    if (isOffline) return false;
 
     _isTogglingEngine = true;
     notifyListeners();
@@ -743,7 +780,7 @@ class DashboardController extends ChangeNotifier {
       final resp = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
         headers: {"Content-Type": "application/json"},
-        body: json.encode({
+        body: jsonEncode({
           "vehicleId": _selectedVehicleId,
           "command": command,
           "params": "",
@@ -767,9 +804,7 @@ class DashboardController extends ChangeNotifier {
         });
 
         notifyListeners();
-
         _startEngineStatePolling(expectedNewState);
-
         return true;
       } else {
         throw Exception('Command failed');
@@ -786,7 +821,7 @@ class DashboardController extends ChangeNotifier {
     _engineStatePollingTimer?.cancel();
     _pollAttempts = 0;
 
-    _engineStatePollingTimer = Timer.periodic(Duration(seconds: 5), (timer) async {
+    _engineStatePollingTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
       _pollAttempts++;
 
       try {
@@ -825,12 +860,9 @@ class DashboardController extends ChangeNotifier {
     });
   }
 
-  // Report stolen with offline check
+  // ========== REPORT STOLEN ==========
   Future<bool> reportStolen() async {
-    if (isOffline) {
-      debugPrint('❌ Cannot report stolen while offline');
-      return false;
-    }
+    if (isOffline) return false;
 
     _isReportingStolen = true;
     notifyListeners();
@@ -848,17 +880,15 @@ class DashboardController extends ChangeNotifier {
       final userData = jsonDecode(userDataString);
       final int userId = userData['id'];
 
-      final requestBody = {
-        "vehicleId": _selectedVehicleId,
-        "userId": userId,
-        "latitude": _vehicleLat,
-        "longitude": _vehicleLng,
-      };
-
       final alertResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/alerts/report-stolen"),
         headers: {"Content-Type": "application/json"},
-        body: json.encode(requestBody),
+        body: jsonEncode({
+          "vehicleId": _selectedVehicleId,
+          "userId": userId,
+          "latitude": _vehicleLat,
+          "longitude": _vehicleLng,
+        }),
       );
 
       if (alertResponse.statusCode != 200 && alertResponse.statusCode != 201) {
@@ -868,15 +898,12 @@ class DashboardController extends ChangeNotifier {
       }
 
       final alertData = jsonDecode(alertResponse.body);
-      final bool alreadyReported = alertData['alreadyReported'] ?? false;
-      final List<dynamic> nearbyPolice = alertData['nearbyPolice'] ?? [];
-
-      debugPrint('🚨 Alert ${alreadyReported ? "already exists" : "created"}. Securing vehicle...');
+      _nearbyPolice = alertData['nearbyPolice'] ?? [];
 
       final commandResponse = await http.post(
         Uri.parse("${EnvConfig.baseUrl}/gps/issue-command"),
         headers: {"Content-Type": "application/json"},
-        body: json.encode({
+        body: jsonEncode({
           "vehicleId": _selectedVehicleId,
           "command": "CLOSERELAY",
           "params": "",
@@ -890,25 +917,17 @@ class DashboardController extends ChangeNotifier {
           (commandData['response'] is Map && commandData['response']['success'] == 'true');
 
       if (commandResponse.statusCode == 200 && commandOk) {
-        debugPrint('✅ Engine CLOSERELAY command sent successfully');
         _engineOn = false;
-
         await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
           'geofenceEnabled': _geofenceEnabled,
           'safeZoneEnabled': _safeZoneEnabled,
           'engineOn': _engineOn,
         });
-
         _startEngineStatePolling(false);
-      } else {
-        debugPrint('⚠️ Engine command failed or returned error');
       }
 
       _isReportingStolen = false;
       notifyListeners();
-
-      _nearbyPolice = nearbyPolice;
-
       return true;
     } catch (error) {
       debugPrint("🔥 Error reporting stolen: $error");
@@ -918,7 +937,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ✅ UPDATED: Vehicle selection with validation
+  // ========== VEHICLE SELECTION ==========
   void onVehicleSelected(int vehicleId) async {
     if (_selectedVehicleId != vehicleId) {
       _socketService.leaveVehicleTracking(_selectedVehicleId);
@@ -943,6 +962,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
+  // ========== MAP TYPE ==========
   void cycleMapType() {
     switch (_currentMapType) {
       case MapType.normal:
@@ -984,9 +1004,7 @@ class DashboardController extends ChangeNotifier {
     if (hexString.isEmpty) return Colors.blue;
     hexString = hexString.replaceAll('#', '');
     final validHex = RegExp(r'^[0-9a-fA-F]{6}$');
-    if (!validHex.hasMatch(hexString)) {
-      hexString = '3B82F6';
-    }
+    if (!validHex.hasMatch(hexString)) hexString = '3B82F6';
     return Color(int.parse('ff$hexString', radix: 16));
   }
 

@@ -11,6 +11,7 @@ import '../create_pin screen/create_pin.dart';
 import '../dashboard/dashboard.dart';
 
 
+
 class ResetPasswordScreen extends StatefulWidget {
   final int userId;
   final bool isFirstLogin;
@@ -27,7 +28,8 @@ class ResetPasswordScreen extends StatefulWidget {
 
 class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+  TextEditingController();
   final PinService _pinService = PinService();
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
@@ -46,7 +48,6 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     final password = _passwordController.text.trim();
     final confirmPassword = _confirmPasswordController.text.trim();
 
-    // Validation
     if (password.isEmpty || confirmPassword.isEmpty) {
       _showErrorSnackbar('Please fill in all fields');
       return;
@@ -62,15 +63,12 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('accessToken');
 
-      // Call API to set new password
       final response = await http.post(
         Uri.parse('$baseUrl/users/set-password'),
         headers: {
@@ -87,82 +85,103 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         final data = jsonDecode(response.body);
 
         if (data['success'] == true) {
-          setState(() {
-            _isLoading = false;
-          });
-
+          setState(() => _isLoading = false);
           _showSuccessSnackbar('Password set successfully!');
 
-          // Wait a moment for user to see success message
           await Future.delayed(const Duration(seconds: 1));
+          if (!mounted) return;
+
+          // ✅ Check PIN using the logged-in user's own ID from SharedPreferences
+          // PinService._getUserId() reads prefs.getInt('user_id') which was
+          // saved at login as the actual logged-in user's ID — correct for
+          // both regular users and chauffeurs
+          debugPrint('🔐 Checking PIN for user: ${widget.userId}');
+          final hasPinSet = await _pinService.hasPinSet();
+          debugPrint('🔐 Has PIN set: $hasPinSet');
 
           if (!mounted) return;
 
-          // ✅ Check if user has PIN set
-          final hasPinSet = await _pinService.hasPinSet();
-
           if (!hasPinSet) {
-            // No PIN - navigate to Create PIN screen
-            debugPrint('🔐 No PIN found - navigating to Create PIN screen');
+            // ✅ No PIN → go to create PIN screen
+            debugPrint('🔑 No PIN found → navigating to Create PIN screen');
             Navigator.pushReplacement(
               context,
               MaterialPageRoute(
-                builder: (context) => CreatePinScreen(userId: widget.userId), // ✅ Fixed: Pass widget.userId instead of null
+                builder: (context) =>
+                    CreatePinScreen(userId: widget.userId),
               ),
             );
           } else {
-            // PIN exists - navigate to dashboard
-            debugPrint('✅ PIN already exists - navigating to dashboard');
-            await _navigateToDashboard();
+            // ✅ PIN exists → go straight to dashboard
+            debugPrint('✅ PIN already exists → navigating to dashboard');
+            _navigateToDashboard();
           }
         } else {
           throw Exception(data['message'] ?? 'Failed to set password');
         }
       } else {
-        throw Exception('Failed to set password');
+        throw Exception('Failed to set password: ${response.statusCode}');
       }
     } catch (error) {
-      setState(() {
-        _isLoading = false;
-      });
-
+      setState(() => _isLoading = false);
       debugPrint('🔥 Error setting password: $error');
       _showErrorSnackbar('Failed to set password. Please try again.');
     }
   }
 
-  Future<void> _navigateToDashboard() async {
+  // ========== NAVIGATE TO DASHBOARD ==========
+  // ✅ FIX: Reads vehicle from SharedPreferences instead of calling
+  // /voitures/user/:userId which fails for chauffeurs and is redundant
+  // since login already saved the vehicles list
+  void _navigateToDashboard() async {
     try {
-      // Fetch user's vehicles
-      final vehiclesResponse = await http.get(
-        Uri.parse("$baseUrl/voitures/user/${widget.userId}"),
-      );
+      final prefs = await SharedPreferences.getInstance();
 
-      if (vehiclesResponse.statusCode == 200 && mounted) {
-        final vehiclesData = jsonDecode(vehiclesResponse.body);
-        List vehicles = vehiclesData["vehicles"];
+      // ✅ Read from SharedPreferences — saved at login for both user types
+      final int? vehicleId = prefs.getInt('current_vehicle_id');
 
-        if (vehicles.isNotEmpty) {
-          int firstVehicleId = vehicles[0]["id"];
+      if (vehicleId != null) {
+        debugPrint('🚗 Navigating to dashboard with vehicle ID: $vehicleId');
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ModernDashboard(vehicleId: vehicleId),
+          ),
+        );
+      } else {
+        // Fallback: try vehicles_list
+        final vehiclesJson = prefs.getString('vehicles_list');
+        if (vehiclesJson != null) {
+          final List vehicles = jsonDecode(vehiclesJson);
+          if (vehicles.isNotEmpty) {
+            final int firstVehicleId = vehicles[0]["id"];
+            await prefs.setInt('current_vehicle_id', firstVehicleId);
 
-          // Navigate to Dashboard
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ModernDashboard(vehicleId: firstVehicleId),
-            ),
-          );
+            debugPrint('🚗 Fallback vehicle ID: $firstVehicleId');
+            if (!mounted) return;
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) =>
+                    ModernDashboard(vehicleId: firstVehicleId),
+              ),
+            );
+          } else {
+            _showErrorSnackbar('No vehicles found for this account');
+          }
         } else {
-          _showErrorSnackbar("No vehicles found for this account");
+          _showErrorSnackbar('Unable to load dashboard. Please login again.');
         }
       }
     } catch (error) {
-      debugPrint('🔥 Error fetching vehicles: $error');
+      debugPrint('🔥 Error navigating to dashboard: $error');
       _showErrorSnackbar('Failed to load dashboard. Please login again.');
     }
   }
 
   void _showErrorSnackbar(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -188,6 +207,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   }
 
   void _showSuccessSnackbar(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -220,13 +240,10 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         backgroundColor: AppColors.white,
         elevation: 0,
         leading: widget.isFirstLogin
-            ? null // Don't show back button on first login
+            ? null
             : IconButton(
           onPressed: () => Navigator.pop(context),
-          icon: Icon(
-            Icons.arrow_back_rounded,
-            color: AppColors.black,
-          ),
+          icon: Icon(Icons.arrow_back_rounded, color: AppColors.black),
         ),
       ),
       body: SafeArea(
@@ -257,13 +274,15 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
                 // Title
                 Text(
-                  widget.isFirstLogin ? 'Set Your Password' : 'Reset Password',
+                  widget.isFirstLogin
+                      ? 'Set Your Password'
+                      : 'Reset Password',
                   style: AppTypography.h2,
                 ),
                 SizedBox(height: AppSizes.spacingS),
                 Text(
                   widget.isFirstLogin
-                      ? 'Welcome to PROXYM TRACKING! Please create a secure password to access your account.'
+                      ? 'Welcome to FLEETRA! Please create a secure password to access your account.'
                       : 'Please create a new password for your account.',
                   style: AppTypography.body2,
                 ),
@@ -273,72 +292,16 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                 // New Password Field
                 Text(
                   'New Password',
-                  style: AppTypography.body1.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: AppTypography.body1
+                      .copyWith(fontWeight: FontWeight.w600),
                 ),
                 SizedBox(height: AppSizes.spacingS),
-                Container(
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: AppColors.background,
-                    borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                    border: Border.all(
-                      color: AppColors.border,
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Padding(
-                        padding: EdgeInsets.only(
-                          left: AppSizes.spacingM,
-                          right: AppSizes.spacingM,
-                        ),
-                        child: Container(
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryLight,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            Icons.lock_outline,
-                            color: AppColors.primary,
-                            size: 16,
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: _passwordController,
-                          obscureText: _obscurePassword,
-                          style: AppTypography.body1,
-                          enabled: !_isLoading,
-                          decoration: InputDecoration(
-                            border: InputBorder.none,
-                            hintText: 'Enter new password',
-                            hintStyle: AppTypography.body1.copyWith(
-                              color: AppColors.textSecondary.withOpacity(0.6),
-                              fontWeight: FontWeight.w400,
-                            ),
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _obscurePassword = !_obscurePassword;
-                          });
-                        },
-                        icon: Icon(
-                          _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                          color: AppColors.textSecondary,
-                          size: 20,
-                        ),
-                      ),
-                    ],
-                  ),
+                _buildPasswordField(
+                  controller: _passwordController,
+                  hint: 'Enter new password',
+                  obscure: _obscurePassword,
+                  onToggle: () =>
+                      setState(() => _obscurePassword = !_obscurePassword),
                 ),
 
                 SizedBox(height: AppSizes.spacingL),
@@ -346,72 +309,16 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                 // Confirm Password Field
                 Text(
                   'Confirm Password',
-                  style: AppTypography.body1.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: AppTypography.body1
+                      .copyWith(fontWeight: FontWeight.w600),
                 ),
                 SizedBox(height: AppSizes.spacingS),
-                Container(
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: AppColors.background,
-                    borderRadius: BorderRadius.circular(AppSizes.radiusM),
-                    border: Border.all(
-                      color: AppColors.border,
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Padding(
-                        padding: EdgeInsets.only(
-                          left: AppSizes.spacingM,
-                          right: AppSizes.spacingM,
-                        ),
-                        child: Container(
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryLight,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            Icons.lock_outline,
-                            color: AppColors.primary,
-                            size: 16,
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: _confirmPasswordController,
-                          obscureText: _obscureConfirmPassword,
-                          style: AppTypography.body1,
-                          enabled: !_isLoading,
-                          decoration: InputDecoration(
-                            border: InputBorder.none,
-                            hintText: 'Confirm your password',
-                            hintStyle: AppTypography.body1.copyWith(
-                              color: AppColors.textSecondary.withOpacity(0.6),
-                              fontWeight: FontWeight.w400,
-                            ),
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _obscureConfirmPassword = !_obscureConfirmPassword;
-                          });
-                        },
-                        icon: Icon(
-                          _obscureConfirmPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                          color: AppColors.textSecondary,
-                          size: 20,
-                        ),
-                      ),
-                    ],
-                  ),
+                _buildPasswordField(
+                  controller: _confirmPasswordController,
+                  hint: 'Confirm your password',
+                  obscure: _obscureConfirmPassword,
+                  onToggle: () => setState(
+                          () => _obscureConfirmPassword = !_obscureConfirmPassword),
                 ),
 
                 SizedBox(height: AppSizes.spacingM),
@@ -429,18 +336,14 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.info_outline,
-                        color: AppColors.primary,
-                        size: 20,
-                      ),
+                      Icon(Icons.info_outline,
+                          color: AppColors.primary, size: 20),
                       SizedBox(width: AppSizes.spacingM),
                       Expanded(
                         child: Text(
                           'Password must be at least 6 characters long',
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.black,
-                          ),
+                          style: AppTypography.caption
+                              .copyWith(color: AppColors.black),
                         ),
                       ),
                     ],
@@ -457,9 +360,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     onPressed: _isLoading ? null : _handleResetPassword,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
-                      disabledBackgroundColor: AppColors.primary.withOpacity(0.6),
+                      disabledBackgroundColor:
+                      AppColors.primary.withOpacity(0.6),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        borderRadius:
+                        BorderRadius.circular(AppSizes.radiusM),
                       ),
                       elevation: 0,
                     ),
@@ -469,7 +374,8 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       height: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
-                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.white),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                            AppColors.white),
                       ),
                     )
                         : Row(
@@ -477,16 +383,12 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       children: [
                         Text(
                           'Set Password & Continue',
-                          style: AppTypography.button.copyWith(
-                            color: AppColors.white,
-                          ),
+                          style: AppTypography.button
+                              .copyWith(color: AppColors.white),
                         ),
                         SizedBox(width: AppSizes.spacingS),
-                        Icon(
-                          Icons.arrow_forward_rounded,
-                          color: AppColors.white,
-                          size: 20,
-                        ),
+                        Icon(Icons.arrow_forward_rounded,
+                            color: AppColors.white, size: 20),
                       ],
                     ),
                   ),
@@ -495,6 +397,65 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildPasswordField({
+    required TextEditingController controller,
+    required String hint,
+    required bool obscure,
+    required VoidCallback onToggle,
+  }) {
+    return Container(
+      height: 56,
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(AppSizes.radiusM),
+        border: Border.all(color: AppColors.border, width: 1.5),
+      ),
+      child: Row(
+        children: [
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: AppSizes.spacingM),
+            child: Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: AppColors.primaryLight,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.lock_outline,
+                  color: AppColors.primary, size: 16),
+            ),
+          ),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              obscureText: obscure,
+              style: AppTypography.body1,
+              enabled: !_isLoading,
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                hintText: hint,
+                hintStyle: AppTypography.body1.copyWith(
+                  color: AppColors.textSecondary.withOpacity(0.6),
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: onToggle,
+            icon: Icon(
+              obscure
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined,
+              color: AppColors.textSecondary,
+              size: 20,
+            ),
+          ),
+        ],
       ),
     );
   }

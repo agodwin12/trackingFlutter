@@ -38,30 +38,99 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadLanguagePreference() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _selectedLanguage = prefs.getString('language') ?? 'en';
-    });
-    debugPrint('✅ Profile screen loaded language preference: $_selectedLanguage');
+    if (mounted) {
+      setState(() {
+        _selectedLanguage = prefs.getString('language') ?? 'en';
+      });
+    }
   }
 
+  // ========== FETCH USER DATA ==========
+  // ✅ FIX: Reads the logged-in user's own ID from SharedPreferences
+  // instead of fetching by vehicleId which returns the vehicle OWNER
+  // (the partner), not the logged-in chauffeur.
+  //
+  // Old broken approach:
+  //   GET /users/vehicle/:vehicleId  → returns Patrick (vehicle owner)
+  //
+  // New correct approach:
+  //   Read user_id from SharedPreferences (saved at login)
+  //   GET /users/:userId             → returns the actual logged-in user
   Future<void> fetchUserData() async {
-    final String url = "$baseUrl/users/vehicle/${widget.vehicleId}";
-
     try {
-      final response = await http.get(Uri.parse(url));
+      final prefs = await SharedPreferences.getInstance();
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data["success"] == true) {
+      // ✅ Step 1: Try to load from SharedPreferences first (instant, no API)
+      final userDataString = prefs.getString('user');
+      if (userDataString != null) {
+        final savedUser = jsonDecode(userDataString);
+        if (mounted) {
           setState(() {
-            userData = data["user"];
+            userData = savedUser;
             isLoading = false;
           });
         }
+        debugPrint('✅ Profile loaded from SharedPreferences: ${savedUser['id']}');
+
+        // ✅ Step 2: Refresh from backend in background using logged-in user's ID
+        final int? userId = prefs.getInt('user_id');
+        if (userId != null) {
+          _refreshFromBackend(userId);
+        }
+        return;
       }
+
+      // ✅ Fallback: fetch from backend if SharedPreferences is empty
+      final int? userId = prefs.getInt('user_id');
+      if (userId == null) {
+        debugPrint('⚠️ No user_id found in SharedPreferences');
+        if (mounted) setState(() => isLoading = false);
+        return;
+      }
+
+      await _refreshFromBackend(userId);
     } catch (e) {
       debugPrint("🔥 Fetch user error: $e");
-      setState(() => isLoading = false);
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  // ========== REFRESH FROM BACKEND ==========
+  Future<void> _refreshFromBackend(int userId) async {
+    try {
+      debugPrint('🌐 Refreshing profile from backend for user: $userId');
+
+      final String url = "$baseUrl/users/$userId";
+      final response = await http.get(Uri.parse(url));
+
+      debugPrint('📡 Profile response: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        // Handle both response shapes: { user: {...} } or { data: {...} }
+        final fetchedUser = data['user'] ?? data['data'] ?? data;
+
+        if (fetchedUser is Map<String, dynamic> && fetchedUser.isNotEmpty) {
+          // Save refreshed data back to SharedPreferences
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('user', jsonEncode(fetchedUser));
+
+          if (mounted) {
+            setState(() {
+              userData = fetchedUser;
+              isLoading = false;
+            });
+          }
+          debugPrint('✅ Profile refreshed from backend: $userId');
+        }
+      } else {
+        debugPrint('⚠️ Backend profile fetch failed: ${response.statusCode}');
+        if (mounted) setState(() => isLoading = false);
+      }
+    } catch (e) {
+      debugPrint('⚠️ Background profile refresh failed: $e');
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
@@ -76,12 +145,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         title: Row(
           children: [
             Container(
-              padding: EdgeInsets.all(8),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: AppColors.error.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.logout_rounded, color: AppColors.error, size: 20),
+              child: Icon(Icons.logout_rounded,
+                  color: AppColors.error, size: 20),
             ),
             SizedBox(width: AppSizes.spacingM),
             Expanded(
@@ -113,9 +183,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onPressed: () async {
               final prefs = await SharedPreferences.getInstance();
               await prefs.clear();
-
               if (!mounted) return;
-              Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
+              Navigator.of(context)
+                  .pushNamedAndRemoveUntil('/login', (_) => false);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.error,
@@ -123,7 +193,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 borderRadius: BorderRadius.circular(AppSizes.radiusM),
               ),
               elevation: 0,
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             ),
             child: Text(
               _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
@@ -139,6 +210,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _navigateToChangePassword() {
+    // ✅ Uses the logged-in user's own data — always correct for both
+    // regular users and chauffeurs since userData is now loaded from
+    // SharedPreferences (saved at login with the correct user object)
     Navigator.pushNamed(
       context,
       '/change-password',
@@ -165,7 +239,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Compact Header (No Edit Button)
+            // Header
             Container(
               color: AppColors.white,
               padding: EdgeInsets.symmetric(
@@ -176,9 +250,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 children: [
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: Icon(Icons.arrow_back_rounded, size: 22),
+                    icon: const Icon(Icons.arrow_back_rounded, size: 22),
                     padding: EdgeInsets.zero,
-                    constraints: BoxConstraints(),
+                    constraints: const BoxConstraints(),
                   ),
                   SizedBox(width: AppSizes.spacingM),
                   Expanded(
@@ -202,12 +276,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       padding: EdgeInsets.all(AppSizes.spacingL),
                       decoration: BoxDecoration(
                         color: AppColors.white,
-                        borderRadius: BorderRadius.circular(AppSizes.radiusL),
+                        borderRadius:
+                        BorderRadius.circular(AppSizes.radiusL),
                         boxShadow: [
                           BoxShadow(
                             color: AppColors.black.withOpacity(0.05),
                             blurRadius: 10,
-                            offset: Offset(0, 2),
+                            offset: const Offset(0, 2),
                           ),
                         ],
                       ),
@@ -231,19 +306,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                               boxShadow: [
                                 BoxShadow(
-                                  color: AppColors.primary.withOpacity(0.3),
+                                  color:
+                                  AppColors.primary.withOpacity(0.3),
                                   blurRadius: 12,
-                                  offset: Offset(0, 4),
+                                  offset: const Offset(0, 4),
                                 ),
                               ],
                             ),
                             child: Center(
                               child: Text(
                                 "${(userData['prenom'] ?? 'U')[0]}${(userData['nom'] ?? 'S')[0]}",
-                                style: TextStyle(
+                                style: const TextStyle(
                                   fontSize: 32,
                                   fontWeight: FontWeight.bold,
-                                  color: AppColors.white,
+                                  color: Colors.white,
                                 ),
                               ),
                             ),
@@ -252,11 +328,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           // Name
                           Text(
                             "${userData['prenom'] ?? ''} ${userData['nom'] ?? ''}",
-                            style: AppTypography.h3.copyWith(fontSize: 20),
+                            style:
+                            AppTypography.h3.copyWith(fontSize: 20),
                             textAlign: TextAlign.center,
                           ),
                           SizedBox(height: AppSizes.spacingXS),
-                          // User ID
+                          // User ID badge
                           Container(
                             padding: EdgeInsets.symmetric(
                               horizontal: AppSizes.spacingM,
@@ -286,12 +363,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       padding: EdgeInsets.all(AppSizes.spacingL),
                       decoration: BoxDecoration(
                         color: AppColors.white,
-                        borderRadius: BorderRadius.circular(AppSizes.radiusL),
+                        borderRadius:
+                        BorderRadius.circular(AppSizes.radiusL),
                         boxShadow: [
                           BoxShadow(
                             color: AppColors.black.withOpacity(0.05),
                             blurRadius: 10,
-                            offset: Offset(0, 2),
+                            offset: const Offset(0, 2),
                           ),
                         ],
                       ),
@@ -302,21 +380,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             _selectedLanguage == 'en'
                                 ? 'Contact Information'
                                 : 'Informations de contact',
-                            style: AppTypography.subtitle1.copyWith(fontSize: 15),
+                            style: AppTypography.subtitle1
+                                .copyWith(fontSize: 15),
                           ),
                           SizedBox(height: AppSizes.spacingM),
                           _buildInfoRow(
                             icon: Icons.phone_outlined,
-                            label: _selectedLanguage == 'en' ? 'Phone' : 'Téléphone',
+                            label: _selectedLanguage == 'en'
+                                ? 'Phone'
+                                : 'Téléphone',
                             value: userData['phone'] ??
-                                (_selectedLanguage == 'en' ? 'Not provided' : 'Non fourni'),
+                                (_selectedLanguage == 'en'
+                                    ? 'Not provided'
+                                    : 'Non fourni'),
                           ),
                           SizedBox(height: AppSizes.spacingM),
                           _buildInfoRow(
                             icon: Icons.email_outlined,
                             label: 'Email',
                             value: userData['email'] ??
-                                (_selectedLanguage == 'en' ? 'Not provided' : 'Non fourni'),
+                                (_selectedLanguage == 'en'
+                                    ? 'Not provided'
+                                    : 'Non fourni'),
                           ),
                         ],
                       ),
@@ -324,10 +409,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                     SizedBox(height: AppSizes.spacingL),
 
-                    // Action Buttons (Only Change Password & Logout)
+                    // Action Buttons
                     Column(
                       children: [
-                        // Change Password Button
                         _buildActionButton(
                           icon: Icons.lock_outline,
                           label: _selectedLanguage == 'en'
@@ -337,10 +421,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           onTap: _navigateToChangePassword,
                         ),
                         SizedBox(height: AppSizes.spacingM),
-                        // Logout Button
                         _buildActionButton(
                           icon: Icons.logout_rounded,
-                          label: _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
+                          label: _selectedLanguage == 'en'
+                              ? 'Logout'
+                              : 'Déconnexion',
                           color: AppColors.error,
                           onTap: _logout,
                         ),
@@ -386,7 +471,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   color: AppColors.textSecondary,
                 ),
               ),
-              SizedBox(height: 2),
+              const SizedBox(height: 2),
               Text(
                 value,
                 style: AppTypography.body1.copyWith(
@@ -426,7 +511,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             BoxShadow(
               color: AppColors.black.withOpacity(0.05),
               blurRadius: 10,
-              offset: Offset(0, 2),
+              offset: const Offset(0, 2),
             ),
           ],
         ),
