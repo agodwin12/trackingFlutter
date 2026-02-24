@@ -557,51 +557,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }
                     },
                   ),
-                  SizedBox(height: AppSizes.spacingM),
+             //     SizedBox(height: AppSizes.spacingM),
 
 
-                  SettingsTile(
-                    icon: Icons.subscriptions_outlined,
-                    title: _selectedLanguage == 'en' ? 'Subscription' : 'Abonnement',
-                    subtitle: _selectedLanguage == 'en'
-                        ? 'Manage your plan and renewals'
-                        : 'Gérer votre forfait et renouvellements',
-                    trailing: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: AppColors.success.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        _selectedLanguage == 'en' ? 'ACTIVE' : 'ACTIF',
-                        style: AppTypography.caption.copyWith(
-                          color: AppColors.success,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    onTap: () {
-                      if (_userId != null && _userVehicleId != null) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => RenewalPaymentScreen(
-                              userId: _userId!,
-                              vehicleId: _userVehicleId!,
-                              currentExpiryDate: "Oct 20, 2027", // Static for now
-                            ),
-                          ),
-                        );
-                      } else {
-                        _showSnack(
-                          _selectedLanguage == 'en'
-                              ? 'Vehicle data not loaded'
-                              : 'Données du véhicule non chargées',
-                          AppColors.error,
-                        );
-                      }
-                    },
-                  ),
+                  // ── SUBSCRIPTION (TEMPORARILY DISABLED) ─────────────────────────
+//
+// SettingsTile(
+//   icon: Icons.subscriptions_outlined,
+//   title: _selectedLanguage == 'en' ? 'Subscription' : 'Abonnement',
+//   subtitle: _selectedLanguage == 'en'
+//       ? 'Manage your plan and renewals'
+//       : 'Gérer votre forfait et renouvellements',
+//   trailing: Container(
+//     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+//     decoration: BoxDecoration(
+//       color: AppColors.success.withOpacity(0.1),
+//       borderRadius: BorderRadius.circular(6),
+//     ),
+//     child: Text(
+//       _selectedLanguage == 'en' ? 'ACTIVE' : 'ACTIF',
+//       style: AppTypography.caption.copyWith(
+//         color: AppColors.success,
+//         fontWeight: FontWeight.bold,
+//       ),
+//     ),
+//   ),
+//   onTap: () {
+//     if (_userId != null && _userVehicleId != null) {
+//       Navigator.push(
+//         context,
+//         MaterialPageRoute(
+//           builder: (context) => RenewalPaymentScreen(
+//             userId: _userId!,
+//             vehicleId: _userVehicleId!,
+//             currentExpiryDate: "Oct 20, 2027",
+//           ),
+//         ),
+//       );
+//     } else {
+//       _showSnack(
+//         _selectedLanguage == 'en'
+//             ? 'Vehicle data not loaded'
+//             : 'Données du véhicule non chargées',
+//         AppColors.error,
+//       );
+//     }
+//   },
+// ),
 
                   SettingsTile(
                     icon: Icons.directions_car_outlined,
