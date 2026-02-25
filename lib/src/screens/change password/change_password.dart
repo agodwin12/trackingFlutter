@@ -1,7 +1,7 @@
 // lib/screens/change_password/change_password.dart
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/utility/app_theme.dart';
@@ -9,8 +9,6 @@ import '../../services/env_config.dart';
 import '../../services/pin_service.dart';
 import '../create_pin screen/create_pin.dart';
 import '../dashboard/dashboard.dart';
-
-
 
 class ResetPasswordScreen extends StatefulWidget {
   final int userId;
@@ -30,7 +28,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController =
   TextEditingController();
+
   final PinService _pinService = PinService();
+
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _isLoading = false;
@@ -67,7 +67,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('accessToken');
+      final token =
+          prefs.getString('accessToken') ?? prefs.getString('auth_token');
+
+      // ✅ CRITICAL: keep prefs aligned with this user
+      await prefs.setInt('user_id', widget.userId);
 
       final response = await http.post(
         Uri.parse('$baseUrl/users/set-password'),
@@ -81,63 +85,59 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         }),
       );
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+      debugPrint('🔐 set-password status=${response.statusCode}');
+      debugPrint('🔐 set-password body=${response.body}');
 
-        if (data['success'] == true) {
-          setState(() => _isLoading = false);
-          _showSuccessSnackbar('Password set successfully!');
-
-          await Future.delayed(const Duration(seconds: 1));
-          if (!mounted) return;
-
-          // ✅ Check PIN using the logged-in user's own ID from SharedPreferences
-          // PinService._getUserId() reads prefs.getInt('user_id') which was
-          // saved at login as the actual logged-in user's ID — correct for
-          // both regular users and chauffeurs
-          debugPrint('🔐 Checking PIN for user: ${widget.userId}');
-          final hasPinSet = await _pinService.hasPinSet();
-          debugPrint('🔐 Has PIN set: $hasPinSet');
-
-          if (!mounted) return;
-
-          if (!hasPinSet) {
-            // ✅ No PIN → go to create PIN screen
-            debugPrint('🔑 No PIN found → navigating to Create PIN screen');
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) =>
-                    CreatePinScreen(userId: widget.userId),
-              ),
-            );
-          } else {
-            // ✅ PIN exists → go straight to dashboard
-            debugPrint('✅ PIN already exists → navigating to dashboard');
-            _navigateToDashboard();
-          }
-        } else {
-          throw Exception(data['message'] ?? 'Failed to set password');
-        }
-      } else {
+      if (response.statusCode != 200) {
         throw Exception('Failed to set password: ${response.statusCode}');
       }
-    } catch (error) {
+
+      final data = jsonDecode(response.body);
+      if (data['success'] != true) {
+        throw Exception(data['message'] ?? 'Failed to set password');
+      }
+
+      if (!mounted) return;
+
       setState(() => _isLoading = false);
+      _showSuccessSnackbar('Password set successfully!');
+
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+
+      // ✅ CRITICAL FIX:
+      // Check PIN for THIS userId (not whatever is in prefs)
+      debugPrint('🔐 Checking PIN for userId=${widget.userId}');
+      final hasPinSet = await _pinService.hasPinSetFor(widget.userId);
+      debugPrint('🔐 Has PIN set for userId=${widget.userId}: $hasPinSet');
+
+      if (!mounted) return;
+
+      if (!hasPinSet) {
+        debugPrint('🔑 No PIN found → navigating to CreatePinScreen');
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CreatePinScreen(userId: widget.userId),
+          ),
+        );
+      } else {
+        debugPrint('✅ PIN exists → navigating to dashboard');
+        _navigateToDashboard();
+      }
+    } catch (error) {
       debugPrint('🔥 Error setting password: $error');
-      _showErrorSnackbar('Failed to set password. Please try again.');
+      if (mounted) {
+        setState(() => _isLoading = false);
+        _showErrorSnackbar('Failed to set password. Please try again.');
+      }
     }
   }
 
-  // ========== NAVIGATE TO DASHBOARD ==========
-  // ✅ FIX: Reads vehicle from SharedPreferences instead of calling
-  // /voitures/user/:userId which fails for chauffeurs and is redundant
-  // since login already saved the vehicles list
+  // ✅ Dashboard navigation unchanged
   void _navigateToDashboard() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
-      // ✅ Read from SharedPreferences — saved at login for both user types
       final int? vehicleId = prefs.getInt('current_vehicle_id');
 
       if (vehicleId != null) {
@@ -149,31 +149,29 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
             builder: (context) => ModernDashboard(vehicleId: vehicleId),
           ),
         );
-      } else {
-        // Fallback: try vehicles_list
-        final vehiclesJson = prefs.getString('vehicles_list');
-        if (vehiclesJson != null) {
-          final List vehicles = jsonDecode(vehiclesJson);
-          if (vehicles.isNotEmpty) {
-            final int firstVehicleId = vehicles[0]["id"];
-            await prefs.setInt('current_vehicle_id', firstVehicleId);
+        return;
+      }
 
-            debugPrint('🚗 Fallback vehicle ID: $firstVehicleId');
-            if (!mounted) return;
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) =>
-                    ModernDashboard(vehicleId: firstVehicleId),
-              ),
-            );
-          } else {
-            _showErrorSnackbar('No vehicles found for this account');
-          }
-        } else {
-          _showErrorSnackbar('Unable to load dashboard. Please login again.');
+      final vehiclesJson = prefs.getString('vehicles_list');
+      if (vehiclesJson != null) {
+        final List vehicles = jsonDecode(vehiclesJson);
+        if (vehicles.isNotEmpty) {
+          final int firstVehicleId = vehicles[0]["id"];
+          await prefs.setInt('current_vehicle_id', firstVehicleId);
+
+          debugPrint('🚗 Fallback vehicle ID: $firstVehicleId');
+          if (!mounted) return;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ModernDashboard(vehicleId: firstVehicleId),
+            ),
+          );
+          return;
         }
       }
+
+      _showErrorSnackbar('Unable to load dashboard. Please login again.');
     } catch (error) {
       debugPrint('🔥 Error navigating to dashboard: $error');
       _showErrorSnackbar('Failed to load dashboard. Please login again.');
@@ -234,6 +232,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ UI UNCHANGED
     return Scaffold(
       backgroundColor: AppColors.white,
       appBar: AppBar(
@@ -254,8 +253,6 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SizedBox(height: AppSizes.spacingL),
-
-                // Icon
                 Container(
                   width: 80,
                   height: 80,
@@ -269,14 +266,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     size: 40,
                   ),
                 ),
-
                 SizedBox(height: AppSizes.spacingXL),
-
-                // Title
                 Text(
-                  widget.isFirstLogin
-                      ? 'Set Your Password'
-                      : 'Reset Password',
+                  widget.isFirstLogin ? 'Set Your Password' : 'Reset Password',
                   style: AppTypography.h2,
                 ),
                 SizedBox(height: AppSizes.spacingS),
@@ -286,14 +278,10 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       : 'Please create a new password for your account.',
                   style: AppTypography.body2,
                 ),
-
                 SizedBox(height: AppSizes.spacingXL),
-
-                // New Password Field
                 Text(
                   'New Password',
-                  style: AppTypography.body1
-                      .copyWith(fontWeight: FontWeight.w600),
+                  style: AppTypography.body1.copyWith(fontWeight: FontWeight.w600),
                 ),
                 SizedBox(height: AppSizes.spacingS),
                 _buildPasswordField(
@@ -303,27 +291,20 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   onToggle: () =>
                       setState(() => _obscurePassword = !_obscurePassword),
                 ),
-
                 SizedBox(height: AppSizes.spacingL),
-
-                // Confirm Password Field
                 Text(
                   'Confirm Password',
-                  style: AppTypography.body1
-                      .copyWith(fontWeight: FontWeight.w600),
+                  style: AppTypography.body1.copyWith(fontWeight: FontWeight.w600),
                 ),
                 SizedBox(height: AppSizes.spacingS),
                 _buildPasswordField(
                   controller: _confirmPasswordController,
                   hint: 'Confirm your password',
                   obscure: _obscureConfirmPassword,
-                  onToggle: () => setState(
-                          () => _obscureConfirmPassword = !_obscureConfirmPassword),
+                  onToggle: () => setState(() =>
+                  _obscureConfirmPassword = !_obscureConfirmPassword),
                 ),
-
                 SizedBox(height: AppSizes.spacingM),
-
-                // Password Requirements
                 Container(
                   padding: EdgeInsets.all(AppSizes.spacingM),
                   decoration: BoxDecoration(
@@ -336,23 +317,19 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.info_outline,
-                          color: AppColors.primary, size: 20),
+                      Icon(Icons.info_outline, color: AppColors.primary, size: 20),
                       SizedBox(width: AppSizes.spacingM),
                       Expanded(
                         child: Text(
                           'Password must be at least 6 characters long',
-                          style: AppTypography.caption
-                              .copyWith(color: AppColors.black),
+                          style:
+                          AppTypography.caption.copyWith(color: AppColors.black),
                         ),
                       ),
                     ],
                   ),
                 ),
-
                 SizedBox(height: AppSizes.spacingXL),
-
-                // Submit Button
                 SizedBox(
                   width: double.infinity,
                   height: 56,
@@ -360,11 +337,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     onPressed: _isLoading ? null : _handleResetPassword,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
-                      disabledBackgroundColor:
-                      AppColors.primary.withOpacity(0.6),
+                      disabledBackgroundColor: AppColors.primary.withOpacity(0.6),
                       shape: RoundedRectangleBorder(
-                        borderRadius:
-                        BorderRadius.circular(AppSizes.radiusM),
+                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
                       ),
                       elevation: 0,
                     ),
@@ -374,8 +349,8 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       height: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.white),
+                        valueColor:
+                        AlwaysStoppedAnimation<Color>(AppColors.white),
                       ),
                     )
                         : Row(
@@ -425,8 +400,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                 color: AppColors.primaryLight,
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.lock_outline,
-                  color: AppColors.primary, size: 16),
+              child: Icon(Icons.lock_outline, color: AppColors.primary, size: 16),
             ),
           ),
           Expanded(
@@ -448,9 +422,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
           IconButton(
             onPressed: onToggle,
             icon: Icon(
-              obscure
-                  ? Icons.visibility_off_outlined
-                  : Icons.visibility_outlined,
+              obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
               color: AppColors.textSecondary,
               size: 20,
             ),

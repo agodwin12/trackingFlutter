@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../services/pin_service.dart';
 import '../../core/utility/app_theme.dart';
 import '../dashboard/dashboard.dart';
@@ -20,6 +21,7 @@ class CreatePinScreen extends StatefulWidget {
 
 class _CreatePinScreenState extends State<CreatePinScreen> {
   final PinService _pinService = PinService();
+
   String _pin = '';
   String _confirmPin = '';
   bool _isConfirmStep = false;
@@ -31,6 +33,25 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
   void initState() {
     super.initState();
     _loadLanguagePreference();
+    _syncUserIdToPrefs(); // ✅ ensure PinService reads the correct user_id
+  }
+
+  Future<void> _syncUserIdToPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final current = prefs.getInt('user_id');
+
+      // Force coherence: this screen's userId must be the one used by PinService
+      if (current != widget.userId) {
+        await prefs.setInt('user_id', widget.userId);
+        debugPrint('🧩 Synced prefs user_id=$current -> ${widget.userId}');
+      } else {
+        debugPrint('🧩 prefs user_id already matches: ${widget.userId}');
+      }
+    } catch (e) {
+      debugPrint('❌ Failed to sync user_id to prefs: $e');
+      // Do not block UI; createPin will still fail safely if user_id is missing
+    }
   }
 
   Future<void> _loadLanguagePreference() async {
@@ -100,6 +121,9 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
     setState(() => _isCreatingPin = true);
 
     try {
+      // ✅ Ensure PinService uses the correct user_id before calling createPin()
+      await _syncUserIdToPrefs();
+
       final success = await _pinService.createPin(_pin);
 
       if (!success) {
@@ -116,10 +140,6 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       }
 
       debugPrint('✅ PIN created successfully — navigating to dashboard');
-
-      // ✅ FIX: Read vehicle from SharedPreferences instead of calling
-      // /voitures/user/:userId which fails for chauffeurs and is redundant
-      // since login already saved vehicles_list to SharedPreferences
       await _navigateToDashboard();
     } catch (e) {
       debugPrint('❌ Error in _verifyAndSavePin: $e');
@@ -170,8 +190,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (context) =>
-                  ModernDashboard(vehicleId: firstVehicleId),
+              builder: (context) => ModernDashboard(vehicleId: firstVehicleId),
             ),
           );
           return;
@@ -269,19 +288,16 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: List.generate(4, (index) {
-                        final currentPin =
-                        !_isConfirmStep ? _pin : _confirmPin;
+                        final currentPin = !_isConfirmStep ? _pin : _confirmPin;
                         final isFilled = index < currentPin.length;
                         return Container(
-                          margin: EdgeInsets.symmetric(
-                              horizontal: AppSizes.spacingM),
+                          margin:
+                          EdgeInsets.symmetric(horizontal: AppSizes.spacingM),
                           width: 20,
                           height: 20,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: isFilled
-                                ? AppColors.primary
-                                : Colors.transparent,
+                            color: isFilled ? AppColors.primary : Colors.transparent,
                             border: Border.all(
                               color: AppColors.primary,
                               width: 2,
@@ -300,8 +316,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
                       padding: EdgeInsets.all(AppSizes.spacingM),
                       decoration: BoxDecoration(
                         color: AppColors.error.withOpacity(0.1),
-                        borderRadius:
-                        BorderRadius.circular(AppSizes.radiusM),
+                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
                         border: Border.all(
                           color: AppColors.error.withOpacity(0.3),
                         ),
@@ -330,8 +345,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
                       padding: EdgeInsets.all(AppSizes.spacingM),
                       decoration: BoxDecoration(
                         color: AppColors.primaryLight,
-                        borderRadius:
-                        BorderRadius.circular(AppSizes.radiusM),
+                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
                       ),
                       child: Row(
                         children: [

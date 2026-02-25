@@ -195,11 +195,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
           return;
         }
 
-        // ── Save full vehicles list to SharedPreferences ─────────
-        // ✅ KEY FIX: dashboard_controller reads from here for BOTH
-        // regular users and chauffeurs. Without this, chauffeur users
-        // get a white screen because the API endpoint /voitures/user/:id
-        // does not support chauffeur accounts.
+
         await prefs.setString('vehicles_list', jsonEncode(vehicles));
         debugPrint('💾 Vehicles list saved (${vehicles.length} vehicles)');
 

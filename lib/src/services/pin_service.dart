@@ -1,83 +1,104 @@
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
+// lib/services/pin_service.dart
 import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'env_config.dart';
 
 class PinService {
   static const String _failedAttemptsKey = 'failed_pin_attempts';
   static const int _maxFailedAttempts = 5;
 
-  // Get user ID from shared preferences
-  Future<int?> _getUserId() async {
-    final prefs = await SharedPreferences.getInstance();
+  // ---------- Helpers ----------
+  Future<SharedPreferences> get _prefs async => SharedPreferences.getInstance();
+
+  Future<String?> _getToken() async {
+    final prefs = await _prefs;
+    // you save both, keep compatibility
+    return prefs.getString('accessToken') ?? prefs.getString('auth_token');
+  }
+
+  Future<int?> getLoggedInUserId() async {
+    final prefs = await _prefs;
     return prefs.getInt('user_id');
   }
 
-  // Check if user has created a PIN (from backend)
-  Future<bool> hasPinSet() async {
+  Map<String, String> _jsonHeaders({String? token}) => {
+    'Content-Type': 'application/json',
+    if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+  };
+
+  // ---------- PIN Existence ----------
+  // ✅ IMPORTANT: Prefer checking for an explicit userId (e.g. first-login flow)
+  Future<bool> hasPinSetFor(int userId) async {
     try {
-      final userId = await _getUserId();
-      if (userId == null) {
-        print('❌ No user ID found');
-        return false;
-      }
-
+      final token = await _getToken();
       final url = Uri.parse('${EnvConfig.baseUrl}/pin/exists/$userId');
-      print('🔍 Checking PIN existence at: $url');
+      print('🔍 Checking PIN existence at: $url (userId=$userId)');
 
-      final response = await http.get(url);
+      final response = await http.get(url, headers: _jsonHeaders(token: token));
+      print('📥 PIN exists status: ${response.statusCode}');
+      print('📥 PIN exists body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        final hasPinSet = data['hasPinSet'] ?? false;
-        print('✅ PIN check result: $hasPinSet');
-        return hasPinSet;
-      } else {
-        print('❌ Error checking PIN: ${response.statusCode}');
-        return false;
+        return data['hasPinSet'] == true;
       }
+
+      // If server errors, don't block onboarding — force PIN creation
+      return false;
     } catch (e) {
       print('❌ Error checking PIN: $e');
       return false;
     }
   }
 
-  // Create and save a new PIN (to backend)
-  Future<bool> createPin(String pin) async {
+  // Backward-compatible method: uses prefs user_id
+  Future<bool> hasPinSet() async {
+    final userId = await getLoggedInUserId();
+    if (userId == null) {
+      print('❌ No user ID found in prefs for hasPinSet()');
+      return false;
+    }
+    return hasPinSetFor(userId);
+  }
+
+  // ---------- Create PIN ----------
+  // ✅ Prefer explicit userId if you have it; falls back to prefs user_id
+  Future<bool> createPin(String pin, {int? userId}) async {
     if (!_isValidPin(pin)) {
       print('❌ Invalid PIN format');
       return false;
     }
 
     try {
-      final userId = await _getUserId();
-      if (userId == null) {
+      final uid = userId ?? await getLoggedInUserId();
+      if (uid == null) {
         print('❌ No user ID found');
         return false;
       }
 
+      final token = await _getToken();
       final url = Uri.parse('${EnvConfig.baseUrl}/pin/set');
-      print('📤 Creating PIN at: $url');
+      print('📤 Creating PIN at: $url (userId=$uid)');
 
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'userId': userId,
-          'pin': pin,
-        }),
+        headers: _jsonHeaders(token: token),
+        body: json.encode({'userId': uid, 'pin': pin}),
       );
+
+      print('📥 Create PIN status: ${response.statusCode}');
+      print('📥 Create PIN body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
-          await resetFailedAttempts(); // Reset attempts on successful creation
+          await resetFailedAttempts();
           print('✅ PIN created successfully');
           return true;
         }
       }
 
-      print('❌ Failed to create PIN: ${response.body}');
       return false;
     } catch (e) {
       print('❌ Error creating PIN: $e');
@@ -85,84 +106,83 @@ class PinService {
     }
   }
 
-  // Verify PIN (with backend)
-  Future<bool> verifyPin(String pin) async {
+  // ---------- Verify PIN ----------
+  Future<bool> verifyPin(String pin, {int? userId}) async {
+    if (!_isValidPin(pin)) {
+      print('❌ Invalid PIN format');
+      return false;
+    }
+
     try {
-      final userId = await _getUserId();
-      if (userId == null) {
+      final uid = userId ?? await getLoggedInUserId();
+      if (uid == null) {
         print('❌ No user ID found');
         return false;
       }
 
+      final token = await _getToken();
       final url = Uri.parse('${EnvConfig.baseUrl}/pin/verify');
-      print('🔐 Verifying PIN at: $url');
+      print('🔐 Verifying PIN at: $url (userId=$uid)');
 
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'userId': userId,
-          'pin': pin,
-        }),
+        headers: _jsonHeaders(token: token),
+        body: json.encode({'userId': uid, 'pin': pin}),
       );
+
+      print('📥 Verify PIN status: ${response.statusCode}');
+      print('📥 Verify PIN body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
-          // Reset failed attempts on successful verification
           await resetFailedAttempts();
           print('✅ PIN verified successfully');
           return true;
         }
       }
 
-      // Wrong PIN - increment failed attempts
       final failedAttempts = await incrementFailedAttempts();
       print('❌ Wrong PIN - Attempt $failedAttempts/$_maxFailedAttempts');
       return false;
-
     } catch (e) {
       print('❌ Error verifying PIN: $e');
       return false;
     }
   }
 
-  // Change existing PIN (requires old PIN for verification)
-  Future<bool> changePin(String oldPin, String newPin) async {
+  // ---------- Change PIN ----------
+  Future<bool> changePin(String oldPin, String newPin, {int? userId}) async {
     if (!_isValidPin(oldPin) || !_isValidPin(newPin)) {
       print('❌ Invalid PIN format');
       return false;
     }
 
     try {
-      final userId = await _getUserId();
-      if (userId == null) {
+      final uid = userId ?? await getLoggedInUserId();
+      if (uid == null) {
         print('❌ No user ID found');
         return false;
       }
 
+      final token = await _getToken();
       final url = Uri.parse('${EnvConfig.baseUrl}/pin/change');
-      print('🔄 Changing PIN at: $url');
+      print('🔄 Changing PIN at: $url (userId=$uid)');
 
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'userId': userId,
-          'oldPin': oldPin,
-          'newPin': newPin,
-        }),
+        headers: _jsonHeaders(token: token),
+        body: json.encode({'userId': uid, 'oldPin': oldPin, 'newPin': newPin}),
       );
+
+      print('📥 Change PIN status: ${response.statusCode}');
+      print('📥 Change PIN body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['success'] == true) {
-          print('✅ PIN changed successfully');
-          return true;
-        }
+        return data['success'] == true;
       }
 
-      print('❌ Failed to change PIN: ${response.body}');
       return false;
     } catch (e) {
       print('❌ Error changing PIN: $e');
@@ -170,65 +190,67 @@ class PinService {
     }
   }
 
-  // Get number of failed attempts (stored locally)
+  // ---------- Delete PIN (optional / usually NOT on logout) ----------
+  // ⚠️ Security note: generally you should NOT delete PIN on logout.
+  // Keep it for "Reset PIN" flows only.
+  Future<bool> deletePinFor(int userId) async {
+    try {
+      final token = await _getToken();
+      final url = Uri.parse('${EnvConfig.baseUrl}/pin/delete/$userId');
+      print('🗑️ Deleting PIN at: $url (userId=$userId)');
+
+      final response = await http.delete(url, headers: _jsonHeaders(token: token));
+      print('📥 Delete PIN status: ${response.statusCode}');
+      print('📥 Delete PIN body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        await resetFailedAttempts();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      print('❌ Error deleting PIN: $e');
+      return false;
+    }
+  }
+
+  // Backward-compatible delete using prefs user_id
+  Future<bool> deletePin() async {
+    final uid = await getLoggedInUserId();
+    if (uid == null) return false;
+    return deletePinFor(uid);
+  }
+
+  // ---------- Failed attempts (local) ----------
   Future<int> getFailedAttempts() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs;
     return prefs.getInt(_failedAttemptsKey) ?? 0;
   }
 
-  // Increment failed attempts and return new count
   Future<int> incrementFailedAttempts() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs;
     final currentAttempts = prefs.getInt(_failedAttemptsKey) ?? 0;
     final newAttempts = currentAttempts + 1;
     await prefs.setInt(_failedAttemptsKey, newAttempts);
     return newAttempts;
   }
 
-  // Check if max attempts reached
   Future<bool> isMaxAttemptsReached() async {
     final attempts = await getFailedAttempts();
     return attempts >= _maxFailedAttempts;
   }
 
-  // Reset failed attempts (call this after successful login or PIN reset)
   Future<void> resetFailedAttempts() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs;
     await prefs.setInt(_failedAttemptsKey, 0);
     print('✅ Failed attempts reset');
   }
 
-  // Delete PIN from backend (call this on logout)
-  Future<void> deletePin() async {
-    try {
-      final userId = await _getUserId();
-      if (userId == null) {
-        print('❌ No user ID found');
-        return;
-      }
+  int get maxAttempts => _maxFailedAttempts;
 
-      final url = Uri.parse('${EnvConfig.baseUrl}/pin/delete/$userId');
-      print('🗑️ Deleting PIN at: $url');
-
-      final response = await http.delete(url);
-
-      if (response.statusCode == 200) {
-        await resetFailedAttempts();
-        print('✅ PIN deleted successfully');
-      } else {
-        print('❌ Failed to delete PIN: ${response.body}');
-      }
-    } catch (e) {
-      print('❌ Error deleting PIN: $e');
-    }
-  }
-
-  // Validate PIN format (must be exactly 4 digits)
+  // ---------- Validation ----------
   bool _isValidPin(String pin) {
     if (pin.length != 4) return false;
     return RegExp(r'^\d{4}$').hasMatch(pin);
   }
-
-  // Get max allowed attempts
-  int get maxAttempts => _maxFailedAttempts;
 }
