@@ -1,29 +1,19 @@
 // lib/src/screens/dashboard/services/dashboard_service.dart
 
 import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../services/env_config.dart';
-import '../../../services/token_refresh_service.dart';
-
+import '../../../services/api_service.dart';
 
 class DashboardService {
-  // ✅ Using EnvConfig for base URL
-  static String get baseUrl => EnvConfig.baseUrl;
-
-  // ✅ Token refresh service instance
-  static final TokenRefreshService _tokenService = TokenRefreshService();
-
   /// Load user data from SharedPreferences
   static Future<Map<String, dynamic>?> loadUserData() async {
     try {
       SharedPreferences prefs = await SharedPreferences.getInstance();
-      String? userData = prefs.getString("user");
-
+      final userData = prefs.getString("user");
       if (userData != null) {
-        return jsonDecode(userData);
+        return Map<String, dynamic>.from(jsonDecode(userData));
       }
       return null;
     } catch (error) {
@@ -32,27 +22,32 @@ class DashboardService {
     }
   }
 
-  /// ✅ Fetch all vehicles for a user with automatic token refresh
+
   static Future<List<dynamic>> fetchVehicles(int userId) async {
     try {
-      final response = await _tokenService.makeAuthenticatedRequest(
-        request: (token) async {
-          return await http.get(
-            Uri.parse("$baseUrl/voitures/user/$userId"),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
-        },
-      );
+      final data = await ApiService.get('/voitures/user/$userId');
 
-      debugPrint("📡 Vehicles response: ${response.statusCode}");
+      if (data['success'] == true) {
+        final vehicles = data['vehicles'] ?? [];
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data["vehicles"] ?? [];
+        // Cache each vehicle display name for notification resolution
+        if ((vehicles as List).isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          for (final v in vehicles) {
+            final id = v['id'];
+            if (id == null) continue;
+            final displayName =
+            (v['nickname'] as String?)?.trim().isNotEmpty == true
+                ? v['nickname'] as String
+                : (v['immatriculation'] as String?) ?? 'Vehicle $id';
+            await prefs.setString('vehicle_name_$id', displayName);
+          }
+          debugPrint("💾 Cached display names for ${vehicles.length} vehicle(s)");
+        }
+
+        return vehicles;
       }
+
       return [];
     } catch (error) {
       debugPrint("🔥 Error fetching vehicles: $error");
@@ -60,465 +55,249 @@ class DashboardService {
     }
   }
 
-  /// ✅ This returns the ACTUAL current engine state from GPS device with automatic token refresh
+  /// Returns the ACTUAL current engine state from GPS device.
   /// Uses: Cache → Database → GPS API (fallback)
-  static Future<Map<String, dynamic>> fetchRealtimeVehicleStatus(int vehicleId) async {
+  static Future<Map<String, dynamic>> fetchRealtimeVehicleStatus(
+      int vehicleId) async {
     try {
       debugPrint("🔍 Fetching real-time status for vehicle $vehicleId");
 
-      final response = await _tokenService.makeAuthenticatedRequest(
-        request: (token) async {
-          return await http.get(
-            Uri.parse("$baseUrl/gps/vehicle/$vehicleId/realtime-status"),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
-        },
-      );
+      final data =
+      await ApiService.get('/gps/vehicle/$vehicleId/realtime-status');
 
-      debugPrint("📡 Realtime status response: ${response.statusCode}");
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        debugPrint("📦 Realtime status data: ${jsonEncode(data)}");
-
-        if (data['success'] == true) {
-          // ✅ Parse engineOn with multiple type support
-          bool engineOn = false;
-          final engineValue = data['engineOn'];
-          if (engineValue is bool) {
-            engineOn = engineValue;
-          } else if (engineValue is num) {
-            engineOn = engineValue != 0;
-          } else if (engineValue is String) {
-            engineOn = (engineValue == '1' || engineValue.toLowerCase() == 'true');
-          }
-
-          // Parse accOn similarly
-          bool accOn = false;
-          final accValue = data['accOn'];
-          if (accValue is bool) {
-            accOn = accValue;
-          } else if (accValue is num) {
-            accOn = accValue != 0;
-          } else if (accValue is String) {
-            accOn = (accValue == '1' || accValue.toLowerCase() == 'true');
-          }
-
-          debugPrint("✅ Engine Status: ${engineOn ? 'ON' : 'OFF'}");
-          debugPrint("✅ Data Source: ${data['source']}"); // cache, database, or api
-
-          return {
-            'success': true,
-            'engineOn': engineOn,
-            'accOn': accOn,
-            'gpsStatus': data['gpsStatus']?.toString() ?? "Disconnected",
-            'speed': data['speed']?.toString() ?? "0",
-            'rawStatus': data['rawStatus']?.toString(),
-            'source': data['source']?.toString() ?? "unknown",
-            'latitude': data['latitude'],
-            'longitude': data['longitude'],
-            'lastUpdate': data['lastUpdate']?.toString(),
-            'dataAgeSeconds': data['dataAgeSeconds'],
-          };
-        }
+      if (data['success'] == true) {
+        return {
+          'success': true,
+          'engineOn': _parseBool(data['engineOn']),
+          'accOn': _parseBool(data['accOn']),
+          'gpsStatus': data['gpsStatus']?.toString() ?? "Disconnected",
+          'speed': data['speed']?.toString() ?? "0",
+          'rawStatus': data['rawStatus']?.toString(),
+          'source': data['source']?.toString() ?? "unknown",
+          'latitude': data['latitude'],
+          'longitude': data['longitude'],
+          'lastUpdate': data['lastUpdate']?.toString(),
+          'dataAgeSeconds': data['dataAgeSeconds'],
+        };
       }
 
-      return {
-        'success': false,
-        'engineOn': false,
-        'accOn': false,
-        'gpsStatus': "Disconnected",
-        'speed': "0",
-      };
+      return _failedEngineStatus();
     } catch (error) {
       debugPrint("🔥 Error fetching realtime vehicle status: $error");
-      return {
-        'success': false,
-        'engineOn': false,
-        'accOn': false,
-        'gpsStatus': "Disconnected",
-        'speed': "0",
-      };
+      // FeatureNotSubscribedException propagates up — do not swallow it
+      rethrow;
     }
   }
 
-  /// ✅ Fetch vehicle status (DEPRECATED - use fetchRealtimeVehicleStatus instead) with automatic token refresh
-  /// This is kept for backward compatibility but should be replaced
-  static Future<Map<String, dynamic>> fetchVehicleStatus(int vehicleId) async {
+  /// Fetch vehicle status (DEPRECATED — use fetchRealtimeVehicleStatus)
+  static Future<Map<String, dynamic>> fetchVehicleStatus(
+      int vehicleId) async {
     try {
-      final response = await _tokenService.makeAuthenticatedRequest(
-        request: (token) async {
-          return await http.get(
-            Uri.parse("$baseUrl/gps/vehicle/$vehicleId/status"),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
-        },
-      );
+      final data =
+      await ApiService.get('/gps/vehicle/$vehicleId/status');
 
-      debugPrint("📡 Status response: ${response.statusCode}");
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        debugPrint("📦 Status data: ${jsonEncode(data)}");
-
-        if (data['success'] == true) {
-          // ✅ Parse engineOn with multiple type support
-          bool engineOn = false;
-          final engineValue = data['engineOn'];
-          if (engineValue is bool) {
-            engineOn = engineValue;
-          } else if (engineValue is num) {
-            engineOn = engineValue != 0;
-          } else if (engineValue is String) {
-            engineOn = (engineValue == '1' || engineValue.toLowerCase() == 'true');
-          }
-
-          // Parse accOn similarly
-          bool accOn = false;
-          final accValue = data['accOn'];
-          if (accValue is bool) {
-            accOn = accValue;
-          } else if (accValue is num) {
-            accOn = accValue != 0;
-          } else if (accValue is String) {
-            accOn = (accValue == '1' || accValue.toLowerCase() == 'true');
-          }
-
-          return {
-            'success': true,
-            'engineOn': engineOn,
-            'accOn': accOn,
-            'gpsStatus': data['gpsStatus']?.toString() ?? "Disconnected",
-            'speed': data['speed']?.toString() ?? "0",
-            'rawStatus': data['rawStatus']?.toString(),
-          };
-        }
+      if (data['success'] == true) {
+        return {
+          'success': true,
+          'engineOn': _parseBool(data['engineOn']),
+          'accOn': _parseBool(data['accOn']),
+          'gpsStatus': data['gpsStatus']?.toString() ?? "Disconnected",
+          'speed': data['speed']?.toString() ?? "0",
+          'rawStatus': data['rawStatus']?.toString(),
+        };
       }
 
-      return {
-        'success': false,
-        'engineOn': false,
-        'accOn': false,
-        'gpsStatus': "Disconnected",
-        'speed': "0",
-      };
+      return _failedEngineStatus();
     } catch (error) {
       debugPrint("🔥 Error fetching vehicle status: $error");
-      return {
-        'success': false,
-        'engineOn': false,
-        'accOn': false,
-        'gpsStatus': "Disconnected",
-        'speed': "0",
-      };
+      rethrow;
     }
   }
 
-  /// ✅ Fetch current location of vehicle with automatic token refresh
-  static Future<Map<String, dynamic>> fetchCurrentLocation(int vehicleId) async {
+  /// Fetch current location of vehicle
+  static Future<Map<String, dynamic>> fetchCurrentLocation(
+      int vehicleId) async {
     try {
-      final response = await _tokenService.makeAuthenticatedRequest(
-        request: (token) async {
-          return await http.get(
-            Uri.parse("$baseUrl/tracking/location/vehicle/$vehicleId/latest"),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
-        },
-      );
+      final data = await ApiService.get(
+          '/tracking/location/vehicle/$vehicleId/latest');
 
-      debugPrint("📡 Location response: ${response.statusCode}");
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (data['success'] == true) {
-          // ✅ Convert to double safely (API returns DECIMAL as numbers)
-          double? latitude;
-          double? longitude;
-          double? speed;
-
-          // Parse latitude
-          if (data['latitude'] != null) {
-            if (data['latitude'] is num) {
-              latitude = (data['latitude'] as num).toDouble();
-            } else if (data['latitude'] is String) {
-              latitude = double.tryParse(data['latitude']);
-            }
-          }
-
-          // Parse longitude
-          if (data['longitude'] != null) {
-            if (data['longitude'] is num) {
-              longitude = (data['longitude'] as num).toDouble();
-            } else if (data['longitude'] is String) {
-              longitude = double.tryParse(data['longitude']);
-            }
-          }
-
-          // Parse speed
-          if (data['speed'] != null) {
-            if (data['speed'] is num) {
-              speed = (data['speed'] as num).toDouble();
-            } else if (data['speed'] is String) {
-              speed = double.tryParse(data['speed']);
-            }
-          }
-
-          return {
-            'success': true,
-            'latitude': latitude ?? 0.0,
-            'longitude': longitude ?? 0.0,
-            'address': "Location available",
-            'sys_time': DateTime.now().toIso8601String(),
-            'speed': speed ?? 0.0,
-            'engine_status': data['engine_status'] ?? 'OFF',
-            'car_model': data['car_model'] ?? 'Unknown',
-          };
-        }
+      if (data['success'] == true) {
+        return {
+          'success': true,
+          'latitude': _parseDouble(data['latitude']),
+          'longitude': _parseDouble(data['longitude']),
+          'address': "Location available",
+          'sys_time': DateTime.now().toIso8601String(),
+          'speed': _parseDouble(data['speed']),
+          'engine_status': data['engine_status'] ?? 'OFF',
+          'car_model': data['car_model'] ?? 'Unknown',
+        };
       }
 
-      return {
-        'success': false,
-        'address': "Unable to fetch location",
-      };
+      return {'success': false, 'address': "Unable to fetch location"};
     } catch (error) {
       debugPrint("⚠️ Error fetching location: $error");
-      return {
-        'success': false,
-        'address': "Unable to fetch location",
-      };
+      rethrow;
     }
   }
 
-  /// ✅ Fetch geofencing status with automatic token refresh
+  /// Fetch geofencing / security status
   static Future<bool?> fetchGeofencingStatus(int vehicleId) async {
     try {
       debugPrint("📡 Fetching geofencing status for vehicle $vehicleId...");
 
-      final response = await _tokenService.makeAuthenticatedRequest(
-        request: (token) async {
-          return await http.get(
-            Uri.parse("$baseUrl/vehicle/$vehicleId/security/status"),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
-        },
-      );
+      final data =
+      await ApiService.get('/vehicle/$vehicleId/security/status');
 
-      debugPrint("📡 Geofencing status response: ${response.statusCode}");
-      debugPrint("📦 Response body: ${response.body}");
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (data['success'] == true && data['security'] != null) {
-          // ✅ Parse is_active properly (handles both boolean and TINYINT)
-          final isActive = data['security']['is_active'];
-          bool status = false;
-
-          if (isActive is bool) {
-            status = isActive;
-          } else if (isActive is num) {
-            status = isActive != 0; // 1 = true, 0 = false
-          } else if (isActive is String) {
-            status = (isActive == '1' || isActive.toLowerCase() == 'true');
-          }
-
-          debugPrint("✅ Geofencing status parsed: ${status ? 'ACTIVE (ON)' : 'INACTIVE (OFF)'}");
-          return status;
-        } else {
-          debugPrint("⚠️ Invalid response structure or success=false");
-          return null;
-        }
-      } else {
-        debugPrint("❌ HTTP error: ${response.statusCode}");
-        return null;
+      if (data['success'] == true && data['security'] != null) {
+        final status = _parseBool(data['security']['is_active']);
+        debugPrint(
+            "✅ Geofencing status: ${status ? 'ACTIVE' : 'INACTIVE'}");
+        return status;
       }
+
+      return null;
     } catch (error) {
       debugPrint("🔥 Error fetching geofencing status: $error");
-      return null;
+      rethrow;
     }
   }
 
-  /// ✅ Fetch weekly statistics with automatic token refresh
-  static Future<Map<String, dynamic>> fetchWeeklyStatistics(int vehicleId) async {
+  /// Fetch weekly trip statistics
+  static Future<Map<String, dynamic>> fetchWeeklyStatistics(
+      int vehicleId) async {
     try {
-      // Calculate date range for last 7 days
       final endDate = DateTime.now();
       final startDate = endDate.subtract(const Duration(days: 7));
 
-      final response = await _tokenService.makeAuthenticatedRequest(
-        request: (token) async {
-          return await http.get(
-            Uri.parse(
-                "$baseUrl/trips/vehicle/$vehicleId/stats"
-                    "?startDate=${startDate.toIso8601String().split('T')[0]}"
-                    "&endDate=${endDate.toIso8601String().split('T')[0]}"
-            ),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
+      final data = await ApiService.get(
+        '/trips/vehicle/$vehicleId/stats',
+        queryParams: {
+          'startDate': startDate.toIso8601String().split('T')[0],
+          'endDate': endDate.toIso8601String().split('T')[0],
         },
       );
 
-      debugPrint("📡 Weekly stats response: ${response.statusCode}");
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (data['success'] == true) {
-          final stats = data['data']?['statistics'];
-
-          if (stats != null) {
-            return {
-              'success': true,
-              'totalDistanceKm': (stats['totalDistanceKm'] ?? 0).toDouble(),
-              'totalTrips': stats['totalTrips'] ?? 0,
-              'avgSpeed': (stats['avgSpeed'] ?? 0).toDouble(),
-              'totalDurationFormatted': stats['totalDurationFormatted'] ?? "0h 0m",
-            };
-          }
+      if (data['success'] == true) {
+        final stats = data['data']?['statistics'];
+        if (stats != null) {
+          return {
+            'success': true,
+            'totalDistanceKm':
+            (stats['totalDistanceKm'] ?? 0).toDouble(),
+            'totalTrips': stats['totalTrips'] ?? 0,
+            'avgSpeed': (stats['avgSpeed'] ?? 0).toDouble(),
+            'totalDurationFormatted':
+            stats['totalDurationFormatted'] ?? "0h 0m",
+          };
         }
       }
 
-      return {
-        'success': false,
-        'totalDistanceKm': 0.0,
-        'totalTrips': 0,
-        'avgSpeed': 0.0,
-        'totalDurationFormatted': "0h 0m",
-      };
+      return _failedStats();
     } catch (error) {
       debugPrint("⚠️ Error fetching weekly statistics: $error");
-      return {
-        'success': false,
-        'totalDistanceKm': 0.0,
-        'totalTrips': 0,
-        'avgSpeed': 0.0,
-        'totalDurationFormatted': "0h 0m",
-      };
+      rethrow;
     }
   }
 
-  /// ✅ Fetch recent trips with automatic token refresh
-  static Future<List<Map<String, dynamic>>> fetchRecentTrips(int vehicleId) async {
+  /// Fetch recent trips (last 5)
+  static Future<List<Map<String, dynamic>>> fetchRecentTrips(
+      int vehicleId) async {
     try {
-      final response = await _tokenService.makeAuthenticatedRequest(
-        request: (token) async {
-          return await http.get(
-            Uri.parse("$baseUrl/trips/vehicle/$vehicleId?page=1&limit=5"),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
-        },
+      final data = await ApiService.get(
+        '/trips/vehicle/$vehicleId',
+        queryParams: {'page': '1', 'limit': '5'},
       );
 
-      debugPrint("📡 Recent trips response: ${response.statusCode}");
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (data['success'] == true) {
-          final trips = data['data']['trips'] as List;
-
-          return trips.map((trip) {
-            return {
-              "id": trip['id'],
-              "title": _getTripTitle(trip['startTime']),
-              "from": trip['startLocation']['address']?.split(',')[0] ?? "Unknown",
-              "to": trip['endLocation']['address']?.split(',')[0] ?? "Unknown",
-              "time": "${_formatTime(trip['startTime'])} - ${_formatTime(trip['endTime'])}",
-              "distance": "${trip['totalDistanceKm']} km",
-              "date": _getRelativeDate(trip['startTime']),
-            };
-          }).toList();
-        }
+      if (data['success'] == true) {
+        final trips = data['data']['trips'] as List;
+        return trips.map((trip) {
+          return {
+            "id": trip['id'],
+            "title": _getTripTitle(trip['startTime']),
+            "from": trip['startLocation']['address']?.split(',')[0] ??
+                "Unknown",
+            "to": trip['endLocation']['address']?.split(',')[0] ??
+                "Unknown",
+            "time":
+            "${_formatTime(trip['startTime'])} - ${_formatTime(trip['endTime'])}",
+            "distance": "${trip['totalDistanceKm']} km",
+            "date": _getRelativeDate(trip['startTime']),
+          };
+        }).toList();
       }
 
       return [];
     } catch (error) {
       debugPrint("⚠️ Error fetching recent trips: $error");
-      return [];
+      rethrow;
     }
   }
 
-  /// ✅ Fetch unread notifications count with automatic token refresh
-  static Future<Map<String, dynamic>> fetchUnreadNotifications(int vehicleId) async {
+  /// Fetch unread notifications count
+  static Future<Map<String, dynamic>> fetchUnreadNotifications(
+      int vehicleId) async {
     try {
-      final response = await _tokenService.makeAuthenticatedRequest(
-        request: (token) async {
-          return await http.get(
-            Uri.parse("$baseUrl/notifications/vehicle/$vehicleId/unread-count"),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
-        },
-      );
+      final data = await ApiService.get(
+          '/notifications/vehicle/$vehicleId/unread-count');
 
-      debugPrint("📡 Unread notifications response: ${response.statusCode}");
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (data['success'] == true) {
-          return {
-            'success': true,
-            'unreadCount': data['unreadCount'] ?? 0,
-          };
-        }
+      if (data['success'] == true) {
+        return {
+          'success': true,
+          'unreadCount': data['unreadCount'] ?? 0,
+        };
       }
 
-      return {
-        'success': false,
-        'unreadCount': 0,
-      };
+      return {'success': false, 'unreadCount': 0};
     } catch (error) {
       debugPrint("⚠️ Error fetching unread notifications: $error");
-      return {
-        'success': false,
-        'unreadCount': 0,
-      };
+      return {'success': false, 'unreadCount': 0};
     }
   }
 
-  // ========== HELPER METHODS ==========
+  // ─── HELPERS ──────────────────────────────────────────────────────────────
 
-  /// Generate trip title based on time
+  static bool _parseBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      return value == '1' || value.toLowerCase() == 'true';
+    }
+    return false;
+  }
+
+  static double _parseDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0.0;
+    return 0.0;
+  }
+
+  static Map<String, dynamic> _failedEngineStatus() => {
+    'success': false,
+    'engineOn': false,
+    'accOn': false,
+    'gpsStatus': "Disconnected",
+    'speed': "0",
+  };
+
+  static Map<String, dynamic> _failedStats() => {
+    'success': false,
+    'totalDistanceKm': 0.0,
+    'totalTrips': 0,
+    'avgSpeed': 0.0,
+    'totalDurationFormatted': "0h 0m",
+  };
+
   static String _getTripTitle(String dateString) {
     final date = DateTime.parse(dateString);
     final hour = date.hour;
-
-    if (hour >= 5 && hour < 9) {
-      return "Morning Commute";
-    } else if (hour >= 12 && hour < 14) {
-      return "Lunch Break";
-    } else if (hour >= 17 && hour < 20) {
-      return "Evening Return";
-    } else if (hour >= 20 || hour < 5) {
-      return "Night Trip";
-    } else {
-      return "Midday Trip";
-    }
+    if (hour >= 5 && hour < 9) return "Morning Commute";
+    if (hour >= 12 && hour < 14) return "Lunch Break";
+    if (hour >= 17 && hour < 20) return "Evening Return";
+    if (hour >= 20 || hour < 5) return "Night Trip";
+    return "Midday Trip";
   }
 
-  /// Format time from datetime string
   static String _formatTime(String dateString) {
     final date = DateTime.parse(dateString);
     final hour = date.hour > 12 ? date.hour - 12 : date.hour;
@@ -527,31 +306,21 @@ class DashboardService {
     return "$hour:$minute $period";
   }
 
-  /// Get relative date (Today, Yesterday, etc.)
   static String _getRelativeDate(String dateString) {
     final date = DateTime.parse(dateString);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final tripDate = DateTime(date.year, date.month, date.day);
-
     final difference = today.difference(tripDate).inDays;
-
-    if (difference == 0) {
-      return "Today";
-    } else if (difference == 1) {
-      return "Yesterday";
-    } else if (difference < 7) {
-      return "$difference days ago";
-    } else {
-      return "${date.day}/${date.month}/${date.year}";
-    }
+    if (difference == 0) return "Today";
+    if (difference == 1) return "Yesterday";
+    if (difference < 7) return "$difference days ago";
+    return "${date.day}/${date.month}/${date.year}";
   }
 
-  /// Get time ago string
   static String getTimeAgo(DateTime time) {
     final now = DateTime.now();
     final difference = now.difference(time);
-
     if (difference.inSeconds < 60) return "Just now";
     if (difference.inMinutes < 60) return "${difference.inMinutes}m ago";
     if (difference.inHours < 24) return "${difference.inHours}h ago";

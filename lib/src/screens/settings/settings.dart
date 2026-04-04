@@ -7,6 +7,7 @@ import '../contact us/contact_us.dart';
 import '../login/login.dart';
 import '../profile/profile.dart';
 import '../subscriptions/renewal_payment_screen.dart';
+import '../users subscriptions/my_subscriptions_screen.dart';
 import '../vehicles/my_cars.dart';
 import 'services/settings_service.dart';
 import 'widgets/settings_pin_dialogs.dart';
@@ -30,6 +31,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int? _userId;
   int? _userVehicleId;
   String _userType = 'regular';
+  String _vehicleName = '';
 
   // Alert settings
   bool _geofenceAlerts = true;
@@ -59,7 +61,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _redirectIfLoggedOut() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('accessToken');
-    final uid = prefs.getInt('user_id');
+    final uid   = prefs.getInt('user_id');
 
     if (token == null || uid == null) {
       if (mounted) {
@@ -74,8 +76,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ========== LOAD USER DATA ==========
-  // ✅ Reads vehicle ID from SharedPreferences — works for both
-  // regular users and chauffeurs without any API call
   Future<void> _loadUserData() async {
     try {
       final userData = await SettingsService.loadUserData();
@@ -86,16 +86,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       _userId = userData['id'];
-      _userType = await SettingsService.loadUserType();
 
-      // ✅ Read vehicle ID from SharedPreferences, no API call needed
+      final prefs = await SharedPreferences.getInstance();
+      _userType = prefs.getString('user_type') ?? 'regular';
+      debugPrint('👤 User type from prefs: $_userType');
+
       _userVehicleId = await SettingsService.loadCurrentVehicleId(
         fallback: widget.vehicleId,
       );
 
-      debugPrint('✅ User ID: $_userId | Type: $_userType | Vehicle: $_userVehicleId');
+      final savedName = prefs.getString('current_vehicle_name') ?? '';
+      _vehicleName = savedName.isNotEmpty
+          ? savedName
+          : (_selectedLanguage == 'en' ? 'My Vehicle' : 'Mon véhicule');
 
-      // Check PIN status
+      debugPrint(
+          '✅ User ID: $_userId | Type: $_userType | Vehicle: $_userVehicleId | Name: $_vehicleName');
+
       if (_userId != null) {
         final hasPinSet = await SettingsService.checkPinStatus(_userId!);
         if (mounted) setState(() => _hasPinSet = hasPinSet);
@@ -114,8 +121,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         setState(() {
           _geofenceAlerts = settings['geofenceAlerts'] as bool;
           _safeZoneAlerts = settings['safeZoneAlerts'] as bool;
-          _tripTracking = settings['tripTracking'] as bool;
-          _isLoading = false;
+          _tripTracking   = settings['tripTracking']   as bool;
+          _isLoading      = false;
         });
       }
     } catch (e) {
@@ -135,22 +142,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await SettingsService.saveSettingsLocally(
         geofenceAlerts: _geofenceAlerts,
         safeZoneAlerts: _safeZoneAlerts,
-        tripTracking: _tripTracking,
+        tripTracking:   _tripTracking,
       );
 
-      // Trip tracking requires a backend sync
       if (settingName == 'Trip Tracking' && _userId != null) {
         try {
           await SettingsService.saveTripTracking(_userId!, _tripTracking);
         } catch (e) {
           debugPrint('🔥 Backend save failed: $e');
 
-          // Revert toggle on failure
           setState(() => _tripTracking = !_tripTracking);
           await SettingsService.saveSettingsLocally(
             geofenceAlerts: _geofenceAlerts,
             safeZoneAlerts: _safeZoneAlerts,
-            tripTracking: _tripTracking,
+            tripTracking:   _tripTracking,
           );
 
           _showSnack(
@@ -186,7 +191,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         decoration: BoxDecoration(
           color: AppColors.white,
           borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(AppSizes.radiusXL),
+            topLeft:  Radius.circular(AppSizes.radiusXL),
             topRight: Radius.circular(AppSizes.radiusXL),
           ),
         ),
@@ -195,8 +200,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 40,
-              height: 4,
+              width: 40, height: 4,
               decoration: BoxDecoration(
                 color: AppColors.border,
                 borderRadius: BorderRadius.circular(2),
@@ -204,9 +208,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             SizedBox(height: AppSizes.spacingL),
             Text(
-              _selectedLanguage == 'en'
-                  ? 'Select Language'
-                  : 'Choisir la langue',
+              _selectedLanguage == 'en' ? 'Select Language' : 'Choisir la langue',
               style: AppTypography.h3.copyWith(fontSize: 18),
             ),
             SizedBox(height: AppSizes.spacingL),
@@ -257,8 +259,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: AppColors.error.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.logout_rounded,
-                  color: AppColors.error, size: 20),
+              child: Icon(Icons.logout_rounded, color: AppColors.error, size: 20),
             ),
             SizedBox(width: AppSizes.spacingM),
             Text(
@@ -292,8 +293,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 borderRadius: BorderRadius.circular(AppSizes.radiusM),
               ),
               elevation: 0,
-              padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             ),
             child: Text(
               _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
@@ -331,8 +331,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppSizes.radiusM),
-        ),
+            borderRadius: BorderRadius.circular(AppSizes.radiusM)),
         margin: EdgeInsets.all(AppSizes.spacingM),
         duration: const Duration(seconds: 3),
       ),
@@ -346,19 +345,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     switch (settingName) {
       case 'Geofence Alerts':
         message = _selectedLanguage == 'en'
-            ? (isEnabled
-            ? 'Geofence alerts enabled'
-            : 'Geofence alerts disabled')
-            : (isEnabled
-            ? 'Alertes géofence activées'
-            : 'Alertes géofence désactivées');
+            ? (isEnabled ? 'Geofence alerts enabled' : 'Geofence alerts disabled')
+            : (isEnabled ? 'Alertes géofence activées' : 'Alertes géofence désactivées');
         icon = Icons.radar_outlined;
         break;
       case 'Safe Zone Alerts':
         message = _selectedLanguage == 'en'
-            ? (isEnabled
-            ? 'Safe zone alerts enabled'
-            : 'Safe zone alerts disabled')
+            ? (isEnabled ? 'Safe zone alerts enabled' : 'Safe zone alerts disabled')
             : (isEnabled
             ? 'Alertes Zone de sécurité activées'
             : 'Alertes Zone de sécurité désactivées');
@@ -366,12 +359,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         break;
       case 'Trip Tracking':
         message = _selectedLanguage == 'en'
-            ? (isEnabled
-            ? 'Trip tracking enabled'
-            : 'Trip tracking disabled')
-            : (isEnabled
-            ? 'Suivi des trajets activé'
-            : 'Suivi des trajets désactivé');
+            ? (isEnabled ? 'Trip tracking enabled' : 'Trip tracking disabled')
+            : (isEnabled ? 'Suivi des trajets activé' : 'Suivi des trajets désactivé');
         icon = Icons.route_outlined;
         break;
       default:
@@ -381,8 +370,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         icon = Icons.check_circle;
     }
 
-    final color = isEnabled ? AppColors.success : AppColors.warning;
-
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -390,18 +377,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Icon(icon, color: AppColors.white, size: 20),
             SizedBox(width: AppSizes.spacingM),
             Expanded(
-              child: Text(
-                message,
-                style: AppTypography.body2.copyWith(color: AppColors.white),
-              ),
+              child: Text(message,
+                  style: AppTypography.body2.copyWith(color: AppColors.white)),
             ),
           ],
         ),
-        backgroundColor: color,
+        backgroundColor: isEnabled ? AppColors.success : AppColors.warning,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppSizes.radiusM),
-        ),
+            borderRadius: BorderRadius.circular(AppSizes.radiusM)),
         margin: EdgeInsets.all(AppSizes.spacingM),
         duration: const Duration(seconds: 3),
       ),
@@ -423,7 +407,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: ListView(
                 padding: EdgeInsets.all(AppSizes.spacingL),
                 children: [
-                  // ── ALERTS ────────────────────────────────────
+                  // ── ALERTS ────────────────────────────────────────────────
                   SettingsSectionHeader(
                     title: _selectedLanguage == 'en' ? 'ALERTS' : 'ALERTES',
                   ),
@@ -440,8 +424,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (value) {
                       setState(() => _geofenceAlerts = value);
                       _saveSettings(
-                          settingName: 'Geofence Alerts',
-                          settingValue: value);
+                          settingName: 'Geofence Alerts', settingValue: value);
                     },
                   ),
                   SettingsToggleTile(
@@ -456,8 +439,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (value) {
                       setState(() => _safeZoneAlerts = value);
                       _saveSettings(
-                          settingName: 'Safe Zone Alerts',
-                          settingValue: value);
+                          settingName: 'Safe Zone Alerts', settingValue: value);
                     },
                   ),
                   SettingsToggleTile(
@@ -478,7 +460,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // ── SECURITY ──────────────────────────────────
+                  // ── SECURITY ──────────────────────────────────────────────
                   SettingsSectionHeader(
                     title: _selectedLanguage == 'en' ? 'SECURITY' : 'SÉCURITÉ',
                   ),
@@ -488,12 +470,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? Icons.lock_reset
                         : Icons.lock_outline,
                     title: _hasPinSet
-                        ? (_selectedLanguage == 'en'
-                        ? 'Change PIN'
-                        : 'Changer le PIN')
-                        : (_selectedLanguage == 'en'
-                        ? 'Create PIN'
-                        : 'Créer un PIN'),
+                        ? (_selectedLanguage == 'en' ? 'Change PIN' : 'Changer le PIN')
+                        : (_selectedLanguage == 'en' ? 'Create PIN' : 'Créer un PIN'),
                     subtitle: _hasPinSet
                         ? (_selectedLanguage == 'en'
                         ? 'Update your app security PIN'
@@ -524,10 +502,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // ── ACCOUNT ───────────────────────────────────
+                  // ── ACCOUNT ───────────────────────────────────────────────
                   SettingsSectionHeader(
-                    title:
-                    _selectedLanguage == 'en' ? 'ACCOUNT' : 'COMPTE',
+                    title: _selectedLanguage == 'en' ? 'ACCOUNT' : 'COMPTE',
                   ),
                   SizedBox(height: AppSizes.spacingM),
                   SettingsTile(
@@ -537,8 +514,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? 'Manage your profile information'
                         : 'Gérer vos informations de profil',
                     onTap: () {
-                      // ✅ Uses vehicle ID from SharedPreferences
-                      // works for both regular users and chauffeurs
                       if (_userVehicleId != null) {
                         Navigator.push(
                           context,
@@ -557,53 +532,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }
                     },
                   ),
-             //     SizedBox(height: AppSizes.spacingM),
 
-
-                  // ── SUBSCRIPTION (TEMPORARILY DISABLED) ─────────────────────────
-//
-// SettingsTile(
-//   icon: Icons.subscriptions_outlined,
-//   title: _selectedLanguage == 'en' ? 'Subscription' : 'Abonnement',
-//   subtitle: _selectedLanguage == 'en'
-//       ? 'Manage your plan and renewals'
-//       : 'Gérer votre forfait et renouvellements',
-//   trailing: Container(
-//     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-//     decoration: BoxDecoration(
-//       color: AppColors.success.withOpacity(0.1),
-//       borderRadius: BorderRadius.circular(6),
-//     ),
-//     child: Text(
-//       _selectedLanguage == 'en' ? 'ACTIVE' : 'ACTIF',
-//       style: AppTypography.caption.copyWith(
-//         color: AppColors.success,
-//         fontWeight: FontWeight.bold,
-//       ),
-//     ),
-//   ),
-//   onTap: () {
-//     if (_userId != null && _userVehicleId != null) {
-//       Navigator.push(
-//         context,
-//         MaterialPageRoute(
-//           builder: (context) => RenewalPaymentScreen(
-//             userId: _userId!,
-//             vehicleId: _userVehicleId!,
-//             currentExpiryDate: "Oct 20, 2027",
-//           ),
-//         ),
-//       );
-//     } else {
-//       _showSnack(
-//         _selectedLanguage == 'en'
-//             ? 'Vehicle data not loaded'
-//             : 'Données du véhicule non chargées',
-//         AppColors.error,
-//       );
-//     }
-//   },
-// ),
+                  // ── SUBSCRIPTION TILES (regular users only) ───────────────
+                  if (_userType == 'regular') ...[
+                    _buildSubscriptionTile(),
+                    _buildMySubscriptionsTile(),
+                  ],
 
                   SettingsTile(
                     icon: Icons.directions_car_outlined,
@@ -625,10 +559,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // ── SUPPORT ───────────────────────────────────
-                  SettingsSectionHeader(
-                    title: 'SUPPORT',
-                  ),
+                  // ── SUPPORT ───────────────────────────────────────────────
+                  SettingsSectionHeader(title: 'SUPPORT'),
                   SizedBox(height: AppSizes.spacingM),
                   SettingsTile(
                     icon: Icons.headset_mic_outlined,
@@ -650,11 +582,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // ── LOGOUT ────────────────────────────────────
+                  // ── LOGOUT ────────────────────────────────────────────────
                   SettingsLogoutButton(
-                    label: _selectedLanguage == 'en'
-                        ? 'Logout'
-                        : 'Déconnexion',
+                    label: _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
                     onTap: _handleLogout,
                   ),
 
@@ -663,9 +593,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Center(
                     child: Text(
                       'Version 1.0.0',
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
+                      style: AppTypography.caption
+                          .copyWith(color: AppColors.textSecondary),
                     ),
                   ),
                 ],
@@ -674,6 +603,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  // ========== SUBSCRIPTION TILE ==========
+  // Opens the plans screen to subscribe / renew for the current vehicle.
+  // Badge and status indicator removed — tile is plain with no trailing widget.
+  Widget _buildSubscriptionTile() {
+    return SettingsTile(
+      icon: Icons.subscriptions_outlined,
+      title: _selectedLanguage == 'en' ? 'Subscription' : 'Abonnement',
+      subtitle: _selectedLanguage == 'en'
+          ? 'Manage your plan and renewals'
+          : 'Gérer votre forfait et renouvellements',
+      onTap: () {
+        if (_userVehicleId != null) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => SubscriptionPlansScreen(
+                vehicleId:   _userVehicleId!,
+                vehicleName: _vehicleName,
+              ),
+            ),
+          );
+        } else {
+          _showSnack(
+            _selectedLanguage == 'en'
+                ? 'Vehicle data not loaded'
+                : 'Données du véhicule non chargées',
+            AppColors.error,
+          );
+        }
+      },
+    );
+  }
+
+  // ========== MY SUBSCRIPTIONS TILE ==========
+  Widget _buildMySubscriptionsTile() {
+    return SettingsTile(
+      icon: Icons.workspace_premium_rounded,
+      title: _selectedLanguage == 'en'
+          ? 'My Subscriptions'
+          : 'Mes Abonnements',
+      subtitle: _selectedLanguage == 'en'
+          ? 'View all vehicles and their plans'
+          : 'Voir tous les véhicules et leurs forfaits',
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => MySubscriptionsScreen(
+              focusVehicleId: _userVehicleId,
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -700,7 +685,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               style: AppTypography.h3.copyWith(fontSize: 18),
             ),
           ),
-          // Language selector button
           InkWell(
             onTap: _showLanguageSelector,
             borderRadius: BorderRadius.circular(12),

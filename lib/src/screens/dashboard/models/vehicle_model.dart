@@ -8,6 +8,7 @@ class Vehicle {
   final String color;
   final String brand;
   final String nickname;
+  final bool hasActiveSubscription;
 
   Vehicle({
     required this.id,
@@ -17,6 +18,7 @@ class Vehicle {
     required this.color,
     required this.brand,
     required this.nickname,
+    this.hasActiveSubscription = false,
   });
 
   factory Vehicle.fromJson(Map<String, dynamic> json) {
@@ -28,6 +30,7 @@ class Vehicle {
       color: json["couleur"] ?? json["color"] ?? "#3B82F6",
       brand: json["marque"] ?? json["brand"] ?? "Unknown",
       nickname: json["nickname"] ?? "",
+      hasActiveSubscription: json["has_active_subscription"] ?? false,
     );
   }
 
@@ -40,6 +43,7 @@ class Vehicle {
       "color": color,
       "brand": brand,
       "nickname": nickname,
+      "has_active_subscription": hasActiveSubscription,
     };
   }
 
@@ -51,6 +55,7 @@ class Vehicle {
     String? color,
     String? brand,
     String? nickname,
+    bool? hasActiveSubscription,
   }) {
     return Vehicle(
       id: id ?? this.id,
@@ -60,12 +65,15 @@ class Vehicle {
       color: color ?? this.color,
       brand: brand ?? this.brand,
       nickname: nickname ?? this.nickname,
+      hasActiveSubscription: hasActiveSubscription ?? this.hasActiveSubscription,
     );
   }
 
   @override
   String toString() {
-    return 'Vehicle(id: $id, brand: $brand, model: $model, nickname: $nickname, immatriculation: $immatriculation, isOnline: $isOnline)';
+    return 'Vehicle(id: $id, brand: $brand, model: $model, nickname: $nickname, '
+        'immatriculation: $immatriculation, isOnline: $isOnline, '
+        'hasActiveSubscription: $hasActiveSubscription)';
   }
 
   @override

@@ -161,10 +161,13 @@ class _NotificationScreenState extends State<NotificationScreen>
     super.dispose();
   }
 
-  void _connectSocketForAlerts() {
+  void _connectSocketForAlerts() async {
     debugPrint('🔌 Connecting socket for real-time alerts...');
     try {
-      _socketService.connect(EnvConfig.socketUrl);
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getInt('user_id');
+
+      _socketService.connect(EnvConfig.socketUrl, userId: userId);
       _socketService.joinVehicleTracking(widget.vehicleId);
 
       _alertSubscription = _socketService.safeZoneAlertStream.listen((alertData) {

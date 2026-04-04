@@ -1,22 +1,18 @@
 // lib/src/screens/settings/services/settings_service.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../../services/env_config.dart';
+
+import '../../../services/api_service.dart';
 
 class SettingsService {
-  static String get baseUrl => EnvConfig.baseUrl;
-
   // ========== LOAD USER DATA FROM SHARED PREFERENCES ==========
-  // ✅ Works for both regular users and chauffeurs
-  // Does NOT make any API call — reads from what was saved at login
   static Future<Map<String, dynamic>?> loadUserData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final userDataString = prefs.getString('user');
       if (userDataString != null) {
-        return jsonDecode(userDataString);
+        return jsonDecode(userDataString) as Map<String, dynamic>;
       }
       return null;
     } catch (e) {
@@ -26,8 +22,6 @@ class SettingsService {
   }
 
   // ========== LOAD VEHICLE ID FROM SHARED PREFERENCES ==========
-  // ✅ Replaces the old _fetchUserVehicle() API call
-  // Uses current_vehicle_id saved at login — works for both user types
   static Future<int?> loadCurrentVehicleId({int? fallback}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -36,7 +30,6 @@ class SettingsService {
         debugPrint('✅ Vehicle ID loaded from SharedPreferences: $savedId');
         return savedId;
       }
-      // Use the vehicleId passed from dashboard if no saved ID
       if (fallback != null) {
         debugPrint('✅ Using fallback vehicle ID: $fallback');
         return fallback;
@@ -84,32 +77,25 @@ class SettingsService {
   static Future<Map<String, dynamic>> loadSettings(int? userId) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Load from local first
-    final localSettings = {
+    final localSettings = <String, dynamic>{
       'geofenceAlerts': prefs.getBool('geofence_alerts') ?? true,
       'safeZoneAlerts': prefs.getBool('safe_zone_alerts') ?? true,
       'tripTracking': prefs.getBool('trip_tracking') ?? false,
     };
 
-    // Sync from backend if we have a userId
     if (userId != null) {
       try {
-        final response = await http.get(
-          Uri.parse('$baseUrl/users-settings/$userId/settings'),
-          headers: {'Content-Type': 'application/json'},
-        );
+        final data =
+        await ApiService.get('/users-settings/$userId/settings');
 
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          if (data['success'] == true && data['data'] != null) {
-            final settings = data['data']['settings'];
-            localSettings['tripTracking'] =
-                settings['tripTrackingEnabled'] ?? false;
+        if (data['success'] == true && data['data'] != null) {
+          final settings = data['data']['settings'];
+          localSettings['tripTracking'] =
+              settings['tripTrackingEnabled'] ?? false;
 
-            await prefs.setBool(
-                'trip_tracking', localSettings['tripTracking'] as bool);
-            debugPrint('✅ Settings synced from backend');
-          }
+          await prefs.setBool(
+              'trip_tracking', localSettings['tripTracking'] as bool);
+          debugPrint('✅ Settings synced from backend');
         }
       } catch (e) {
         debugPrint('⚠️ Backend settings sync failed, using local: $e');
@@ -134,19 +120,14 @@ class SettingsService {
 
   // ========== SAVE TRIP TRACKING TO BACKEND ==========
   static Future<void> saveTripTracking(int userId, bool enabled) async {
-    final response = await http.put(
-      Uri.parse('$baseUrl/users-settings/$userId/settings/trip-tracking'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'enabled': enabled}),
+    final data = await ApiService.put(
+      '/users-settings/$userId/settings/trip-tracking',
+      body: {'enabled': enabled},
     );
 
-    if (response.statusCode != 200) {
-      throw Exception('Failed to save trip tracking: ${response.statusCode}');
-    }
-
-    final data = jsonDecode(response.body);
     if (data['success'] != true) {
-      throw Exception('Backend rejected trip tracking update');
+      throw Exception(
+          data['message'] ?? 'Backend rejected trip tracking update');
     }
 
     debugPrint('✅ Trip tracking saved to backend: $enabled');
@@ -155,17 +136,10 @@ class SettingsService {
   // ========== CHECK PIN STATUS ==========
   static Future<bool> checkPinStatus(int userId) async {
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/pin/exists/$userId'),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final hasPinSet = data['hasPinSet'] ?? false;
-        debugPrint('✅ PIN status: ${hasPinSet ? "SET" : "NOT SET"}');
-        return hasPinSet;
-      }
-      return false;
+      final data = await ApiService.get('/pin/exists/$userId');
+      final hasPinSet = data['hasPinSet'] ?? false;
+      debugPrint('✅ PIN status: ${hasPinSet ? "SET" : "NOT SET"}');
+      return hasPinSet as bool;
     } catch (e) {
       debugPrint('🔥 Error checking PIN status: $e');
       return false;
@@ -174,15 +148,12 @@ class SettingsService {
 
   // ========== CREATE PIN ==========
   static Future<void> createPin(int userId, String pin) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/pin/set'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'userId': userId, 'pin': pin}),
+    final data = await ApiService.post(
+      '/pin/set',
+      body: {'userId': userId, 'pin': pin},
     );
 
-    final data = jsonDecode(response.body);
-
-    if (response.statusCode == 200 && data['success'] == true) {
+    if (data['success'] == true) {
       debugPrint('✅ PIN created successfully');
       return;
     }
@@ -193,23 +164,16 @@ class SettingsService {
   // ========== CHANGE PIN ==========
   static Future<void> changePin(
       int userId, String oldPin, String newPin) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/pin/change'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'userId': userId,
-        'oldPin': oldPin,
-        'newPin': newPin,
-      }),
+    final data = await ApiService.post(
+      '/pin/change',
+      body: {'userId': userId, 'oldPin': oldPin, 'newPin': newPin},
     );
 
-    if (response.statusCode == 400 || response.statusCode == 401) {
+    if (data['statusCode'] == 400 || data['statusCode'] == 401) {
       throw Exception('Current PIN is incorrect');
     }
 
-    final data = jsonDecode(response.body);
-
-    if (response.statusCode == 200 && data['success'] == true) {
+    if (data['success'] == true) {
       debugPrint('✅ PIN changed successfully');
       return;
     }
@@ -217,8 +181,29 @@ class SettingsService {
     throw Exception(data['message'] ?? 'Failed to change PIN');
   }
 
+  // ========== LOAD VEHICLE SUBSCRIPTION STATUS ==========
+  /// Returns one of: 'ACTIVE' | 'EXPIRED' | 'CANCELLED' | 'NONE'
+  /// 'NONE' means no subscription record exists for this vehicle.
+  static Future<String> loadVehicleSubscriptionStatus(int vehicleId) async {
+    try {
+      final data = await ApiService.get('/payments/vehicle/$vehicleId');
+
+      if (data['success'] == true && data['subscription'] != null) {
+        final status = data['subscription']['status'] as String?;
+        debugPrint('✅ Subscription status for vehicle $vehicleId: $status');
+        return status ?? 'NONE';
+      }
+
+      return 'NONE';
+    } on FeatureNotSubscribedException {
+      return 'NONE';
+    } catch (e) {
+      debugPrint('⚠️ Could not load subscription status: $e');
+      return 'NONE';
+    }
+  }
+
   // ========== LOGOUT ==========
-  // ✅ Clears all keys including vehicles_list and user_type
   static Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('user');

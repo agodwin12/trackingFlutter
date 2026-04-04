@@ -1,6 +1,5 @@
 // services/socket_service.dart
 import 'dart:async';
-import 'dart:convert';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class SocketService {
@@ -10,38 +9,50 @@ class SocketService {
   SocketService._internal();
 
   IO.Socket? _socket;
-  int? _pendingVehicleId; // ✅ Store vehicle ID to join after connection
-  int? _currentVehicleId; // ✅ Track currently joined vehicle
+  int? _pendingVehicleId; // Store vehicle ID to join after connection
+  int? _currentVehicleId; // Track currently joined vehicle
+  int? _currentUserId;    // Track currently joined user room
 
   // Stream controllers for real-time updates
-  final _gpsUpdateController = StreamController<Map<String, dynamic>>.broadcast();
-  final _dashboardUpdateController = StreamController<Map<String, dynamic>>.broadcast();
-  final _connectionStatusController = StreamController<bool>.broadcast();
-  final _safeZoneAlertController = StreamController<Map<String, dynamic>>.broadcast();
-  final _locationUpdateController = StreamController<Map<String, dynamic>>.broadcast();
+  final _gpsUpdateController            = StreamController<Map<String, dynamic>>.broadcast();
+  final _dashboardUpdateController      = StreamController<Map<String, dynamic>>.broadcast();
+  final _connectionStatusController     = StreamController<bool>.broadcast();
+  final _safeZoneAlertController        = StreamController<Map<String, dynamic>>.broadcast();
+  final _locationUpdateController       = StreamController<Map<String, dynamic>>.broadcast();
+  // ── Payment updates — pushed by backend after webhook confirms ───────────
+  final _paymentUpdateController        = StreamController<Map<String, dynamic>>.broadcast();
 
   // Public streams
-  Stream<Map<String, dynamic>> get gpsUpdateStream => _gpsUpdateController.stream;
+  Stream<Map<String, dynamic>> get gpsUpdateStream       => _gpsUpdateController.stream;
   Stream<Map<String, dynamic>> get dashboardUpdateStream => _dashboardUpdateController.stream;
-  Stream<bool> get connectionStatusStream => _connectionStatusController.stream;
-  Stream<Map<String, dynamic>> get safeZoneAlertStream => _safeZoneAlertController.stream;
-  Stream<Map<String, dynamic>> get locationUpdateStream => _locationUpdateController.stream;
+  Stream<bool>                 get connectionStatusStream => _connectionStatusController.stream;
+  Stream<Map<String, dynamic>> get safeZoneAlertStream   => _safeZoneAlertController.stream;
+  Stream<Map<String, dynamic>> get locationUpdateStream  => _locationUpdateController.stream;
+  Stream<Map<String, dynamic>> get paymentUpdateStream   => _paymentUpdateController.stream;
 
   bool get isConnected => _socket?.connected ?? false;
 
-  /// Connect to Socket.IO server
-  void connect(String serverUrl) {
+  /// Connect to Socket.IO server.
+  /// Pass [userId] so the service joins the user room immediately on connect.
+  void connect(String serverUrl, {int? userId}) {
     if (_socket != null && _socket!.connected) {
       print('⚠️ Socket already connected');
+      // Still join user room if not yet joined (e.g. userId was not known at
+      // the time of the original connect call).
+      if (userId != null && _currentUserId != userId) {
+        joinUserRoom(userId);
+      }
       return;
     }
+
+    if (userId != null) _currentUserId = userId;
 
     print('\n🔌 ========== CONNECTING TO SOCKET.IO ==========');
     print('🔌 Server URL: $serverUrl');
 
     try {
       _socket = IO.io(serverUrl, <String, dynamic>{
-        'transports': ['websocket'], // Force WebSocket (important!)
+        'transports': ['websocket'],
         'autoConnect': true,
         'reconnection': true,
         'reconnectionDelay': 1000,
@@ -50,56 +61,60 @@ class SocketService {
         'timeout': 20000,
       });
 
-      // ✅ Connection established
+      // ── Connection established ────────────────────────────────────────────
       _socket!.onConnect((_) {
         print('✅ Socket.IO connected!');
         print('🔌 Socket ID: ${_socket!.id}');
         _connectionStatusController.add(true);
 
-        // ✅ Auto-rejoin vehicle room if there was a pending one
+        // Rejoin vehicle room if there was a pending one
         if (_pendingVehicleId != null) {
           print('📡 Auto-joining pending vehicle room: $_pendingVehicleId');
           joinVehicleTracking(_pendingVehicleId!);
           _pendingVehicleId = null;
         }
+
+        // Always (re)join the user room so payment_update events reach us
+        if (_currentUserId != null) {
+          print('👤 Auto-joining user room: $_currentUserId');
+          joinUserRoom(_currentUserId!);
+        }
       });
 
-      // ✅ Connection error
+      // ── Connection error ──────────────────────────────────────────────────
       _socket!.onConnectError((error) {
         print('❌ Connection error: $error');
         _connectionStatusController.add(false);
       });
 
-      // ✅ Disconnection
+      // ── Disconnection ─────────────────────────────────────────────────────
       _socket!.onDisconnect((_) {
         print('❌ Socket.IO disconnected');
         _connectionStatusController.add(false);
 
-        // ✅ Store current vehicle ID to rejoin on reconnect
+        // Store current vehicle ID to rejoin on reconnect
         if (_currentVehicleId != null) {
           print('💾 Storing vehicle ID $_currentVehicleId for reconnection');
           _pendingVehicleId = _currentVehicleId;
         }
       });
 
-      // ✅ Reconnection attempt
+      // ── Reconnection events ───────────────────────────────────────────────
       _socket!.on('reconnect_attempt', (data) {
         print('🔄 Attempting to reconnect... (attempt $data)');
       });
 
-      // ✅ Reconnection success
       _socket!.on('reconnect', (data) {
         print('✅ Reconnected successfully!');
         _connectionStatusController.add(true);
       });
 
-      // ✅ Reconnection failed
       _socket!.on('reconnect_failed', (data) {
         print('❌ Reconnection failed after all attempts');
         _connectionStatusController.add(false);
       });
 
-      // ✅ Listen for GPS updates
+      // ── GPS update ────────────────────────────────────────────────────────
       _socket!.on('gpsUpdate', (data) {
         print('📡 Received GPS update: $data');
         try {
@@ -109,7 +124,7 @@ class SocketService {
         }
       });
 
-      // ✅ Listen for dashboard updates
+      // ── Dashboard update ──────────────────────────────────────────────────
       _socket!.on('dashboardUpdate', (data) {
         print('📊 Received dashboard update: $data');
         try {
@@ -119,7 +134,7 @@ class SocketService {
         }
       });
 
-      // ✅ Listen for location updates (real-time car movement)
+      // ── Location update (real-time car movement) ──────────────────────────
       _socket!.on('location_update', (data) {
         print('📍 ========== LOCATION UPDATE RECEIVED ==========');
         print('📦 Vehicle ID: ${data['vehicleId']}');
@@ -136,7 +151,7 @@ class SocketService {
         }
       });
 
-      // ✅ Listen for safe zone alerts
+      // ── Safe zone alert ───────────────────────────────────────────────────
       _socket!.on('safe_zone_alert', (data) {
         print('🚨 ========== SAFE ZONE ALERT RECEIVED ==========');
         print('📦 Raw data: $data');
@@ -150,17 +165,38 @@ class SocketService {
         }
       });
 
-      // ✅ Listen for room joined confirmation
-      _socket!.on('joinedRoom', (data) {
-        print('✅ Joined room: ${data['room']}');
+      // ── Payment update — fired by backend after webhook confirms ──────────
+      // Payload: { status: 'SUCCESS'|'FAILED', payment_id, vehicle_id, timestamp }
+      // PaymentPendingScreen listens to paymentUpdateStream and navigates
+      // to success or failed screen when this arrives.
+      _socket!.on('payment_update', (data) {
+        print('💳 ========== PAYMENT UPDATE RECEIVED ==========');
+        print('📦 Status: ${data['status']}');
+        print('📦 Payment ID: ${data['payment_id']}');
+        print('📦 Vehicle ID: ${data['vehicle_id']}');
+        print('===============================================');
+
+        try {
+          _paymentUpdateController.add(Map<String, dynamic>.from(data));
+        } catch (e) {
+          print('⚠️ Error processing payment update: $e');
+        }
       });
 
-      // ✅ Listen for room left confirmation
+      // ── Room confirmations ────────────────────────────────────────────────
+      _socket!.on('joinedRoom', (data) {
+        print('✅ Joined vehicle room: ${data['room']}');
+      });
+
+      _socket!.on('joinedUserRoom', (data) {
+        print('✅ Joined user room: ${data['room']}');
+      });
+
       _socket!.on('leftRoom', (data) {
         print('👋 Left room: ${data['room']}');
       });
 
-      // ✅ Generic error handler
+      // ── Generic error handler ─────────────────────────────────────────────
       _socket!.on('error', (error) {
         print('❌ Socket error: $error');
       });
@@ -189,7 +225,7 @@ class SocketService {
     print('📡 Joining vehicle tracking room: vehicle_$vehicleId');
     _socket!.emit('joinVehicleTracking', vehicleId);
     _currentVehicleId = vehicleId;
-    _pendingVehicleId = null; // Clear pending since we successfully joined
+    _pendingVehicleId = null;
   }
 
   /// Leave vehicle tracking room
@@ -202,10 +238,23 @@ class SocketService {
     print('👋 Leaving vehicle tracking room: vehicle_$vehicleId');
     _socket!.emit('leaveVehicleTracking', vehicleId);
 
-    // Clear current vehicle if it matches
     if (_currentVehicleId == vehicleId) {
       _currentVehicleId = null;
     }
+  }
+
+  /// Join the user room for payment updates and user-level notifications.
+  /// Called automatically on connect/reconnect if userId is known.
+  void joinUserRoom(int userId) {
+    if (_socket == null || !_socket!.connected) {
+      print('⚠️ Cannot join user room: Socket not connected');
+      _currentUserId = userId; // Store so onConnect can retry
+      return;
+    }
+
+    print('👤 Joining user room: user_$userId');
+    _socket!.emit('joinUserRoom', userId);
+    _currentUserId = userId;
   }
 
   /// Manually trigger reconnection
@@ -224,16 +273,16 @@ class SocketService {
   }
 
   /// Get current vehicle ID
-  int? getCurrentVehicleId() {
-    return _currentVehicleId;
-  }
+  int? getCurrentVehicleId() => _currentVehicleId;
+
+  /// Get current user ID
+  int? getCurrentUserId() => _currentUserId;
 
   /// Disconnect from Socket.IO
   void disconnect() {
     if (_socket != null) {
       print('🔌 Disconnecting Socket.IO...');
 
-      // Leave current room before disconnecting
       if (_currentVehicleId != null) {
         leaveVehicleTracking(_currentVehicleId!);
       }
@@ -255,12 +304,12 @@ class SocketService {
 
     disconnect();
 
-    // Close all stream controllers
     _gpsUpdateController.close();
     _dashboardUpdateController.close();
     _connectionStatusController.close();
     _safeZoneAlertController.close();
     _locationUpdateController.close();
+    _paymentUpdateController.close();
 
     print('✅ SocketService disposed');
   }
@@ -271,5 +320,6 @@ class SocketService {
     disconnect();
     _currentVehicleId = null;
     _pendingVehicleId = null;
+    _currentUserId    = null;
   }
 }

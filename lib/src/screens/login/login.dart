@@ -1,6 +1,5 @@
 // lib/src/screens/login/login_screen.dart
 import 'dart:convert';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,303 +12,273 @@ import '../dashboard/dashboard.dart';
 import '../forgot_password/forgot_password.dart';
 import '../../../main.dart' show FCMService;
 
+// ── Country model ─────────────────────────────────────────────────────────────
 class Country {
   final String name;
-  final String code;
+  final String dialCode;
+  final String isoCode;
   final String flag;
 
-  Country({required this.name, required this.code, required this.flag});
+  const Country({
+    required this.name,
+    required this.dialCode,
+    required this.isoCode,
+    required this.flag,
+  });
 }
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+const List<Country> _kCountries = [
+  Country(name: 'Cameroon',    dialCode: '+237', isoCode: 'CM', flag: '🇨🇲'),
+  Country(name: 'Nigeria',     dialCode: '+234', isoCode: 'NG', flag: '🇳🇬'),
+  Country(name: 'Ghana',       dialCode: '+233', isoCode: 'GH', flag: '🇬🇭'),
+  Country(name: 'Ivory Coast', dialCode: '+225', isoCode: 'CI', flag: '🇨🇮'),
+  Country(name: 'Benin',       dialCode: '+229', isoCode: 'BJ', flag: '🇧🇯'),
+  Country(name: 'Congo',       dialCode: '+242', isoCode: 'CG', flag: '🇨🇬'),
+  Country(name: 'Togo',        dialCode: '+228', isoCode: 'TG', flag: '🇹🇬'),
+  Country(name: 'USA',         dialCode: '+1',   isoCode: 'US', flag: '🇺🇸'),
+  Country(name: 'France',      dialCode: '+33',  isoCode: 'FR', flag: '🇫🇷'),
+];
+
+const Color _kOrange    = Color(0xFFFF6B35);
+const Color _kBlack     = Color(0xFF1A1A1A);
+const Color _kGradStart = Color(0xFFFF8A5B);
+const Color _kGradEnd   = Color(0xFFFF6B35);
+
+// ── Screen ────────────────────────────────────────────────────────────────────
 class ModernLoginScreen extends StatefulWidget {
+  const ModernLoginScreen({Key? key}) : super(key: key);
+
   @override
-  _ModernLoginScreenState createState() => _ModernLoginScreenState();
+  State<ModernLoginScreen> createState() => _ModernLoginScreenState();
 }
 
 class _ModernLoginScreenState extends State<ModernLoginScreen>
     with TickerProviderStateMixin {
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  bool _obscurePassword = true;
-  bool _rememberMe = false;
-  bool _isLoading = false;
 
-  late AnimationController _animationController;
-  late AnimationController _floatingController;
-  late Animation<double> _fadeAnimation;
-  late Animation<Offset> _slideAnimation;
-  late Animation<double> _scaleAnimation;
+  final _phoneCtrl    = TextEditingController();
+  final _passwordCtrl = TextEditingController();
 
-  String get baseUrl => EnvConfig.baseUrl;
+  Country _selectedCountry = _kCountries.first;
+  bool _obscurePassword    = true;
+  bool _rememberMe         = false;
+  bool _isLoading          = false;
 
-  static const Color fleetraOrange = Color(0xFFFF6B35);
-  static const Color fleetraBlack = Color(0xFF1A1A1A);
-  static const Color fleetraGradientStart = Color(0xFFFF8A5B);
-  static const Color fleetraGradientEnd = Color(0xFFFF6B35);
+  late final AnimationController _entryCtrl;
+  late final AnimationController _floatCtrl;
+  late final Animation<double>   _fadeAnim;
+  late final Animation<Offset>   _slideAnim;
+  late final Animation<double>   _scaleAnim;
 
-  final List<Country> _centralAfricanCountries = [
-    Country(name: 'Cameroon', code: '+237', flag: '🇨🇲'),
-    Country(name: 'Nigeria', code: '+234', flag: '🇳🇬'),
-    Country(name: 'Togo', code: '+228', flag: '🇹🇬'),
-    Country(name: 'Central African Republic', code: '+236', flag: '🇨🇫'),
-    Country(name: 'Chad', code: '+235', flag: '🇹🇩'),
-    Country(name: 'Republic of the Congo', code: '+242', flag: '🇨🇬'),
-    Country(name: 'Democratic Republic of the Congo', code: '+243', flag: '🇨🇩'),
-    Country(name: 'Equatorial Guinea', code: '+240', flag: '🇬🇶'),
-    Country(name: 'Gabon', code: '+241', flag: '🇬🇦'),
-    Country(name: 'São Tomé and Príncipe', code: '+239', flag: '🇸🇹'),
-    Country(name: 'Angola', code: '+244', flag: '🇦🇴'),
-    Country(name: 'Burundi', code: '+257', flag: '🇧🇮'),
-    Country(name: 'Rwanda', code: '+250', flag: '🇷🇼'),
-  ];
-
-  Country _selectedCountry =
-  Country(name: 'Cameroon', code: '+237', flag: '🇨🇲');
+  String get _baseUrl => EnvConfig.baseUrl;
 
   @override
   void initState() {
     super.initState();
 
-    _animationController = AnimationController(
-      duration: const Duration(milliseconds: 1500),
-      vsync: this,
-    );
+    _entryCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1500));
+    _floatCtrl = AnimationController(
+        vsync: this, duration: const Duration(seconds: 3))
+      ..repeat(reverse: true);
 
-    _floatingController = AnimationController(
-      duration: const Duration(seconds: 3),
-      vsync: this,
-    )..repeat(reverse: true);
+    _fadeAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+        CurvedAnimation(
+            parent: _entryCtrl,
+            curve: const Interval(0.0, 0.5, curve: Curves.easeOut)));
 
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: const Interval(0.0, 0.5, curve: Curves.easeOut),
-      ),
-    );
+    _slideAnim = Tween<Offset>(
+        begin: const Offset(0, 0.3), end: Offset.zero)
+        .animate(CurvedAnimation(
+        parent: _entryCtrl,
+        curve: const Interval(0.3, 1.0, curve: Curves.easeOutCubic)));
 
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 0.3),
-      end: Offset.zero,
-    ).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: const Interval(0.3, 1.0, curve: Curves.easeOutCubic),
-      ),
-    );
+    _scaleAnim = Tween<double>(begin: 0.8, end: 1.0).animate(
+        CurvedAnimation(
+            parent: _entryCtrl,
+            curve: const Interval(0.0, 0.6, curve: Curves.easeOutCubic)));
 
-    _scaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: const Interval(0.0, 0.6, curve: Curves.easeOutCubic),
-      ),
-    );
-
-    _animationController.forward();
+    _entryCtrl.forward();
   }
 
   @override
   void dispose() {
-    _animationController.dispose();
-    _floatingController.dispose();
-    _phoneController.dispose();
-    _passwordController.dispose();
+    _entryCtrl.dispose();
+    _floatCtrl.dispose();
+    _phoneCtrl.dispose();
+    _passwordCtrl.dispose();
     super.dispose();
   }
 
-  void _login() async {
-    if (_phoneController.text.trim().isEmpty ||
-        _passwordController.text.trim().isEmpty) {
-      _showErrorSnackbar("Phone and Password are required");
+  // ── Login ──────────────────────────────────────────────────────────────────
+  Future<void> _login() async {
+    final phone    = _phoneCtrl.text.trim();
+    final password = _passwordCtrl.text.trim();
+
+    if (phone.isEmpty || password.isEmpty) {
+      _showError('Phone and password are required.');
       return;
     }
 
     setState(() => _isLoading = true);
 
-    final String phoneWithCountryCode =
-        _selectedCountry.code + _phoneController.text.trim();
-    final String password = _passwordController.text.trim();
-    final Uri url = Uri.parse("$baseUrl/auth/login");
+    final fullPhone = '${_selectedCountry.dialCode}$phone';
+    final url       = Uri.parse('$_baseUrl/auth/login');
 
     try {
-      debugPrint('\n🔐 ==========================================');
-      debugPrint('🔐 LOGIN ATTEMPT STARTED');
-      debugPrint('🔐 Phone: $phoneWithCountryCode');
-      debugPrint('🔐 Backend URL: $url');
-      debugPrint('🔐 ==========================================');
-
       final response = await http.post(
         url,
-        headers: {"Content-Type": "application/json"},
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          "phone": phoneWithCountryCode,
-          "password": password,
-          "keepMeLoggedIn": _rememberMe,
+          'phone':          fullPhone,
+          'password':       password,
+          'keepMeLoggedIn': _rememberMe,
         }),
       );
 
-      final responseData = jsonDecode(response.body);
-      debugPrint('🔐 Response status: ${response.statusCode}');
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
 
-      // ✅ SUCCESS
+      // ── SUCCESS ────────────────────────────────────────────────────────────
       if (response.statusCode == 200) {
-        debugPrint('✅ LOGIN SUCCESSFUL');
+        final prefs = await SharedPreferences.getInstance();
 
-        final SharedPreferences prefs = await SharedPreferences.getInstance();
+        // ── Tokens ────────────────────────────────────────────────────────
+        final String accessToken  = body['accessToken']  as String;
+        final String refreshToken = body['refreshToken'] as String;
 
-        // ── Save tokens ──────────────────────────────────────────
-        await prefs.setString("accessToken", responseData["accessToken"]);
-        await prefs.setString("auth_token", responseData["accessToken"]);
-        await prefs.setString("user", jsonEncode(responseData["user"]));
-        debugPrint('💾 Access token saved');
+        // Both keys saved — ApiService reads 'accessToken', legacy code reads
 
-        if (responseData["refreshToken"] != null) {
-          await prefs.setString("refreshToken", responseData["refreshToken"]);
-          debugPrint('💾 Refresh token saved');
-        }
+        await prefs.setString('accessToken',  accessToken);
+        await prefs.setString('auth_token',   accessToken);   // legacy key
+        await prefs.setString('refreshToken', refreshToken);  // ← was missing
 
-        // ── Save user info ───────────────────────────────────────
-        final int userId = responseData["user"]["id"];
-        await prefs.setInt("user_id", userId);
-        debugPrint('💾 User ID saved: $userId');
+        debugPrint(' Tokens saved — accessToken: ${accessToken.substring(0, 20)}...');
+        debugPrint(' refreshToken saved: ${refreshToken.substring(0, 20)}...');
 
-        // ── Save user_type (regular or chauffeur) ────────────────
-        final String userType = responseData["user_type"] ?? "regular";
-        await prefs.setString("user_type", userType);
-        debugPrint('💾 User type saved: $userType');
+        // ── User ──────────────────────────────────────────────────────────
+        await prefs.setString('user', jsonEncode(body['user']));
 
-        // ── Save partner_id if present ───────────────────────────
-        if (responseData["user"]["partner_id"] != null) {
+        final int userId = (body['user']['id'] as num).toInt();
+        await prefs.setInt('user_id', userId);
+
+        // Phone + country code (used by payment sheet pre-fill)
+        await prefs.setString('user_phone',        fullPhone);
+        await prefs.setString('user_country_code', _selectedCountry.isoCode);
+
+        // User type
+        final String userType = body['user_type'] as String? ?? 'regular';
+        await prefs.setString('user_type', userType);
+
+        // Partner id
+        if (body['user']['partner_id'] != null) {
           await prefs.setInt(
-              "partner_id", responseData["user"]["partner_id"]);
-          debugPrint(
-              '💾 Partner ID saved: ${responseData["user"]["partner_id"]}');
+              'partner_id', (body['user']['partner_id'] as num).toInt());
         }
 
-        // ── Read vehicles from login response ────────────────────
-        final List vehicles = responseData["vehicles"] ?? [];
-        debugPrint('🚗 Vehicles from login response: ${vehicles.length}');
+
+        final List vehicles = (body['vehicles'] as List?) ?? [];
 
         if (vehicles.isEmpty) {
           setState(() => _isLoading = false);
-          _showErrorSnackbar("No vehicles found for this account");
+          _showError('No vehicles found for this account.');
           return;
         }
 
-
         await prefs.setString('vehicles_list', jsonEncode(vehicles));
-        debugPrint('💾 Vehicles list saved (${vehicles.length} vehicles)');
 
-        // ── Save first vehicle ID ────────────────────────────────
-        final int firstVehicleId = vehicles[0]["id"];
+        final int firstVehicleId = (vehicles[0]['id'] as num).toInt();
         await prefs.setInt('current_vehicle_id', firstVehicleId);
-        debugPrint('💾 Current vehicle ID saved: $firstVehicleId');
 
-        // ── Register notification token ──────────────────────────
-        debugPrint('\n📲 REGISTERING NOTIFICATION TOKEN');
+        final firstVehicle = vehicles[0] as Map<String, dynamic>;
+        final String firstName =
+        (firstVehicle['nickname'] as String?)?.isNotEmpty == true
+            ? firstVehicle['nickname'] as String
+            : '${firstVehicle['marque'] ?? firstVehicle['brand'] ?? ''} ${firstVehicle['model'] ?? ''}'
+            .trim();
+        await prefs.setString('current_vehicle_name', firstName);
+
+        // ── Notifications ─────────────────────────────────────────────────
         try {
           await NotificationService.registerToken();
-          debugPrint('✅ Notification token registration completed');
-        } catch (notifError) {
-          debugPrint('⚠️ Notification registration error: $notifError');
+        } catch (e) {
+          debugPrint('⚠️ Notification error: $e');
         }
 
-        // ── Retry pending FCM token ──────────────────────────────
-        debugPrint('\n🔄 RETRYING PENDING FCM TOKEN');
         try {
           await FCMService.retryPendingToken();
-          debugPrint('✅ FCM token retry completed');
-        } catch (fcmError) {
-          debugPrint('⚠️ FCM token retry failed: $fcmError');
+        } catch (e) {
+          debugPrint('⚠️ FCM retry failed: $e');
         }
 
-        // ── Check first login ────────────────────────────────────
-        final bool isFirstLogin = responseData["isFirstLogin"] ?? false;
-        debugPrint('🔐 First login: $isFirstLogin');
+        final bool isFirstLogin = body['isFirstLogin'] as bool? ?? false;
 
         setState(() => _isLoading = false);
-
         if (!mounted) return;
 
-        // ── First login → password reset screen ─────────────────
+        // ── First login → force password reset ────────────────────────────
         if (isFirstLogin) {
-          debugPrint('🔑 FIRST LOGIN → navigating to password reset');
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (context) => ResetPasswordScreen(
-                userId: userId,
-                isFirstLogin: true,
-              ),
+              builder: (_) =>
+                  ResetPasswordScreen(userId: userId, isFirstLogin: true),
             ),
           );
           return;
         }
 
-        // ── Navigate to dashboard ────────────────────────────────
-        debugPrint('\n🎯 NAVIGATING TO DASHBOARD');
-        debugPrint('🎯 Vehicle ID: $firstVehicleId | User type: $userType');
-
+        // ── All good → dashboard ──────────────────────────────────────────
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) => ModernDashboard(
-              vehicleId: firstVehicleId,
-            ),
+            builder: (_) => ModernDashboard(vehicleId: firstVehicleId),
           ),
         );
+
+        // ── FAILURE ────────────────────────────────────────────────────────────
       } else {
-        // ✅ FAILURE
         setState(() => _isLoading = false);
 
-        debugPrint('❌ LOGIN FAILED — Status: ${response.statusCode}');
-        debugPrint('❌ Response: ${response.body}');
-
-        String errorMessage = "Login failed";
-
-        if (responseData["errors"] != null && responseData["errors"] is List) {
-          final List errors = responseData["errors"];
-          if (errors.isNotEmpty) {
-            errorMessage =
-                errors[0]["msg"] ?? errors[0]["message"] ?? errorMessage;
-          }
-        } else if (responseData["message"] != null) {
-          errorMessage = responseData["message"];
+        String msg = 'Login failed.';
+        if (body['errors'] is List && (body['errors'] as List).isNotEmpty) {
+          final first = (body['errors'] as List).first as Map;
+          msg = first['msg'] as String?
+              ?? first['message'] as String?
+              ?? msg;
+        } else if (body['message'] != null) {
+          msg = body['message'] as String;
         }
-
-        _showErrorSnackbar(errorMessage);
+        _showError(msg);
       }
-    } catch (error, stackTrace) {
+
+    } catch (e) {
       setState(() => _isLoading = false);
-      debugPrint('❌ LOGIN EXCEPTION: $error');
-      debugPrint('❌ Stack: $stackTrace');
-      _showErrorSnackbar("Connection error. Please try again.");
+      _showError('Connection error. Please try again.');
     }
   }
 
-  void _showErrorSnackbar(String message) {
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.error_outline, color: Colors.white),
-            const SizedBox(width: 12),
+            const Icon(Icons.error_outline_rounded,
+                color: Colors.white, size: 18),
+            const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+              child: Text(message,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  )),
             ),
           ],
         ),
         backgroundColor: const Color(0xFFE53935),
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
       ),
     );
@@ -320,134 +289,15 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (BuildContext context) {
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.7,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(28),
-              topRight: Radius.circular(28),
-            ),
-          ),
-          child: Column(
-            children: [
-              Container(
-                margin: const EdgeInsets.only(top: 12),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(24),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Select Country',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: fleetraBlack,
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close_rounded),
-                      color: Colors.grey[600],
-                    ),
-                  ],
-                ),
-              ),
-              Divider(height: 1, color: Colors.grey[200]),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  itemCount: _centralAfricanCountries.length,
-                  itemBuilder: (context, index) {
-                    final country = _centralAfricanCountries[index];
-                    final isSelected = country.code == _selectedCountry.code;
-
-                    return InkWell(
-                      onTap: () {
-                        setState(() => _selectedCountry = country);
-                        Navigator.pop(context);
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 16,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? fleetraOrange.withOpacity(0.1)
-                              : Colors.transparent,
-                        ),
-                        child: Row(
-                          children: [
-                            Text(
-                              country.flag,
-                              style: const TextStyle(fontSize: 32),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    country.name,
-                                    style: TextStyle(
-                                      color: isSelected
-                                          ? fleetraOrange
-                                          : fleetraBlack,
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 15,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    country.code,
-                                    style: TextStyle(
-                                      color: isSelected
-                                          ? fleetraOrange
-                                          : Colors.grey[600],
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (isSelected)
-                              Container(
-                                width: 24,
-                                height: 24,
-                                decoration: BoxDecoration(
-                                  color: fleetraOrange,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.check_rounded,
-                                  color: Colors.white,
-                                  size: 16,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (_) => _CountryPickerSheet(
+        countries: _kCountries,
+        selected:  _selectedCountry,
+        onSelect:  (c) => setState(() => _selectedCountry = c),
+      ),
     );
   }
 
+  // ── Build ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -467,32 +317,28 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
         ),
         child: Stack(
           children: [
-            _buildFloatingPins(),
+            _FloatingPins(controller: _floatCtrl),
             SafeArea(
               child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 40),
-                      FadeTransition(
-                        opacity: _fadeAnimation,
-                        child: ScaleTransition(
-                          scale: _scaleAnimation,
-                          child: _buildLogoSection(),
-                        ),
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 40),
+                    FadeTransition(
+                      opacity: _fadeAnim,
+                      child: ScaleTransition(
+                          scale: _scaleAnim, child: const _LogoSection()),
+                    ),
+                    const SizedBox(height: 60),
+                    SlideTransition(
+                      position: _slideAnim,
+                      child: FadeTransition(
+                        opacity: _fadeAnim,
+                        child: _buildCard(),
                       ),
-                      const SizedBox(height: 60),
-                      SlideTransition(
-                        position: _slideAnimation,
-                        child: FadeTransition(
-                          opacity: _fadeAnimation,
-                          child: _buildLoginCard(),
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 32),
+                  ],
                 ),
               ),
             ),
@@ -502,158 +348,19 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
     );
   }
 
-  Widget _buildFloatingPins() {
-    return AnimatedBuilder(
-      animation: _floatingController,
-      builder: (context, child) {
-        return Stack(
-          children: [
-            Positioned(
-              top: 100 + (_floatingController.value * 30),
-              right: 40,
-              child: _buildLocationPin(size: 40, opacity: 0.15),
-            ),
-            Positioned(
-              top: 250 + (_floatingController.value * -25),
-              left: 30,
-              child: _buildLocationPin(size: 35, opacity: 0.1),
-            ),
-            Positioned(
-              bottom: 200 + (_floatingController.value * 20),
-              right: 60,
-              child: _buildLocationPin(size: 30, opacity: 0.12),
-            ),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: Opacity(
-                opacity: 0.05,
-                child: CustomPaint(
-                  size: const Size(double.infinity, 300),
-                  painter: GridPainter(),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildLocationPin({required double size, required double opacity}) {
-    return Opacity(
-      opacity: opacity,
-      child: Icon(Icons.location_on_rounded, size: size, color: fleetraOrange),
-    );
-  }
-
-  Widget _buildLogoSection() {
-    return Column(
-      children: [
-        Container(
-          width: 100,
-          height: 100,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: fleetraOrange.withOpacity(0.3),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: ClipOval(
-            child: Image.asset(
-              'assets/logo.png',
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [fleetraGradientStart, fleetraGradientEnd],
-                    ),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.gps_fixed_rounded,
-                    size: 50,
-                    color: Colors.white,
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-        const SizedBox(height: 24),
-        const Text(
-          'FLEETRA',
-          style: TextStyle(
-            fontSize: 36,
-            fontWeight: FontWeight.w900,
-            color: fleetraOrange,
-            letterSpacing: 1.5,
-            height: 1.1,
-          ),
-        ),
-        const SizedBox(height: 4),
-        RichText(
-          textAlign: TextAlign.center,
-          text: TextSpan(
-            children: [
-              TextSpan(
-                text: 'by ',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  color: Colors.grey[600],
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const TextSpan(
-                text: 'PROXYM ',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: fleetraBlack,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const TextSpan(
-                text: 'GROUP',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: fleetraOrange,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLoginCard() {
+  Widget _buildCard() {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.9),
         borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: fleetraOrange.withOpacity(0.08),
+            color: _kOrange.withOpacity(0.08),
             blurRadius: 30,
             offset: const Offset(0, 15),
           ),
         ],
-        border: Border.all(
-          color: Colors.white.withOpacity(0.5),
-          width: 1.5,
-        ),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(28),
@@ -662,34 +369,30 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Welcome Back',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w800,
-                  color: fleetraBlack,
-                  height: 1.2,
-                ),
-              ),
+              const Text('Welcome Back',
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: _kBlack,
+                    height: 1.2,
+                  )),
               const SizedBox(height: 8),
-              Text(
-                'Sign in to track your vehicle',
-                style: TextStyle(
-                  fontSize: 15,
-                  color: Colors.grey[600],
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+              Text('Sign in to track your vehicle',
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  )),
               const SizedBox(height: 32),
-              _buildModernPhoneField(),
+              _buildPhoneField(),
               const SizedBox(height: 20),
-              _buildModernPasswordField(),
+              _buildPasswordField(),
               const SizedBox(height: 16),
               _buildOptionsRow(),
               const SizedBox(height: 28),
-              _buildModernLoginButton(),
+              _buildLoginButton(),
               const SizedBox(height: 20),
-              _buildCopyrightFooter(),
+              _buildFooter(),
             ],
           ),
         ),
@@ -697,18 +400,16 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
     );
   }
 
-  Widget _buildModernPhoneField() {
+  Widget _buildPhoneField() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Phone Number',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: fleetraBlack,
-          ),
-        ),
+        const Text('Phone Number',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: _kBlack,
+            )),
         const SizedBox(height: 10),
         Container(
           decoration: BoxDecoration(
@@ -721,33 +422,28 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
               InkWell(
                 onTap: _showCountryPicker,
                 borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
+                  topLeft:    Radius.circular(14),
+                  bottomLeft: Radius.circular(14),
                 ),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 16, vertical: 18),
                   decoration: BoxDecoration(
                     border: Border(
-                      right: BorderSide(
-                          color: Colors.grey[200]!, width: 1.5),
+                      right: BorderSide(color: Colors.grey[200]!, width: 1.5),
                     ),
                   ),
                   child: Row(
                     children: [
-                      Text(
-                        _selectedCountry.flag,
-                        style: const TextStyle(fontSize: 22),
-                      ),
+                      Text(_selectedCountry.flag,
+                          style: const TextStyle(fontSize: 22)),
                       const SizedBox(width: 8),
-                      Text(
-                        _selectedCountry.code,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                          color: fleetraBlack,
-                        ),
-                      ),
+                      Text(_selectedCountry.dialCode,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                            color: _kBlack,
+                          )),
                       const SizedBox(width: 4),
                       Icon(Icons.arrow_drop_down_rounded,
                           color: Colors.grey[600], size: 20),
@@ -759,12 +455,12 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: TextField(
-                    controller: _phoneController,
+                    controller: _phoneCtrl,
                     keyboardType: TextInputType.phone,
                     style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w500,
-                      color: fleetraBlack,
+                      color: _kBlack,
                     ),
                     decoration: InputDecoration(
                       border: InputBorder.none,
@@ -784,18 +480,16 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
     );
   }
 
-  Widget _buildModernPasswordField() {
+  Widget _buildPasswordField() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Password',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: fleetraBlack,
-          ),
-        ),
+        const Text('Password',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: _kBlack,
+            )),
         const SizedBox(height: 10),
         Container(
           decoration: BoxDecoration(
@@ -805,19 +499,19 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
           ),
           child: Row(
             children: [
-              Padding(
-                padding: const EdgeInsets.only(left: 16, right: 12),
+              const Padding(
+                padding: EdgeInsets.only(left: 16, right: 12),
                 child: Icon(Icons.lock_outline_rounded,
-                    color: fleetraOrange, size: 22),
+                    color: _kOrange, size: 22),
               ),
               Expanded(
                 child: TextField(
-                  controller: _passwordController,
+                  controller: _passwordCtrl,
                   obscureText: _obscurePassword,
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w500,
-                    color: fleetraBlack,
+                    color: _kBlack,
                   ),
                   decoration: InputDecoration(
                     border: InputBorder.none,
@@ -858,63 +552,54 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
               height: 22,
               child: Checkbox(
                 value: _rememberMe,
-                onChanged: (value) =>
-                    setState(() => _rememberMe = value ?? false),
-                activeColor: fleetraOrange,
+                onChanged: (v) => setState(() => _rememberMe = v ?? false),
+                activeColor: _kOrange,
                 checkColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(6),
-                ),
+                    borderRadius: BorderRadius.circular(6)),
                 side: BorderSide(color: Colors.grey[300]!, width: 1.5),
               ),
             ),
             const SizedBox(width: 8),
-            Text(
-              'Remember me',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Colors.grey[700],
-              ),
-            ),
+            Text('Remember me',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey[700],
+                )),
           ],
         ),
         TextButton(
           onPressed: () => Navigator.push(
             context,
-            MaterialPageRoute(
-                builder: (context) => ForgotPasswordScreen()),
+            MaterialPageRoute(builder: (_) => ForgotPasswordScreen()),
           ),
           style: TextButton.styleFrom(
             padding: EdgeInsets.zero,
             minimumSize: Size.zero,
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          child: const Text(
-            'Forgot password?',
-            style: TextStyle(
-              fontSize: 13,
-              color: fleetraOrange,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          child: const Text('Forgot password?',
+              style: TextStyle(
+                fontSize: 13,
+                color: _kOrange,
+                fontWeight: FontWeight.w600,
+              )),
         ),
       ],
     );
   }
 
-  Widget _buildModernLoginButton() {
+  Widget _buildLoginButton() {
     return Container(
       width: double.infinity,
       height: 56,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [fleetraGradientStart, fleetraGradientEnd],
-        ),
+        gradient: const LinearGradient(colors: [_kGradStart, _kGradEnd]),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: fleetraOrange.withOpacity(0.4),
+            color: _kOrange.withOpacity(0.4),
             blurRadius: 20,
             offset: const Offset(0, 10),
           ),
@@ -924,47 +609,40 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
         onPressed: _isLoading ? null : _login,
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.transparent,
-          shadowColor: Colors.transparent,
+          shadowColor:     Colors.transparent,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+              borderRadius: BorderRadius.circular(16)),
         ),
         child: _isLoading
             ? const SizedBox(
-          width: 24,
-          height: 24,
+          width: 24, height: 24,
           child: CircularProgressIndicator(
             strokeWidth: 2.5,
-            valueColor:
-            AlwaysStoppedAnimation<Color>(Colors.white),
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
           ),
         )
             : const Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              'Sign In',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-                letterSpacing: 0.5,
-              ),
-            ),
+            Text('Sign In',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  letterSpacing: 0.5,
+                )),
             SizedBox(width: 8),
-            Icon(Icons.arrow_forward_rounded,
-                color: Colors.white, size: 20),
+            Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 20),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCopyrightFooter() {
-    final currentYear = DateTime.now().year;
+  Widget _buildFooter() {
     return Center(
       child: Text(
-        '© $currentYear All rights reserved to PROXYM GROUP',
+        '© ${DateTime.now().year} All rights reserved to PROXYM GROUP',
         style: TextStyle(
           fontSize: 11,
           color: Colors.grey[500],
@@ -976,22 +654,286 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
   }
 }
 
-// Custom Painter for GPS Grid Background
-class GridPainter extends CustomPainter {
+// ═══════════════════════════════════════════════════════════════════
+// COUNTRY PICKER SHEET
+// ═══════════════════════════════════════════════════════════════════
+
+class _CountryPickerSheet extends StatelessWidget {
+  final List<Country> countries;
+  final Country       selected;
+  final ValueChanged<Country> onSelect;
+
+  const _CountryPickerSheet({
+    required this.countries,
+    required this.selected,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.7,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 8, 20),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text('Select Country',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: _kBlack,
+                      )),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: Icon(Icons.close_rounded, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: Colors.grey[200]),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: countries.length,
+              itemBuilder: (_, i) {
+                final c          = countries[i];
+                final isSelected = c.dialCode == selected.dialCode;
+
+                return InkWell(
+                  onTap: () {
+                    onSelect(c);
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 16),
+                    color: isSelected
+                        ? _kOrange.withOpacity(0.08)
+                        : Colors.transparent,
+                    child: Row(
+                      children: [
+                        Text(c.flag, style: const TextStyle(fontSize: 32)),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(c.name,
+                                  style: TextStyle(
+                                    color: isSelected ? _kOrange : _kBlack,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                  )),
+                              const SizedBox(height: 2),
+                              Text(c.dialCode,
+                                  style: TextStyle(
+                                    color: isSelected
+                                        ? _kOrange
+                                        : Colors.grey[600],
+                                    fontSize: 13,
+                                  )),
+                            ],
+                          ),
+                        ),
+                        if (isSelected)
+                          Container(
+                            width: 24, height: 24,
+                            decoration: const BoxDecoration(
+                              color: _kOrange,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.check_rounded,
+                                color: Colors.white, size: 16),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LOGO SECTION
+// ═══════════════════════════════════════════════════════════════════
+
+class _LogoSection extends StatelessWidget {
+  const _LogoSection();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          width: 100, height: 100,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: _kOrange.withOpacity(0.3),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: ClipOval(
+            child: Image.asset(
+              'assets/logo.png',
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [_kGradStart, _kGradEnd],
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.gps_fixed_rounded,
+                    size: 50, color: Colors.white),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        const Text('FLEETRA',
+            style: TextStyle(
+              fontSize: 36,
+              fontWeight: FontWeight.w900,
+              color: _kOrange,
+              letterSpacing: 1.5,
+              height: 1.1,
+            )),
+        const SizedBox(height: 4),
+        RichText(
+          textAlign: TextAlign.center,
+          text: TextSpan(
+            children: [
+              TextSpan(
+                text: 'by ',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  color: Colors.grey[600],
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const TextSpan(
+                text: 'PROXYM ',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: _kBlack,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const TextSpan(
+                text: 'GROUP',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: _kOrange,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FLOATING PINS BACKGROUND
+// ═══════════════════════════════════════════════════════════════════
+
+class _FloatingPins extends StatelessWidget {
+  final AnimationController controller;
+  const _FloatingPins({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (_, __) {
+        final v = controller.value;
+        return Stack(
+          children: [
+            Positioned(
+              top: 100 + (v * 30), right: 40,
+              child: _pin(size: 40, opacity: 0.15),
+            ),
+            Positioned(
+              top: 250 + (v * -25), left: 30,
+              child: _pin(size: 35, opacity: 0.10),
+            ),
+            Positioned(
+              bottom: 200 + (v * 20), right: 60,
+              child: _pin(size: 30, opacity: 0.12),
+            ),
+            Positioned(
+              top: 0, left: 0, right: 0,
+              child: Opacity(
+                opacity: 0.05,
+                child: CustomPaint(
+                  size: const Size(double.infinity, 300),
+                  painter: _GridPainter(),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _pin({required double size, required double opacity}) => Opacity(
+    opacity: opacity,
+    child: Icon(Icons.location_on_rounded, size: size, color: _kOrange),
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// GRID PAINTER
+// ═══════════════════════════════════════════════════════════════════
+
+class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFFFF6B35).withOpacity(0.1)
+      ..color = _kOrange.withOpacity(0.1)
       ..strokeWidth = 1;
 
-    for (double i = 0; i < size.width; i += 40) {
-      canvas.drawLine(Offset(i, 0), Offset(i, size.height), paint);
+    for (double x = 0; x < size.width; x += 40) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
     }
-    for (double i = 0; i < size.height; i += 40) {
-      canvas.drawLine(Offset(0, i), Offset(size.width, i), paint);
+    for (double y = 0; y < size.height; y += 40) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant CustomPainter _) => false;
 }
