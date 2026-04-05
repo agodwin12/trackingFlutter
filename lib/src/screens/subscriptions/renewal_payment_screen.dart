@@ -1210,7 +1210,7 @@ class _PaymentSheetState extends State<_PaymentSheet> {
           ),
           const SizedBox(height: 20),
 
-          // ── Phone number — hidden, pre-filled from session ──────────────
+          // ── Phone number — hidden, re-filled from session ──────────────
           // The controller holds the local number (e.g. 6XXXXXXXX) and is
           // sent in the request body exactly as before. Visibility(false) +
           // maintainState keeps the controller alive without rendering the
