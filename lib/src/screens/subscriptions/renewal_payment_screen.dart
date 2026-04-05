@@ -714,34 +714,53 @@ class _PaymentSheetState extends State<_PaymentSheet> {
   }
 
   Future<void> _submit() async {
-    // Phone is pre-filled from session — no user input required.
-    // Guard in case the session was somehow empty.
+    // Phone safety check
     if (_method == 'MOBILE_MONEY' && _phoneController.text.trim().isEmpty) {
       setState(() => _submitError = _t(_lang,
           'Phone number not found. Please log out and log in again.',
           'Numéro introuvable. Veuillez vous déconnecter puis vous reconnecter.'));
       return;
     }
-    setState(() { _isSubmitting = true; _submitError = null; });
+
+    setState(() {
+      _isSubmitting = true;
+      _submitError = null;
+    });
+
     try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // 🔥 ALWAYS get fresh country code from storage (no async timing issues)
+      final String countryCode =
+          _countryCode ?? prefs.getString('user_country_code') ?? 'CM';
+
       final isBatch     = _selectedVehicleIds.length > 1;
       final apiProvider = _kProviderCodes[_provider] ?? _provider;
 
       final Map<String, dynamic> body = {
         'plan_id': widget.plan.id,
         'method':  _method,
-        if (_method == 'MOBILE_MONEY') 'provider':     apiProvider,
-        if (_method == 'MOBILE_MONEY') 'phone_number': _phoneController.text.trim(),
-        if (_method == 'MOBILE_MONEY' && _countryCode != null)
-          'country_code': _countryCode,
+
+        if (_method == 'MOBILE_MONEY') 'provider': apiProvider,
+        if (_method == 'MOBILE_MONEY')
+          'phone_number': _phoneController.text.trim(),
+
+        // ✅ ALWAYS INCLUDED NOW
+        if (_method == 'MOBILE_MONEY')
+          'country_code': countryCode,
       };
+
+      // 🕵️ Debug log (optional but powerful)
+      debugPrint("🚀 PAYMENT BODY: $body");
 
       final Map<String, dynamic> result = isBatch
           ? await ApiService.post('/payments/initiate-batch', body: {
-        ...body, 'vehicle_ids': _selectedVehicleIds,
+        ...body,
+        'vehicle_ids': _selectedVehicleIds,
       })
           : await ApiService.post('/payments/initiate', body: {
-        ...body, 'vehicle_id': _selectedVehicleIds.first,
+        ...body,
+        'vehicle_id': _selectedVehicleIds.first,
       });
 
       if (!mounted) return;
@@ -770,9 +789,10 @@ class _PaymentSheetState extends State<_PaymentSheet> {
           );
         }
       } else {
-        setState(() => _submitError = result['message']?.toString() ??
-            _t(_lang, 'Payment initiation failed.',
-                'Échec de l\'initiation du paiement.'));
+        setState(() => _submitError =
+            result['message']?.toString() ??
+                _t(_lang, 'Payment initiation failed.',
+                    'Échec de l\'initiation du paiement.'));
       }
     } catch (e) {
       setState(() => _submitError = _t(_lang,
