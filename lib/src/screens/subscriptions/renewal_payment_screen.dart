@@ -806,9 +806,12 @@ class _PaymentSheetState extends State<_PaymentSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+
     return Padding(
-      padding:
-      EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      padding: EdgeInsets.only(
+        bottom: mediaQuery.viewInsets.bottom + mediaQuery.padding.bottom + 12,
+      ),
       child: Container(
         decoration: const BoxDecoration(
           color: Colors.white,

@@ -205,7 +205,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
         }
 
         try {
-          await FCMService.retryPendingToken();
+          await NotificationService.registerToken();
         } catch (e) {
           debugPrint('⚠️ FCM retry failed: $e');
         }

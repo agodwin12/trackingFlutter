@@ -255,7 +255,6 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
                   children: [
                     if (!_hasError) WebViewWidget(controller: _controller),
                     if (_hasError) _buildErrorState(),
-                    if (_isLoading && !_hasError) _buildLoadingOverlay(),
                   ],
                 ),
               ),

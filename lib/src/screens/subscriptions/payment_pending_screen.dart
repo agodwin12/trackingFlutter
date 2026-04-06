@@ -129,7 +129,7 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
 
     // Step 2 — show success checkmark for 1.5 s
     setState(() => _showSuccess = true);
-    await Future.delayed(const Duration(milliseconds: 1500));
+    await Future.delayed(const Duration(seconds: 5));
     if (!mounted) return;
 
     // Step 3 — signal the dashboard (bypasses the broken pop-result chain)
