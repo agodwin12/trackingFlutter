@@ -41,15 +41,17 @@ class _ModernDashboardState extends State<ModernDashboard>
   Animation<double>? _latAnimation;
   Animation<double>? _lngAnimation;
   Animation<double>? _rotationAnimation;
-  double _currentMarkerLat = 4.0734;
-  double _currentMarkerLng = 9.7740;
+  double _currentMarkerLat = 4.0511;
+  double _currentMarkerLng = 9.7679;
   double _currentRotation  = 0.0;
 
-  // ─── locked-button palette ────────────────────────────────────────────────
-  // Grey background with fully-opaque black text so labels are always readable.
-  static const Color _lockedBg   = Color(0xFFEEEEEE);
-  static const Color _lockedText = Colors.black;
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Locked-button palette ──────────────────────────────────────────────────
+  // Solid grey background, fully-opaque regular-weight black icon + label.
+  // No opacity wrapper on the container — the grey itself signals disabled.
+  static const Color _lockedBg     = Color(0xFFE0E0E0); // medium grey fill
+  static const Color _lockedIconBg = Color(0xFFF5F5F5); // slightly lighter inner circle
+  static const Color _lockedText   = Color(0xFF212121); // near-black, readable
+  // ──────────────────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -146,10 +148,8 @@ class _ModernDashboardState extends State<ModernDashboard>
 
   void _animateMarkerToNewPosition(double newLat, double newLng) {
     final distance   = _calculateDistance(_currentMarkerLat, _currentMarkerLng, newLat, newLng);
-    final durationMs = distance < 10
-        ? 500
-        : distance < 100
-        ? (1000 + distance * 10).clamp(1000, 2000).toInt()
+    final durationMs = distance < 10 ? 500
+        : distance < 100 ? (1000 + distance * 10).clamp(1000, 2000).toInt()
         : 2500;
     final bearing = _calculateBearing(_currentMarkerLat, _currentMarkerLng, newLat, newLng);
 
@@ -247,8 +247,6 @@ class _ModernDashboardState extends State<ModernDashboard>
     ));
   }
 
-  // Full refresh: reloadVehicles (API vehicles + subscriptions) then
-  // refresh (location, engine, geofence, safe zone, notifications).
   Future<void> _handleFullRefresh() async {
     if (_controller == null || _controller!.isOffline) return;
     await _controller!.reloadVehicles();
@@ -272,8 +270,6 @@ class _ModernDashboardState extends State<ModernDashboard>
     ));
   }
 
-  // Called by ApiService._handleLogout() via NotificationService.navigatorKey
-  // when the refresh token is expired and the session is unrecoverable.
   static void redirectToLogin() {
     NotificationService.navigatorKey.currentState
         ?.pushNamedAndRemoveUntil('/login', (route) => false);
@@ -302,7 +298,9 @@ class _ModernDashboardState extends State<ModernDashboard>
     final title    = alertData['title'] ??
         (_selectedLanguage == 'en' ? 'Safe Zone Alert' : 'Alerte zone sécurisée');
     final message  = alertData['message'] ??
-        (_selectedLanguage == 'en' ? 'Vehicle left safe zone' : 'Véhicule a quitté la zone sécurisée');
+        (_selectedLanguage == 'en'
+            ? 'Vehicle left safe zone'
+            : 'Véhicule a quitté la zone sécurisée');
     final severity = alertData['severity'] ?? 'warning';
     final Color bgColor;
     final IconData icon;
@@ -336,13 +334,14 @@ class _ModernDashboardState extends State<ModernDashboard>
                     color: Colors.white, fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
             Text(message,
-                style: AppTypography.body2.copyWith(
-                    color: Colors.white.withOpacity(0.95))),
+                style: AppTypography.body2
+                    .copyWith(color: Colors.white.withOpacity(0.95))),
           ],
         ),
         actions: [
           TextButton.icon(
-            onPressed: () => ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
+            onPressed: () =>
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
             icon:  const Icon(Icons.close_rounded, color: Colors.white, size: 18),
             label: Text(
               _selectedLanguage == 'en' ? 'DISMISS' : 'FERMER',
@@ -384,7 +383,9 @@ class _ModernDashboardState extends State<ModernDashboard>
         ),
       ]),
       backgroundColor: success
-          ? (_controller!.geofenceEnabled ? const Color(0xFF10B981) : const Color(0xFF64748B))
+          ? (_controller!.geofenceEnabled
+          ? const Color(0xFF10B981)
+          : const Color(0xFF64748B))
           : AppColors.error,
       behavior: SnackBarBehavior.floating,
       duration: const Duration(seconds: 2),
@@ -668,7 +669,6 @@ class _ModernDashboardState extends State<ModernDashboard>
           if (controller.isLoading || controller.selectedVehicle == null) {
             return const DashboardSkeleton();
           }
-
           final bool locked = !controller.hasActiveSubscription;
 
           return Scaffold(
@@ -732,9 +732,7 @@ class _ModernDashboardState extends State<ModernDashboard>
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                _selectedLanguage == 'en'
-                                    ? 'Updating...'
-                                    : 'Mise à jour...',
+                                _selectedLanguage == 'en' ? 'Updating...' : 'Mise à jour...',
                                 style: const TextStyle(fontSize: 11, color: Colors.black54),
                               ),
                             ],
@@ -763,7 +761,8 @@ class _ModernDashboardState extends State<ModernDashboard>
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))],
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4, offset: const Offset(0, 2))],
       ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -856,7 +855,8 @@ class _ModernDashboardState extends State<ModernDashboard>
               color:        Colors.white,
               borderRadius: BorderRadius.circular(20),
               boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 2))],
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8, offset: const Offset(0, 2))],
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               const Icon(Icons.directions_car, color: Colors.black87, size: 18),
@@ -894,7 +894,8 @@ class _ModernDashboardState extends State<ModernDashboard>
           decoration: BoxDecoration(
             color: Colors.white, shape: BoxShape.circle,
             boxShadow: [BoxShadow(
-                color: Colors.black.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 2))],
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 8, offset: const Offset(0, 2))],
           ),
           child: const Icon(Icons.layers, color: Colors.black87, size: 20),
         ),
@@ -912,10 +913,12 @@ class _ModernDashboardState extends State<ModernDashboard>
           decoration: BoxDecoration(
             color: Colors.white, shape: BoxShape.circle,
             boxShadow: [BoxShadow(
-                color: Colors.black.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 2))],
+                color: Colors.black.withOpacity(0.15),
+                blurRadius: 8, offset: const Offset(0, 2))],
           ),
           child: Icon(Icons.my_location_rounded,
-              color: _userHasMovedMap ? const Color(0xFF1A73E8) : Colors.black38, size: 20),
+              color: _userHasMovedMap ? const Color(0xFF1A73E8) : Colors.black38,
+              size: 20),
         ),
       ),
     );
@@ -938,7 +941,8 @@ class _ModernDashboardState extends State<ModernDashboard>
                   : (controller.engineOn ? Colors.white : const Color(0xFFEF4444)),
               shape: BoxShape.circle,
               boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 2))],
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8, offset: const Offset(0, 2))],
             ),
             child: controller.isTogglingEngine
                 ? SizedBox(
@@ -975,7 +979,8 @@ class _ModernDashboardState extends State<ModernDashboard>
               color: locked ? const Color(0xFFB0B0B0) : const Color(0xFFEF4444),
               shape: BoxShape.circle,
               boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 2))],
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8, offset: const Offset(0, 2))],
             ),
             child: controller.isReportingStolen
                 ? const Padding(
@@ -1047,14 +1052,15 @@ class _ModernDashboardState extends State<ModernDashboard>
                       onTap:  () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => TripsScreen(vehicleId: controller.selectedVehicleId),
+                          builder: (_) =>
+                              TripsScreen(vehicleId: controller.selectedVehicleId),
                         ),
                       ),
                     ),
                   ),
                 ]),
 
-                // No-subscription banner — only when selected vehicle is locked
+                // No-subscription banner
                 if (locked) ...[
                   const SizedBox(height: 10),
                   GestureDetector(
@@ -1065,7 +1071,8 @@ class _ModernDashboardState extends State<ModernDashboard>
                       decoration: BoxDecoration(
                         color:        AppColors.error.withOpacity(0.10),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.error.withOpacity(0.35), width: 1),
+                        border: Border.all(
+                            color: AppColors.error.withOpacity(0.35), width: 1),
                       ),
                       child: Row(children: [
                         Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 16),
@@ -1082,7 +1089,8 @@ class _ModernDashboardState extends State<ModernDashboard>
                             ),
                           ),
                         ),
-                        Icon(Icons.arrow_forward_ios_rounded, color: AppColors.error, size: 12),
+                        Icon(Icons.arrow_forward_ios_rounded,
+                            color: AppColors.error, size: 12),
                       ]),
                     ),
                   ),
@@ -1096,7 +1104,8 @@ class _ModernDashboardState extends State<ModernDashboard>
   }
 
   // ── Feature button (Geofence / Safe Zone) ──────────────────────────────────
-  // locked  → solid _lockedBg (#EEEEEE) with bold black icon + text
+  // locked  → solid grey (#E0E0E0), white inner square, regular-weight black text/icon
+  //           NO opacity wrapper — grey itself signals disabled state
   // unlocked → glassmorphic with coloured status dot
   Widget _buildFeatureButton({
     required IconData     icon,
@@ -1117,13 +1126,14 @@ class _ModernDashboardState extends State<ModernDashboard>
           color: locked ? _lockedBg : Colors.white.withOpacity(0.25),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: locked ? Colors.grey.shade400 : Colors.white.withOpacity(0.5),
+            // Slightly darker border when locked so the button edge is visible
+            color: locked ? const Color(0xFFBDBDBD) : Colors.white.withOpacity(0.5),
             width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
-              color:      Colors.black.withOpacity(locked ? 0.06 : 0.10),
-              blurRadius: 8,
+              color:      Colors.black.withOpacity(0.07),
+              blurRadius: 6,
               offset:     const Offset(0, 2),
             ),
           ],
@@ -1133,18 +1143,26 @@ class _ModernDashboardState extends State<ModernDashboard>
             Container(
               width: 36, height: 36,
               decoration: BoxDecoration(
-                color:        locked ? Colors.white : Colors.white.withOpacity(0.35),
+                // Inner square: white when locked, translucent white when unlocked
+                color:        locked ? _lockedIconBg : Colors.white.withOpacity(0.35),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: isLoading
                   ? const Center(
                 child: SizedBox(
                   width: 18, height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black87),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.black54),
                 ),
               )
-                  : Icon(icon, color: locked ? _lockedText : Colors.black87, size: 20),
+                  : Icon(
+                icon,
+                // Regular weight black — not bold, fully visible on grey
+                color: locked ? _lockedText : Colors.black87,
+                size: 20,
+              ),
             ),
+            // Status dot only when unlocked
             if (!locked)
               Positioned(
                 top: -2, right: -2,
@@ -1171,7 +1189,8 @@ class _ModernDashboardState extends State<ModernDashboard>
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize:   11,
-                fontWeight: FontWeight.w700,
+                // Regular weight (w400) — not bold — as requested
+                fontWeight: locked ? FontWeight.w400 : FontWeight.w700,
                 color:      locked ? _lockedText : Colors.black87,
                 height:     1.1,
               ),
@@ -1185,7 +1204,7 @@ class _ModernDashboardState extends State<ModernDashboard>
   }
 
   // ── Action button (Trip History) ──────────────────────────────────────────
-  // locked  → solid _lockedBg with bold black icon + text
+  // locked  → same grey treatment, regular-weight black text/icon
   // unlocked → AppColors.primary fill
   Widget _buildActionButton({
     required IconData     icon,
@@ -1201,15 +1220,15 @@ class _ModernDashboardState extends State<ModernDashboard>
           color: locked ? _lockedBg : AppColors.primary,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: locked ? Colors.grey.shade400 : AppColors.primary.withOpacity(0.8),
+            color: locked ? const Color(0xFFBDBDBD) : AppColors.primary.withOpacity(0.8),
             width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
               color: locked
-                  ? Colors.black.withOpacity(0.06)
+                  ? Colors.black.withOpacity(0.07)
                   : AppColors.primary.withOpacity(0.4),
-              blurRadius: 8,
+              blurRadius: 6,
               offset:     const Offset(0, 2),
             ),
           ],
@@ -1218,10 +1237,15 @@ class _ModernDashboardState extends State<ModernDashboard>
           Container(
             width: 36, height: 36,
             decoration: BoxDecoration(
-              color:        locked ? Colors.white : Colors.white.withOpacity(0.2),
+              color:        locked ? _lockedIconBg : Colors.white.withOpacity(0.2),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: locked ? _lockedText : Colors.white, size: 20),
+            child: Icon(
+              icon,
+              // Regular weight black when locked
+              color: locked ? _lockedText : Colors.white,
+              size: 20,
+            ),
           ),
           const SizedBox(height: 6),
           Flexible(
@@ -1230,7 +1254,7 @@ class _ModernDashboardState extends State<ModernDashboard>
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize:   11,
-                fontWeight: FontWeight.w700,
+                fontWeight: locked ? FontWeight.w400 : FontWeight.w700,
                 color:      locked ? _lockedText : Colors.white,
                 height:     1.1,
               ),
@@ -1254,7 +1278,8 @@ class _ModernDashboardState extends State<ModernDashboard>
     return SafeArea(
       bottom: true,
       child: Container(
-        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
+        constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.55),
         decoration: const BoxDecoration(
           color:        Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -1283,7 +1308,8 @@ class _ModernDashboardState extends State<ModernDashboard>
               shrinkWrap: true,
               padding: EdgeInsets.only(top: 4, bottom: bottomInset + 12),
               itemCount: _controller!.vehicles.length,
-              separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade100),
+              separatorBuilder: (_, __) =>
+                  Divider(height: 1, color: Colors.grey.shade100),
               itemBuilder: (context, index) {
                 final vehicle    = _controller!.vehicles[index];
                 final isSelected = vehicle.id == _controller!.selectedVehicleId;
@@ -1296,7 +1322,8 @@ class _ModernDashboardState extends State<ModernDashboard>
                       final displayName = vehicle.nickname?.isNotEmpty == true
                           ? vehicle.nickname as String
                           : vehicle.immatriculation;
-                      await prefs.setString('vehicle_name_${vehicle.id}', displayName);
+                      await prefs.setString(
+                          'vehicle_name_${vehicle.id}', displayName);
                       await prefs.setString('current_vehicle_name', displayName);
                     } catch (e) {
                       debugPrint('⚠️ Error saving vehicle ID: $e');
@@ -1318,7 +1345,9 @@ class _ModernDashboardState extends State<ModernDashboard>
                         : Colors.transparent,
                     child: Row(children: [
                       Icon(Icons.directions_car,
-                          color: isSelected ? AppColors.primary : Colors.grey.shade600,
+                          color: isSelected
+                              ? AppColors.primary
+                              : Colors.grey.shade600,
                           size: 20),
                       const SizedBox(width: 12),
                       Expanded(
@@ -1332,7 +1361,7 @@ class _ModernDashboardState extends State<ModernDashboard>
                               style: TextStyle(
                                 fontSize:   14,
                                 fontWeight: FontWeight.w600,
-                                color:      isSelected ? AppColors.primary : Colors.black87,
+                                color: isSelected ? AppColors.primary : Colors.black87,
                               ),
                             ),
                             const SizedBox(height: 2),
@@ -1340,13 +1369,15 @@ class _ModernDashboardState extends State<ModernDashboard>
                               vehicle.nickname?.isNotEmpty == true
                                   ? '${vehicle.brand} ${vehicle.model} — ${vehicle.immatriculation}'
                                   : vehicle.immatriculation,
-                              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                              style: TextStyle(
+                                  fontSize: 12, color: Colors.grey.shade600),
                             ),
                           ],
                         ),
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: vehicle.hasActiveSubscription
                               ? const Color(0xFF10B981).withOpacity(0.1)
@@ -1403,7 +1434,8 @@ class _ModernDashboardState extends State<ModernDashboard>
     );
   }
 
-  Widget _buildSimpleIconButton({required Widget icon, required VoidCallback? onTap}) {
+  Widget _buildSimpleIconButton(
+      {required Widget icon, required VoidCallback? onTap}) {
     return GestureDetector(
       onTap: onTap,
       child: Container(padding: const EdgeInsets.all(6), child: icon),

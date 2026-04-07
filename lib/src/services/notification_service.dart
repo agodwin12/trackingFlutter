@@ -14,6 +14,13 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     await Firebase.initializeApp();
     debugPrint('📩 Background message: ${message.notification?.title}');
+    await NotificationService.addDebugLog(
+      'Background handler received message: '
+          'title=${message.notification?.title} '
+          'body=${message.notification?.body} '
+          'data=${message.data}',
+    );
+
     if (message.notification != null) {
       await NotificationService.showNotification(
         title: message.notification!.title ?? 'Notification',
@@ -23,11 +30,16 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
   } catch (e) {
     debugPrint('⚠️ Background handler error: $e');
+    await NotificationService.addDebugLog(
+      'Background handler error: $e',
+    );
   }
 }
 
 class NotificationService {
-  static final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
+  static final FirebaseMessaging _firebaseMessaging =
+      FirebaseMessaging.instance;
+
   static final FlutterLocalNotificationsPlugin _localNotifications =
   FlutterLocalNotificationsPlugin();
 
@@ -38,19 +50,66 @@ class NotificationService {
   static final GlobalKey<NavigatorState> navigatorKey =
   GlobalKey<NavigatorState>();
 
+  static const String _debugLogsKey = 'notification_debug_logs';
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DEBUG HELPERS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static Future<void> addDebugLog(String message) async {
+    final line = '${DateTime.now().toIso8601String()} | $message';
+    debugPrint('🔍 PUSH DEBUG: $line');
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final logs = prefs.getStringList(_debugLogsKey) ?? <String>[];
+      logs.add(line);
+
+      if (logs.length > 300) {
+        logs.removeRange(0, logs.length - 300);
+      }
+
+      await prefs.setStringList(_debugLogsKey, logs);
+    } catch (_) {}
+  }
+
+  static Future<List<String>> getDebugLogs() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_debugLogsKey) ?? <String>[];
+  }
+
+  static Future<void> clearDebugLogs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_debugLogsKey);
+  }
+
+  static Future<void> printDebugLogs() async {
+    final logs = await getDebugLogs();
+    debugPrint('🔍 PUSH DEBUG DUMP START (${logs.length} lines)');
+    for (final line in logs) {
+      debugPrint('🔍 PUSH DEBUG: $line');
+    }
+    debugPrint('🔍 PUSH DEBUG DUMP END');
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // INITIALIZE
   // ─────────────────────────────────────────────────────────────────────────
 
   static Future<void> initialize() async {
-    if (_initialized) return;
+    if (_initialized) {
+      await addDebugLog('initialize() skipped: already initialized');
+      return;
+    }
 
     try {
-      debugPrint('🔔 Initializing notification service...');
+      await addDebugLog('NotificationService.initialize() started');
 
       await _initializeLocalNotifications();
+      await addDebugLog('Local notifications initialized');
 
       try {
+        await addDebugLog('Requesting notification permission...');
         final settings = await _firebaseMessaging.requestPermission(
           alert: true,
           badge: true,
@@ -62,9 +121,20 @@ class NotificationService {
         );
 
         debugPrint('📋 Permission: ${settings.authorizationStatus}');
+        await addDebugLog(
+          'Permission status: ${settings.authorizationStatus}',
+        );
 
-        if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+        if (settings.authorizationStatus == AuthorizationStatus.authorized ||
+            settings.authorizationStatus ==
+                AuthorizationStatus.provisional) {
+          await addDebugLog('Permission accepted, continuing token flow');
+
           if (defaultTargetPlatform == TargetPlatform.iOS) {
+            await addDebugLog(
+              'iOS detected: setting foreground notification presentation options',
+            );
+
             await _firebaseMessaging.setForegroundNotificationPresentationOptions(
               alert: true,
               badge: true,
@@ -73,21 +143,30 @@ class NotificationService {
 
             String? apnsToken;
             for (int i = 0; i < 10; i++) {
+              await addDebugLog('Waiting for APNs token... attempt ${i + 1}/10');
               apnsToken = await _firebaseMessaging.getAPNSToken();
+
               if (apnsToken != null && apnsToken.isNotEmpty) {
                 debugPrint('✅ APNs token available');
+                await addDebugLog(
+                  'APNs token available: ${apnsToken.substring(0, apnsToken.length > 20 ? 20 : apnsToken.length)}...',
+                );
                 break;
               }
-              debugPrint('⏳ Waiting for APNs token...');
+
               await Future.delayed(const Duration(seconds: 1));
             }
 
             if (apnsToken == null || apnsToken.isEmpty) {
               debugPrint('⚠️ APNs token still not available yet');
+              await addDebugLog(
+                'APNs token still unavailable after 10 attempts',
+              );
             }
           }
 
           try {
+            await addDebugLog('Requesting FCM token from Firebase...');
             final token = await _firebaseMessaging.getToken().timeout(
               const Duration(seconds: 15),
               onTimeout: () {
@@ -101,66 +180,109 @@ class NotificationService {
               _firebaseAvailable = true;
               debugPrint('✅ FCM token received (${token.length} chars)');
 
+              await addDebugLog(
+                'FCM token received: ${token.substring(0, token.length > 25 ? 25 : token.length)}...',
+              );
+
               final prefs = await SharedPreferences.getInstance();
               await prefs.setString('fcm_token', token);
+              await addDebugLog('Saved token to SharedPreferences: fcm_token');
 
               await _registerTokenWithBackend(token);
             } else {
               debugPrint('❌ FCM token null or empty');
               _firebaseAvailable = false;
+              await addDebugLog('FCM token result is null or empty');
             }
 
             _firebaseMessaging.onTokenRefresh.listen((newToken) async {
               debugPrint('🔄 FCM token refreshed');
+              await addDebugLog(
+                'onTokenRefresh fired: ${newToken.substring(0, newToken.length > 25 ? 25 : newToken.length)}...',
+              );
+
               _fcmToken = newToken;
 
               final prefs = await SharedPreferences.getInstance();
               await prefs.setString('fcm_token', newToken);
+              await addDebugLog(
+                'Saved refreshed token to SharedPreferences: fcm_token',
+              );
 
               await _registerTokenWithBackend(newToken);
-            }, onError: (e) {
+            }, onError: (e) async {
               debugPrint('❌ Token refresh error: $e');
+              await addDebugLog('Token refresh listener error: $e');
             });
 
             FirebaseMessaging.onBackgroundMessage(
               firebaseMessagingBackgroundHandler,
             );
+            await addDebugLog('Background message handler attached');
 
             FirebaseMessaging.onMessage.listen((message) {
               debugPrint('📨 Foreground: ${message.notification?.title}');
+              addDebugLog(
+                'Foreground message received: '
+                    'title=${message.notification?.title} '
+                    'body=${message.notification?.body} '
+                    'data=${message.data}',
+              );
               _handleForegroundMessage(message);
             });
 
             FirebaseMessaging.onMessageOpenedApp.listen((message) {
               debugPrint(
-                  '📬 Opened from notification: ${message.notification?.title}');
+                '📬 Opened from notification: ${message.notification?.title}',
+              );
+              addDebugLog(
+                'Notification opened app: '
+                    'title=${message.notification?.title} '
+                    'data=${message.data}',
+              );
               _handleNotificationTap(message);
             });
 
             final initial = await _firebaseMessaging.getInitialMessage();
             if (initial != null) {
               debugPrint(
-                  '📬 Launched from notification: ${initial.notification?.title}');
+                '📬 Launched from notification: ${initial.notification?.title}',
+              );
+              await addDebugLog(
+                'App launched from notification: '
+                    'title=${initial.notification?.title} '
+                    'data=${initial.data}',
+              );
               _handleNotificationTap(initial);
+            } else {
+              await addDebugLog('No initial notification used to launch app');
             }
           } catch (tokenError) {
             debugPrint('❌ FCM token error: $tokenError');
             _firebaseAvailable = false;
+            await addDebugLog('FCM token error: $tokenError');
           }
         } else {
           debugPrint(
-              '⚠️ Permission not granted: ${settings.authorizationStatus}');
+            '⚠️ Permission not granted: ${settings.authorizationStatus}',
+          );
+          await addDebugLog(
+            'Permission not granted: ${settings.authorizationStatus}',
+          );
         }
       } catch (firebaseError) {
         debugPrint('❌ Firebase error: $firebaseError');
         _firebaseAvailable = false;
+        await addDebugLog('Firebase error during initialize(): $firebaseError');
       }
 
       _initialized = true;
       debugPrint('✅ Notification service initialized');
+      await addDebugLog('NotificationService.initialize() completed');
     } catch (e) {
       debugPrint('❌ Critical notification init error: $e');
       _initialized = true;
+      await addDebugLog('Critical initialize() error: $e');
     }
   }
 
@@ -171,6 +293,7 @@ class NotificationService {
   static Future<void> _initializeLocalNotifications() async {
     const androidSettings =
     AndroidInitializationSettings('@mipmap/ic_launcher');
+
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -185,12 +308,18 @@ class NotificationService {
       onDidReceiveNotificationResponse: (response) {
         if (response.payload != null) {
           try {
+            addDebugLog(
+              'Local notification tapped with payload: ${response.payload}',
+            );
             _handleLocalNotificationTap(
               jsonDecode(response.payload!) as Map<String, dynamic>,
             );
           } catch (e) {
             debugPrint('⚠️ Error parsing notification payload: $e');
+            addDebugLog('Error parsing local notification payload: $e');
           }
+        } else {
+          addDebugLog('Local notification tapped with empty payload');
         }
       },
     );
@@ -202,22 +331,38 @@ class NotificationService {
 
   static Future<void> _registerTokenWithBackend(String token) async {
     try {
+      await addDebugLog(
+        'Starting _registerTokenWithBackend() with token prefix: '
+            '${token.substring(0, token.length > 25 ? 25 : token.length)}...',
+      );
+
       final prefs = await SharedPreferences.getInstance();
       final authToken = prefs.getString('accessToken');
 
       await prefs.setString('fcm_token', token);
+      await addDebugLog('Ensured token saved in SharedPreferences: fcm_token');
 
       if (authToken == null) {
         await prefs.setString('pending_fcm_token', token);
         debugPrint('⏳ FCM token saved as pending (no auth token yet)');
+        await addDebugLog(
+          'No accessToken found. Saved token as pending_fcm_token',
+        );
         return;
       }
 
+      await addDebugLog(
+        'accessToken found. Sending token to backend. '
+            'device_type=${defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android'}',
+      );
+
+      final url = '${EnvConfig.baseUrl}/notifications/register-token';
       debugPrint('📤 Registering FCM token with backend...');
+      await addDebugLog('POST $url');
 
       final response = await http
           .post(
-        Uri.parse('${EnvConfig.baseUrl}/notifications/register-token'),
+        Uri.parse(url),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $authToken',
@@ -225,29 +370,49 @@ class NotificationService {
         body: jsonEncode({
           'token': token,
           'device_type':
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+          defaultTargetPlatform == TargetPlatform.iOS
+              ? 'ios'
+              : 'android',
           'device_id': null,
         }),
       )
           .timeout(const Duration(seconds: 10));
 
+      await addDebugLog(
+        'Backend response status: ${response.statusCode}',
+      );
+      await addDebugLog(
+        'Backend response body: ${response.body}',
+      );
+
       if (response.statusCode == 200 || response.statusCode == 201) {
         await prefs.setString('registered_fcm_token', token);
         await prefs.remove('pending_fcm_token');
         debugPrint('✅ FCM token registered with backend');
+        await addDebugLog(
+          'Token registration successful. '
+              'Saved registered_fcm_token and removed pending_fcm_token',
+        );
       } else {
         await prefs.setString('pending_fcm_token', token);
         debugPrint(
           '❌ FCM token registration failed (${response.statusCode}) — saved as pending',
         );
         debugPrint('Response body: ${response.body}');
+        await addDebugLog(
+          'Token registration failed. Saved token as pending_fcm_token',
+        );
       }
     } catch (e) {
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('pending_fcm_token', token);
       } catch (_) {}
+
       debugPrint('❌ FCM token registration error: $e — saved as pending');
+      await addDebugLog(
+        'Token registration exception: $e. Saved token as pending_fcm_token',
+      );
     }
   }
 
@@ -260,11 +425,17 @@ class NotificationService {
 
     if (token == null || token.isEmpty) {
       debugPrint('⚠️ registerToken: no FCM token available to register');
+      await addDebugLog(
+        'registerToken() found no token in _fcmToken / fcm_token / pending_fcm_token',
+      );
       return;
     }
 
     _fcmToken = token;
     await prefs.setString('fcm_token', token);
+    await addDebugLog(
+      'registerToken() picked token and saved it to fcm_token',
+    );
 
     await _registerTokenWithBackend(token);
   }
@@ -273,13 +444,25 @@ class NotificationService {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      final tokenToUnregister =
-          _fcmToken ?? prefs.getString('fcm_token') ?? prefs.getString('registered_fcm_token');
+      final tokenToUnregister = _fcmToken ??
+          prefs.getString('fcm_token') ??
+          prefs.getString('registered_fcm_token');
 
-      if (tokenToUnregister == null || tokenToUnregister.isEmpty) return;
+      if (tokenToUnregister == null || tokenToUnregister.isEmpty) {
+        await addDebugLog('unregisterToken() skipped: no token found');
+        return;
+      }
 
       final authToken = prefs.getString('accessToken');
-      if (authToken == null) return;
+      if (authToken == null) {
+        await addDebugLog('unregisterToken() skipped: no accessToken found');
+        return;
+      }
+
+      await addDebugLog(
+        'Sending unregister request to backend for token prefix: '
+            '${tokenToUnregister.substring(0, tokenToUnregister.length > 25 ? 25 : tokenToUnregister.length)}...',
+      );
 
       final response = await http.post(
         Uri.parse('${EnvConfig.baseUrl}/notifications/unregister-token'),
@@ -290,15 +473,25 @@ class NotificationService {
         body: jsonEncode({'token': tokenToUnregister}),
       );
 
+      await addDebugLog(
+        'Unregister response status: ${response.statusCode}',
+      );
+
       if (response.statusCode == 200) {
         _fcmToken = null;
         await prefs.remove('registered_fcm_token');
         await prefs.remove('pending_fcm_token');
         await prefs.remove('fcm_token');
         debugPrint('✅ FCM token unregistered');
+        await addDebugLog('Token unregistered successfully');
+      } else {
+        await addDebugLog(
+          'Token unregister failed with status ${response.statusCode}',
+        );
       }
     } catch (e) {
       debugPrint('❌ FCM token unregistration error: $e');
+      await addDebugLog('unregisterToken() error: $e');
     }
   }
 
@@ -360,6 +553,8 @@ class NotificationService {
     final type = data['type'] as String?;
     final context = navigatorKey.currentContext;
     debugPrint('👆 Notification tapped | type: $type');
+
+    addDebugLog('Notification tapped | type=$type | data=$data');
 
     switch (type) {
       case 'payment_success':
@@ -560,13 +755,13 @@ class NotificationService {
 
   static void _handleGeofenceAlert(Map<String, dynamic> data) {
     final vehicleId = int.tryParse(data['vehicleId']?.toString() ?? '');
-    final vehicleName =
-        data['vehicleName'] as String? ?? 'Your vehicle';
+    final vehicleName = data['vehicleName'] as String? ?? 'Your vehicle';
     final latitude = double.tryParse(data['latitude']?.toString() ?? '');
     final longitude = double.tryParse(data['longitude']?.toString() ?? '');
 
     if (vehicleId == null || latitude == null || longitude == null) {
       debugPrint('❌ Invalid geofence alert data');
+      addDebugLog('Invalid geofence alert data: $data');
       return;
     }
 
@@ -710,17 +905,16 @@ class NotificationService {
 
       if (context.mounted) Navigator.of(context).pop();
 
-      final success = response.statusCode == 200 &&
-          (() {
-            try {
-              final d = jsonDecode(response.body);
-              return d['success'] == true ||
-                  (d['response'] is Map &&
-                      d['response']['success'] == 'true');
-            } catch (_) {
-              return false;
-            }
-          })();
+      final success = response.statusCode == 200 && (() {
+        try {
+          final d = jsonDecode(response.body);
+          return d['success'] == true ||
+              (d['response'] is Map &&
+                  d['response']['success'] == 'true');
+        } catch (_) {
+          return false;
+        }
+      })();
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -748,6 +942,7 @@ class NotificationService {
       }
     } catch (e) {
       debugPrint('❌ Error disabling engine: $e');
+      addDebugLog('Error disabling engine: $e');
       if (context.mounted && Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
       }
@@ -792,8 +987,13 @@ class NotificationService {
         ),
         payload: payload,
       );
+
+      await addDebugLog(
+        'Local notification shown: title=$title body=$body payload=$payload',
+      );
     } catch (e) {
       debugPrint('❌ Error showing local notification: $e');
+      await addDebugLog('Error showing local notification: $e');
     }
   }
 
@@ -862,11 +1062,16 @@ class NotificationService {
 
   static Future<void> sendTestNotification() async {
     try {
+      await addDebugLog('sendTestNotification() called');
+
       if (_firebaseAvailable) {
         final prefs = await SharedPreferences.getInstance();
         final authToken = prefs.getString('accessToken');
 
         if (authToken == null) {
+          await addDebugLog(
+            'sendTestNotification(): no accessToken, showing local fallback',
+          );
           await _showLocalNotification(
             title: '🔔 Test Notification',
             body: 'This is a local test notification!',
@@ -887,6 +1092,10 @@ class NotificationService {
           }),
         );
 
+        await addDebugLog(
+          'sendTestNotification() backend status: ${response.statusCode}',
+        );
+
         if (response.statusCode != 200) {
           await _showLocalNotification(
             title: '🔔 Test Notification',
@@ -895,6 +1104,9 @@ class NotificationService {
           );
         }
       } else {
+        await addDebugLog(
+          'sendTestNotification(): Firebase unavailable, showing local notification',
+        );
         await _showLocalNotification(
           title: '🔔 Test Notification',
           body: 'This is a local test notification!',
@@ -903,6 +1115,7 @@ class NotificationService {
       }
     } catch (e) {
       debugPrint('❌ sendTestNotification error: $e');
+      await addDebugLog('sendTestNotification() error: $e');
     }
   }
 
@@ -913,21 +1126,32 @@ class NotificationService {
   static Future<bool> areNotificationsEnabled() async {
     try {
       final settings = await _firebaseMessaging.getNotificationSettings();
-      return settings.authorizationStatus == AuthorizationStatus.authorized;
-    } catch (_) {
+      await addDebugLog(
+        'areNotificationsEnabled(): ${settings.authorizationStatus}',
+      );
+      return settings.authorizationStatus == AuthorizationStatus.authorized ||
+          settings.authorizationStatus == AuthorizationStatus.provisional;
+    } catch (e) {
+      await addDebugLog('areNotificationsEnabled() error: $e');
       return false;
     }
   }
 
   static Future<bool> requestPermissions() async {
     try {
+      await addDebugLog('requestPermissions() called');
       final settings = await _firebaseMessaging.requestPermission(
         alert: true,
         badge: true,
         sound: true,
       );
-      return settings.authorizationStatus == AuthorizationStatus.authorized;
-    } catch (_) {
+      await addDebugLog(
+        'requestPermissions() result: ${settings.authorizationStatus}',
+      );
+      return settings.authorizationStatus == AuthorizationStatus.authorized ||
+          settings.authorizationStatus == AuthorizationStatus.provisional;
+    } catch (e) {
+      await addDebugLog('requestPermissions() error: $e');
       return false;
     }
   }

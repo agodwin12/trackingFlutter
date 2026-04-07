@@ -41,24 +41,27 @@ class DashboardController extends ChangeNotifier {
   bool     _isReportingStolen   = false;
   int      _notificationCount   = 0;
   MapType  _currentMapType      = MapType.normal;
-  double   _vehicleLat          = 4.0511;
-  double   _vehicleLng          = 9.7679;
+
+  // Default coords (centre of Cameroon — only used if no cache exists at all)
+  double   _vehicleLat = 5.9631;
+  double   _vehicleLng = 12.3448;
+
   List<Vehicle> _vehicles       = [];
   BitmapDescriptor?    _customCarIcon;
   GoogleMapController? _mapController;
   DateTime? _lastLocationUpdate;
   String   _userType            = 'regular';
 
-  // ─── Safe Zone geometry ────────────────────────────────────────────────────
+  // ─── Safe Zone ─────────────────────────────────────────────────────────────
   SafeZone? _activeSafeZone;
   SafeZone? get activeSafeZone => _activeSafeZone;
 
-  // ─── Battery state ─────────────────────────────────────────────────────────
+  // ─── Battery ───────────────────────────────────────────────────────────────
   int    _batteryPercentage = 0;
   double _batteryVoltage    = 0.0;
   bool   _isLowBattery      = false;
 
-  // ─── Timers / subscriptions ────────────────────────────────────────────────
+  // ─── Timers / streams ──────────────────────────────────────────────────────
   StreamSubscription<Map<String, dynamic>>? _alertSubscription;
   StreamSubscription<Map<String, dynamic>>? _locationSubscription;
   Timer? _cachePollingTimer;
@@ -92,17 +95,13 @@ class DashboardController extends ChangeNotifier {
   String        get userType           => _userType;
   bool          get isChauffeur        => _userType == 'chauffeur';
 
-  // Battery
   int    get batteryPercentage => _batteryPercentage;
   double get batteryVoltage    => _batteryVoltage;
   bool   get isLowBattery      => _isLowBattery;
 
-  // Connectivity
   bool get isOnline  => _connectivityService.isOnline;
   bool get isOffline => _connectivityService.isOffline;
 
-  /// Single source of truth for all 5 gated buttons.
-  /// The dashboard reads this to decide disabled state — no sheet, no callback.
   bool get hasActiveSubscription =>
       selectedVehicle?.hasActiveSubscription ?? false;
 
@@ -118,52 +117,38 @@ class DashboardController extends ChangeNotifier {
     _selectedVehicleId = vehicleId;
   }
 
-  // ─── Parse SafeZone ────────────────────────────────────────────────────────
+  // ─── Helpers ───────────────────────────────────────────────────────────────
   SafeZone? _parseSafeZoneFromMap(Map<String, dynamic>? raw) {
     if (raw == null) return null;
-    try {
-      return SafeZone.fromJson(raw);
-    } catch (e) {
-      debugPrint('⚠️ Failed to parse SafeZone: $e');
-      return null;
-    }
+    try { return SafeZone.fromJson(raw); } catch (e) { return null; }
   }
 
-  // ─── Validate vehicle ID ───────────────────────────────────────────────────
-  Future<void> _validateAndUpdateVehicleId(int requestedVehicleId) async {
+  Future<void> _validateAndUpdateVehicleId(int requestedId) async {
     if (_vehicles.isEmpty) return;
-
-    final exists = _vehicles.any((v) => v.id == requestedVehicleId);
+    final exists = _vehicles.any((v) => v.id == requestedId);
     if (exists) {
-      _selectedVehicleId = requestedVehicleId;
+      _selectedVehicleId = requestedId;
     } else {
       _selectedVehicleId = _vehicles.first.id;
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setInt('current_vehicle_id', _selectedVehicleId);
-      } catch (e) {
-        debugPrint('⚠️ Error updating SharedPreferences: $e');
-      }
+      } catch (_) {}
     }
     notifyListeners();
   }
 
-  // ─── Load user type ────────────────────────────────────────────────────────
   Future<void> _loadUserType() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       _userType = prefs.getString('user_type') ?? 'regular';
-    } catch (e) {
-      _userType = 'regular';
-    }
+    } catch (_) { _userType = 'regular'; }
   }
 
-  // ─── Load vehicles from SharedPreferences ─────────────────────────────────
   Future<bool> _loadVehiclesFromPrefs() async {
     try {
       final prefs        = await SharedPreferences.getInstance();
       final vehiclesJson = prefs.getString('vehicles_list');
-
       if (vehiclesJson != null) {
         final List<dynamic> list = jsonDecode(vehiclesJson);
         if (list.isNotEmpty) {
@@ -183,31 +168,75 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
+  // ── Last known position ────────────────────────────────────────────────────
+  // Called FIRST in initialize(), before any network call.
+  // Sources (in priority order):
+  //   1. CacheService (Redis-backed, per-vehicle, written by fetchCurrentLocation)
+  //   2. vehicles_list in SharedPreferences (written at login — has lat/lng per vehicle)
+  //
+  // This ensures the map always opens on the real last position even when:
+  //   - the user has no active subscription (403 blocks live fetch)
+  //   - the access token is expired (401 blocks live fetch)
+  //   - the device is offline
+  Future<void> _loadLastKnownPosition() async {
+    try {
+      // Source 1: per-vehicle location cache
+      final cached = await _cacheService.getCachedLastLocation(_selectedVehicleId);
+      if (cached != null) {
+        final lat = (cached['lat'] as num?)?.toDouble();
+        final lng = (cached['lng'] as num?)?.toDouble();
+        if (lat != null && lng != null && !(lat == 0.0 && lng == 0.0)) {
+          _vehicleLat         = lat;
+          _vehicleLng         = lng;
+          _lastLocationUpdate = cached['timestamp'] != null
+              ? DateTime.tryParse(cached['timestamp'] as String)
+              : null;
+          debugPrint('📍 [lastKnown] Loaded from cache: $_vehicleLat, $_vehicleLng');
+          return; // got what we need
+        }
+      }
+
+      // Source 2: vehicles_list in SharedPreferences (login snapshot)
+      final prefs = await SharedPreferences.getInstance();
+      final raw   = prefs.getString('vehicles_list');
+      if (raw != null) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        final match = list.cast<Map<String, dynamic>>().firstWhere(
+              (v) => (v['id'] as num?)?.toInt() == _selectedVehicleId,
+          orElse: () => {},
+        );
+        final lat = (match['latitude']  as num?)?.toDouble();
+        final lng = (match['longitude'] as num?)?.toDouble();
+        if (lat != null && lng != null && !(lat == 0.0 && lng == 0.0)) {
+          _vehicleLat = lat;
+          _vehicleLng = lng;
+          debugPrint('📍 [lastKnown] Loaded from vehicles_list prefs: $_vehicleLat, $_vehicleLng');
+          return;
+        }
+      }
+
+      debugPrint('📍 [lastKnown] No cached position — keeping default centre');
+    } catch (e) {
+      debugPrint('⚠️ [lastKnown] Error: $e');
+    }
+  }
+
   // ─── Reload vehicles after successful payment ──────────────────────────────
   Future<void> reloadVehicles() async {
     if (isOffline) return;
-
     _isReloadingVehicles = true;
     notifyListeners();
-
     try {
       final refreshed = await VehiclesRefreshService.refreshVehiclesList();
       if (!refreshed) return;
-
       final prefs   = await SharedPreferences.getInstance();
       final rawJson = prefs.getString('vehicles_list');
       if (rawJson == null) return;
-
       final List<dynamic> raw = jsonDecode(rawJson) as List<dynamic>;
-      _vehicles = raw
-          .map((v) => Vehicle.fromJson(v as Map<String, dynamic>))
-          .toList();
-
-      if (!_vehicles.any((v) => v.id == _selectedVehicleId) &&
-          _vehicles.isNotEmpty) {
+      _vehicles = raw.map((v) => Vehicle.fromJson(v as Map<String, dynamic>)).toList();
+      if (!_vehicles.any((v) => v.id == _selectedVehicleId) && _vehicles.isNotEmpty) {
         _selectedVehicleId = _vehicles.first.id;
       }
-
       await fetchDashboardData();
     } catch (e) {
       debugPrint('❌ reloadVehicles error: $e');
@@ -223,6 +252,11 @@ class DashboardController extends ChangeNotifier {
       await loadCustomMarker();
       await _loadUserType();
 
+      // ↓ Always load the last known position first — before any network call.
+      // This guarantees the map opens on the real location regardless of
+      // subscription status, token validity, or connectivity.
+      await _loadLastKnownPosition();
+
       if (isOffline) {
         await _loadFromCache();
       } else {
@@ -237,7 +271,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ─── Load from cache ───────────────────────────────────────────────────────
+  // ─── Load from cache (offline) ─────────────────────────────────────────────
   Future<void> _loadFromCache() async {
     try {
       final cachedVehicles = await _cacheService.getCachedVehicleList();
@@ -248,20 +282,24 @@ class DashboardController extends ChangeNotifier {
       }
       await _validateAndUpdateVehicleId(_selectedVehicleId);
 
-      final details =
-      await _cacheService.getCachedVehicleDetails(_selectedVehicleId);
+      final details = await _cacheService.getCachedVehicleDetails(_selectedVehicleId);
       if (details != null) {
         _geofenceEnabled = details['geofenceEnabled'] ?? true;
         _safeZoneEnabled = details['safeZoneEnabled'] ?? false;
         _engineOn        = details['engineOn']        ?? true;
       }
 
-      final location =
-      await _cacheService.getCachedLastLocation(_selectedVehicleId);
+      // Position was already loaded in _loadLastKnownPosition() — don't overwrite
+      // with a potentially older cache entry unless we have something fresher.
+      final location = await _cacheService.getCachedLastLocation(_selectedVehicleId);
       if (location != null) {
-        _vehicleLat         = location['lat'];
-        _vehicleLng         = location['lng'];
-        _lastLocationUpdate = DateTime.parse(location['timestamp']);
+        final lat = (location['lat'] as num?)?.toDouble();
+        final lng = (location['lng'] as num?)?.toDouble();
+        if (lat != null && lng != null && !(lat == 0.0 && lng == 0.0)) {
+          _vehicleLat         = lat;
+          _vehicleLng         = lng;
+          _lastLocationUpdate = DateTime.tryParse(location['timestamp'] as String? ?? '');
+        }
       }
     } catch (e) {
       debugPrint('❌ _loadFromCache error: $e');
@@ -286,7 +324,7 @@ class DashboardController extends ChangeNotifier {
       } else {
         throw Exception('Resize failed');
       }
-    } catch (e) {
+    } catch (_) {
       _customCarIcon = BitmapDescriptor.defaultMarker;
     }
   }
@@ -314,8 +352,12 @@ class DashboardController extends ChangeNotifier {
   Future<void> initializeDashboard() async {
     try {
       await _loadVehiclesFromPrefs();
-      await _fetchInitialLocation();
       await _validateAndUpdateVehicleId(_selectedVehicleId);
+
+      // Try to fetch a fresh live position. If this fails (no sub, expired token,
+      // network error) the position loaded by _loadLastKnownPosition() stays intact.
+      await _fetchInitialLocation();
+
       _isLoading = false;
       notifyListeners();
       _loadBackgroundData();
@@ -329,25 +371,26 @@ class DashboardController extends ChangeNotifier {
   Future<void> _fetchInitialLocation() async {
     try {
       if (isOffline) return;
-      final result =
-      await DashboardService.fetchCurrentLocation(_selectedVehicleId);
+      final result = await DashboardService.fetchCurrentLocation(_selectedVehicleId);
       if (result['success'] == true) {
-        _vehicleLat         = result['latitude']  ?? 4.0511;
-        _vehicleLng         = result['longitude'] ?? 9.7679;
-        _lastLocationUpdate = DateTime.now();
-        await _cacheService.cacheLastLocation(
-          _selectedVehicleId, _vehicleLat, _vehicleLng, _lastLocationUpdate!,
-        );
+        final lat = (result['latitude']  as num?)?.toDouble();
+        final lng = (result['longitude'] as num?)?.toDouble();
+        // Only update if the API returned a non-zero position
+        if (lat != null && lng != null && !(lat == 0.0 && lng == 0.0)) {
+          _vehicleLat         = lat;
+          _vehicleLng         = lng;
+          _lastLocationUpdate = DateTime.now();
+          await _cacheService.cacheLastLocation(
+            _selectedVehicleId, _vehicleLat, _vehicleLng, _lastLocationUpdate!,
+          );
+        }
       }
     } catch (e) {
-      _vehicleLat = 4.0511;
-      _vehicleLng = 9.7679;
+      // Silently swallow — map stays on last known position
+      debugPrint('⚠️ _fetchInitialLocation error (silent): $e');
     }
   }
 
-  // ─── Background data ───────────────────────────────────────────────────────
-  // All errors are swallowed here — background polling must NEVER
-  // trigger any UI interruption regardless of subscription state.
   Future<void> _loadBackgroundData() async {
     try {
       await Future.wait([
@@ -361,7 +404,7 @@ class DashboardController extends ChangeNotifier {
     }
   }
 
-  // ─── Refresh ───────────────────────────────────────────────────────────────
+  // ─── Refresh (refresh button) ─────────────────────────────────────────────
   Future<void> refresh() async {
     if (isOffline) return;
     _isRefreshing = true;
@@ -393,8 +436,7 @@ class DashboardController extends ChangeNotifier {
       await DashboardService.fetchGeofencingStatus(_selectedVehicleId);
       _geofenceEnabled = geofencingActive ?? true;
 
-      final safeZoneResult =
-      await SafeZoneService.getSafeZone(_selectedVehicleId);
+      final safeZoneResult = await SafeZoneService.getSafeZone(_selectedVehicleId);
       if (safeZoneResult['success'] == true) {
         final rawZone = safeZoneResult['safeZone'] as Map<String, dynamic>?;
         _safeZoneEnabled = rawZone?['is_active'] ?? false;
@@ -470,22 +512,26 @@ class DashboardController extends ChangeNotifier {
   Future<void> fetchCurrentLocation({bool silent = false}) async {
     if (isOffline) return;
     try {
-      final result =
-      await DashboardService.fetchCurrentLocation(_selectedVehicleId);
+      final result = await DashboardService.fetchCurrentLocation(_selectedVehicleId);
       if (result['success'] == true) {
-        _vehicleLat         = result['latitude']  ?? 4.0511;
-        _vehicleLng         = result['longitude'] ?? 9.7679;
-        _lastLocationUpdate = DateTime.now();
-        await _cacheService.cacheLastLocation(
-          _selectedVehicleId, _vehicleLat, _vehicleLng, _lastLocationUpdate!,
-        );
-        _mapController?.animateCamera(
-          CameraUpdate.newLatLng(LatLng(_vehicleLat, _vehicleLng)),
-        );
-        notifyListeners();
+        final lat = (result['latitude']  as num?)?.toDouble();
+        final lng = (result['longitude'] as num?)?.toDouble();
+        if (lat != null && lng != null && !(lat == 0.0 && lng == 0.0)) {
+          _vehicleLat         = lat;
+          _vehicleLng         = lng;
+          _lastLocationUpdate = DateTime.now();
+          await _cacheService.cacheLastLocation(
+            _selectedVehicleId, _vehicleLat, _vehicleLng, _lastLocationUpdate!,
+          );
+          _mapController?.animateCamera(
+            CameraUpdate.newLatLng(LatLng(_vehicleLat, _vehicleLng)),
+          );
+          notifyListeners();
+        }
       }
     } catch (e) {
       debugPrint('⚠️ fetchCurrentLocation error (silent): $e');
+      // Position stays on whatever was last successfully loaded
     }
   }
 
@@ -529,20 +575,25 @@ class DashboardController extends ChangeNotifier {
     _locationSubscription =
         _socketService.locationUpdateStream.listen((data) {
           if (data['vehicleId'] != _selectedVehicleId) return;
-          final lat    = data['latitude'];
-          final lon    = data['longitude'];
-          if (lat == null || lon == null) return;
+          final lat = data['latitude'];
+          final lng = data['longitude'];
+          if (lat == null || lng == null) return;
 
-          _vehicleLat         = (lat as num).toDouble();
-          _vehicleLng         = (lon as num).toDouble();
+          final newLat = (lat as num).toDouble();
+          final newLng = (lng as num).toDouble();
+
+          // Ignore 0,0 pushes
+          if (newLat == 0.0 && newLng == 0.0) return;
+
+          _vehicleLat         = newLat;
+          _vehicleLng         = newLng;
           _lastLocationUpdate = DateTime.now();
 
           _cacheService.cacheLastLocation(
             _selectedVehicleId, _vehicleLat, _vehicleLng, _lastLocationUpdate!,
           );
 
-          if (data['status'] is String &&
-              (data['status'] as String).isNotEmpty) {
+          if (data['status'] is String && (data['status'] as String).isNotEmpty) {
             _parseVehicleStatus(data['status']);
           }
 
@@ -567,16 +618,12 @@ class DashboardController extends ChangeNotifier {
   // ─── Toggle geofence ───────────────────────────────────────────────────────
   Future<bool> toggleGeofence() async {
     if (isOffline || !hasActiveSubscription) return false;
-
     _isTogglingGeofence = true;
     notifyListeners();
-
     try {
       final data = await ApiService.post(
           '/vehicle/$_selectedVehicleId/security/toggle');
-      final success =
-          data['statusCode'] == 200 || data['statusCode'] == 201;
-
+      final success = data['statusCode'] == 200 || data['statusCode'] == 201;
       if (success) {
         _geofenceEnabled = !_geofenceEnabled;
         await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
@@ -597,16 +644,14 @@ class DashboardController extends ChangeNotifier {
 
   // ─── Toggle safe zone ──────────────────────────────────────────────────────
   Future<Map<String, dynamic>> toggleSafeZone() async {
-    if (isOffline)              return {'success': false, 'message': 'No internet'};
-    if (!hasActiveSubscription) return {'success': false, 'message': 'No active subscription'};
+    if (isOffline)               return {'success': false, 'message': 'No internet'};
+    if (!hasActiveSubscription)  return {'success': false, 'message': 'No active subscription'};
     if (_selectedVehicleId == 0) return {'success': false, 'message': 'Vehicle not ready'};
 
     _isTogglingSafeZone = true;
     notifyListeners();
-
     try {
-      final safeZoneResult =
-      await SafeZoneService.getSafeZone(_selectedVehicleId);
+      final safeZoneResult = await SafeZoneService.getSafeZone(_selectedVehicleId);
       final zoneExists = safeZoneResult['success'] == true &&
           safeZoneResult['safeZone'] != null;
 
@@ -635,7 +680,6 @@ class DashboardController extends ChangeNotifier {
       final zoneId =
       (safeZoneResult['safeZone'] as Map<String, dynamic>)['id'];
       final result = await SafeZoneService.deleteSafeZone(zoneId);
-
       if (result['success'] == true) {
         _safeZoneEnabled = false;
         _activeSafeZone  = null;
@@ -659,14 +703,11 @@ class DashboardController extends ChangeNotifier {
   // ─── Toggle engine ─────────────────────────────────────────────────────────
   Future<bool> toggleEngine() async {
     if (isOffline || !hasActiveSubscription) return false;
-
     _isTogglingEngine = true;
     notifyListeners();
-
     try {
       final command       = _engineOn ? 'CLOSERELAY' : 'OPENRELAY';
       final expectedState = !_engineOn;
-
       final data = await ApiService.post('/gps/issue-command', body: {
         'vehicleId': _selectedVehicleId,
         'command':   command,
@@ -674,12 +715,10 @@ class DashboardController extends ChangeNotifier {
         'password':  '',
         'sendTime':  '',
       });
-
       final ok = data['statusCode'] == 200 &&
           (data['success'] == true ||
               (data['response'] is Map &&
                   data['response']['success'] == 'true'));
-
       if (ok) {
         _engineOn = expectedState;
         await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
@@ -729,15 +768,12 @@ class DashboardController extends ChangeNotifier {
   // ─── Report stolen ─────────────────────────────────────────────────────────
   Future<bool> reportStolen() async {
     if (isOffline || !hasActiveSubscription) return false;
-
     _isReportingStolen = true;
     notifyListeners();
-
     try {
       final prefs   = await SharedPreferences.getInstance();
       final userStr = prefs.getString('user');
       if (userStr == null) return false;
-
       final userId = (jsonDecode(userStr)['id'] as num).toInt();
 
       final alertData = await ApiService.post('/alerts/report-stolen', body: {
@@ -746,11 +782,9 @@ class DashboardController extends ChangeNotifier {
         'latitude':  _vehicleLat,
         'longitude': _vehicleLng,
       });
-
       if (alertData['statusCode'] != 200 && alertData['statusCode'] != 201) {
         return false;
       }
-
       _nearbyPolice = alertData['nearbyPolice'] ?? [];
 
       final cmdData = await ApiService.post('/gps/issue-command', body: {
@@ -760,12 +794,10 @@ class DashboardController extends ChangeNotifier {
         'password':  '',
         'sendTime':  '',
       });
-
       final cmdOk = cmdData['statusCode'] == 200 &&
           (cmdData['success'] == true ||
               (cmdData['response'] is Map &&
                   cmdData['response']['success'] == 'true'));
-
       if (cmdOk) {
         _engineOn = false;
         await _cacheService.cacheVehicleDetails(_selectedVehicleId, {
@@ -775,7 +807,6 @@ class DashboardController extends ChangeNotifier {
         });
         _startEngineStatePolling(false);
       }
-
       return true;
     } catch (e) {
       debugPrint('🔥 reportStolen error: $e');
@@ -789,7 +820,6 @@ class DashboardController extends ChangeNotifier {
   // ─── Vehicle selection ─────────────────────────────────────────────────────
   void onVehicleSelected(int vehicleId) async {
     if (_selectedVehicleId == vehicleId) return;
-
     _socketService.leaveVehicleTracking(_selectedVehicleId);
     _selectedVehicleId = vehicleId;
     _isLoading         = true;
@@ -797,8 +827,10 @@ class DashboardController extends ChangeNotifier {
     _safeZoneEnabled   = false;
     notifyListeners();
 
-    _socketService.joinVehicleTracking(vehicleId);
+    // Load the last known position for the newly selected vehicle immediately
+    await _loadLastKnownPosition();
 
+    _socketService.joinVehicleTracking(vehicleId);
     if (isOnline) {
       fetchDashboardData();
       fetchRealtimeEngineStatus();
@@ -807,7 +839,6 @@ class DashboardController extends ChangeNotifier {
     } else {
       _loadFromCache();
     }
-
     _isLoading = false;
     notifyListeners();
   }

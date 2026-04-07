@@ -31,6 +31,15 @@ import UserNotifications
         GeneratedPluginRegistrant.register(with: self)
         print("✅ Flutter plugins registered")
 
+        // IMPORTANT:
+        // Do NOT ask permission here.
+        // Flutter handles permission prompt.
+        // We only ask iOS to register with APNs so a device token can be issued.
+        DispatchQueue.main.async {
+            application.registerForRemoteNotifications()
+            print("✅ registerForRemoteNotifications() called")
+        }
+
         print("✅ App launch completed\n")
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -41,6 +50,9 @@ import UserNotifications
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
+        let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+        print("✅ APNs token received: \(token)")
+
         #if DEBUG
         Messaging.messaging().setAPNSToken(deviceToken, type: .sandbox)
         print("✅ APNs token set in Firebase (sandbox)")

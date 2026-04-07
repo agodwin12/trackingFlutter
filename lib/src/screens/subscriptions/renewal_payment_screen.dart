@@ -93,7 +93,7 @@ class _Plan {
       name:           json['label']?.toString() ?? json['name']?.toString() ?? 'Plan',
       description:    json['code']?.toString()  ?? '',
       price:          parseDouble(json['price']),
-      currency:       json['currency']?.toString() ?? 'XAF',
+      currency:       json['currency']?.toString() ?? '',
       durationDays:   parseInt(json['duration_days']),
       durationMonths: parseInt(json['duration_months']),
       billingMode:    json['billing_mode']?.toString() ?? 'MONTH',
