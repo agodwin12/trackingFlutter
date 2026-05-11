@@ -1,0 +1,293 @@
+{
+  "@@locale": "fr",
+
+  "appName": "Recouvrement",
+
+  "navHome": "Accueil",
+  "navHistory": "Historique",
+  "navProfile": "Profil",
+
+  "loadingLeaseData": "Chargement des données de leasing...",
+  "retry": "Réessayer",
+  "errorRequestTimedOut": "Délai dépassé. Veuillez réessayer.",
+  "errorConnection": "Erreur de connexion : {error}",
+  "@errorConnection": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "errorFailedToLoadLeases": "Échec du chargement des données de leasing ({code})",
+  "@errorFailedToLoadLeases": {
+    "placeholders": {
+      "code": { "type": "int" }
+    }
+  },
+
+  "logout": "Déconnexion",
+  "logoutConfirmTitle": "Se déconnecter",
+  "logoutConfirmMessage": "Êtes-vous sûr de vouloir vous déconnecter ?",
+  "cancel": "Annuler",
+
+  "recouvrementTitle": "RECOUVREMENT",
+  "proxymGroup": "PROXYM GROUP",
+
+  "statusPaid": "Payé",
+  "statusPartial": "Partiel",
+  "statusUnpaid": "Impayé",
+  "statusHoliday": "Férié",
+  "statusNoLease": "Sans leasing",
+  "statusUpcoming": "À venir",
+
+  "statTotalDue": "Total Dû",
+  "statTotalPaid": "Total Payé",
+  "statUnpaid": "Impayé",
+  "summaryTitle": "RÉSUMÉ DES PAIEMENTS",
+
+  "localTime": "HEURE LOCALE",
+  "nextPayIn": "PROCHAIN PAIEMENT",
+  "hrsMinSec": "h : min : s",
+
+  "sectionTodayPayments": "PAIEMENTS DU JOUR",
+  "sectionOutstandingPayments": "PAIEMENTS EN ATTENTE",
+  "pendingPayments": "Paiements en attente",
+  "echeances": "échéances",
+  "mainContract": "Contrat principal",
+  "subContract": "Sous-contrat",
+  "payAll": "Tout payer",
+
+  "todayLease": "LEASING DU JOUR",
+  "due": "Échéance :",
+  "paid": "Payé :",
+  "remaining": "Restant :",
+  "tapToPayNow": "Appuyer pour payer",
+
+  "unpaidLeasesTitle": "Leasings Impayés",
+  "unpaidLeasesPending": "{count} paiement{plural} en attente",
+  "@unpaidLeasesPending": {
+    "placeholders": {
+      "count": { "type": "int" },
+      "plural": { "type": "String" }
+    }
+  },
+  "pay": "Payer",
+  "contrat": "Contrat #{id}",
+  "@contrat": {
+    "placeholders": {
+      "id": { "type": "int" }
+    }
+  },
+
+  "historyTitle": "Historique des Leasings",
+  "historySubtitle": "Calendrier & relevés de paiement",
+  "tabCalendar": "Calendrier",
+  "tabRecords": "Relevés",
+
+  "statDaysPaid": "Jours Payés",
+  "statMissed": "Manqués",
+  "statTotalPaidShort": "Total Payé",
+  "days": "{n} jours",
+  "@days": {
+    "placeholders": {
+      "n": { "type": "int" }
+    }
+  },
+
+  "allUpToDate": "Tous les paiements sont à jour !",
+  "nextPaymentDue": "Prochain Paiement Dû",
+  "amount": "Montant",
+
+  "legendPaid": "Payé",
+  "legendUnpaid": "Impayé",
+  "legendPartial": "Partiel",
+  "legendToday": "Aujourd'hui",
+
+  "detailExpected": "Attendu",
+  "detailPaid": "Payé",
+  "detailRemaining": "Restant",
+  "detailReference": "Référence",
+  "detailPaidAt": "Payé le",
+  "detailMethod": "Méthode",
+  "payNowAmount": "Payer {amount} XAF maintenant",
+  "@payNowAmount": {
+    "placeholders": {
+      "amount": { "type": "String" }
+    }
+  },
+
+  "noRecordsYet": "Aucun relevé",
+  "allRecords": "TOUS LES RELEVÉS",
+  "summaryRecords": "Relevés",
+  "summaryPaid": "Payés",
+  "summaryUnpaid": "Impayés",
+  "summaryPartial": "Partiels",
+
+  "payLeaseTitle": "Payer le Leasing",
+  "payLeaseSubtitle": "Sélectionner les leasings à payer",
+
+  "allCaughtUp": "Tout est à jour !",
+  "noOutstandingLeases": "Vous n'avez aucun paiement de leasing en attente.",
+  "backToDashboard": "Retour au tableau de bord",
+
+  "sectionOutstandingLeases": "LEASINGS EN ATTENTE",
+  "deselectAll": "Tout désélectionner",
+  "selectAll": "Tout sélectionner",
+
+  "leasesSelected": "{count} leasing{plural} sélectionné{plural}",
+  "@leasesSelected": {
+    "placeholders": {
+      "count": { "type": "int" },
+      "plural": { "type": "String" }
+    }
+  },
+  "totalToPay": "Total à payer",
+
+  "sectionMobileMoneyNumber": "NUMÉRO MOBILE MONEY",
+  "mobileMoneyNumber": "Numéro Mobile Money",
+  "auto": "Auto",
+
+  "sectionPaymentMethod": "MÉTHODE DE PAIEMENT",
+  "mtnMobileMoney": "MTN Mobile Money",
+  "mtnTagline": "Payer avec MTN MoMo",
+  "orangeMoney": "Orange Money",
+  "orangeTagline": "Payer avec Orange Money",
+
+  "paygateInfo": "PayGate s'ouvrira dans l'application. Gardez votre téléphone accessible pour la demande de paiement.",
+
+  "selectAtLeastOneLease": "Sélectionnez au moins un leasing",
+  "selectPaymentMethod": "Sélectionnez une méthode de paiement",
+  "payVia": "Payer {amount} XAF via {provider}",
+  "@payVia": {
+    "placeholders": {
+      "amount": { "type": "String" },
+      "provider": { "type": "String" }
+    }
+  },
+
+  "closePaymentTitle": "Fermer le paiement ?",
+  "closePaymentMessage": "Si vous fermez maintenant, votre paiement pourrait ne pas être confirmé. Êtes-vous sûr ?",
+  "stay": "Rester",
+  "closeAnyway": "Fermer quand même",
+  "failedToLoadPaymentPage": "Échec du chargement de la page de paiement",
+  "checkConnectionRetry": "Vérifiez votre connexion et réessayez.",
+  "goBack": "Retour",
+
+  "confirmingPayment": "Confirmation du paiement",
+  "waitingForProvider": "En attente de confirmation par {provider}.\nCela prend généralement quelques secondes.",
+  "@waitingForProvider": {
+    "placeholders": {
+      "provider": { "type": "String" }
+    }
+  },
+  "checkingIn": "Vérification dans {seconds}s (tentative {attempt}/{max})",
+  "@checkingIn": {
+    "placeholders": {
+      "seconds": { "type": "int" },
+      "attempt": { "type": "int" },
+      "max": { "type": "int" }
+    }
+  },
+  "doNotCloseApp": "Ne fermez pas l'application.\nVotre paiement est en cours de traitement.",
+
+  "summaryAmount": "Montant",
+  "summaryMethod": "Méthode",
+  "summaryLeases": "{count} paiement{plural}",
+  "@summaryLeases": {
+    "placeholders": {
+      "count": { "type": "int" },
+      "plural": { "type": "String" }
+    }
+  },
+  "summaryReference": "Référence",
+  "summaryStatus": "Statut",
+
+  "paymentConfirmed": "Paiement Confirmé !",
+  "paymentConfirmedSubtitle": "{count} leasing{plural} payé{plural2} avec succès via {provider}.",
+  "@paymentConfirmedSubtitle": {
+    "placeholders": {
+      "count": { "type": "int" },
+      "plural": { "type": "String" },
+      "plural2": { "type": "String" },
+      "provider": { "type": "String" }
+    }
+  },
+  "amountPaid": "Montant Payé",
+  "leasesConfirmed": "{count} confirmé{plural}",
+  "@leasesConfirmed": {
+    "placeholders": {
+      "count": { "type": "int" },
+      "plural": { "type": "String" }
+    }
+  },
+  "confirmed": "✅ Confirmé",
+
+  "stillProcessing": "Toujours en cours",
+  "stillProcessingSubtitle": "Nous n'avons pas encore pu confirmer votre paiement.\nCela peut prendre quelques minutes selon votre réseau.",
+  "whatToDo": "Que faire :",
+  "timeoutStep1": "1. Vérifiez vos SMS pour une confirmation de paiement",
+  "timeoutStep2": "2. Ouvrez l'onglet Historique pour vérifier le statut",
+  "timeoutStep3": "3. En cas de doute, contactez votre partenaire",
+  "checkHistory": "Voir l'historique",
+
+  "profileTitle": "Mon Profil",
+  "profileSubtitle": "Infos du compte & contrat",
+  "changePasswordTitle": "Changer le mot de passe",
+  "changePasswordSubtitle": "Mettre à jour vos identifiants de sécurité",
+
+  "sectionAccountInfo": "INFORMATIONS DU COMPTE",
+  "fieldFullName": "Nom complet",
+  "fieldEmail": "Email",
+  "fieldPhone": "Téléphone",
+  "fieldCity": "Ville",
+  "fieldQuartier": "Quartier",
+
+  "sectionContractDetails": "DÉTAILS DU CONTRAT",
+  "contractHeader": "Contrat #{id} · {frequency}",
+  "@contractHeader": {
+    "placeholders": {
+      "id": { "type": "int" },
+      "frequency": { "type": "String" }
+    }
+  },
+  "repaymentProgress": "Progression du remboursement",
+  "paidAmount": "Payé : {amount} XAF",
+  "@paidAmount": {
+    "placeholders": {
+      "amount": { "type": "String" }
+    }
+  },
+  "remainingAmount": "Restant : {amount} XAF",
+  "@remainingAmount": {
+    "placeholders": {
+      "amount": { "type": "String" }
+    }
+  },
+  "contractTotalAmount": "Montant Total",
+  "contractPerPayment": "Par Paiement",
+  "contractFrequency": "Fréquence",
+  "contractStartDate": "Date de début",
+  "contractEndDate": "Date de fin",
+  "contractNextDue": "Prochaine échéance",
+  "contractRegisteredBy": "Enregistré par",
+
+  "sectionSettings": "PARAMÈTRES",
+  "settingsChangePassword": "Changer le mot de passe",
+  "settingsNotifications": "Notifications",
+  "signOut": "Se déconnecter",
+  "signOutConfirmTitle": "Se déconnecter",
+  "signOutConfirmMessage": "Êtes-vous sûr de vouloir vous déconnecter ?",
+
+  "passwordHint": "Utilisez au moins 8 caractères avec des lettres et des chiffres.",
+  "sectionUpdatePassword": "MODIFIER LE MOT DE PASSE",
+  "fieldCurrentPassword": "Mot de passe actuel",
+  "fieldNewPassword": "Nouveau mot de passe",
+  "fieldConfirmPassword": "Confirmer le nouveau mot de passe",
+  "updatePassword": "Mettre à jour le mot de passe",
+  "passwordUpdated": "Mot de passe mis à jour avec succès.",
+  "errorFillAllFields": "Veuillez remplir tous les champs.",
+  "errorPasswordMismatch": "Les nouveaux mots de passe ne correspondent pas.",
+  "errorPasswordTooShort": "Le mot de passe doit contenir au moins 8 caractères.",
+
+  "appVersion": "Fleetra v1.0.0 — PROXYM GROUP",
+
+  "languageToggleLabel": "Langue"
+}

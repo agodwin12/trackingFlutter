@@ -7,10 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/utility/app_theme.dart';
 import '../../services/env_config.dart';
 import '../../services/notification_service.dart';
+import '../../services/token_refresh_service.dart';
 import '../change password/change_password.dart';
 import '../dashboard/dashboard.dart';
 import '../forgot_password/forgot_password.dart';
 import '../../../main.dart' show FCMService;
+import '../recouvrement/dashboard/recouvrement_dashboard.dart';
 
 // ── Country model ─────────────────────────────────────────────────────────────
 class Country {
@@ -138,44 +140,72 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
 
       final body = jsonDecode(response.body) as Map<String, dynamic>;
 
-      // ── SUCCESS ────────────────────────────────────────────────────────────
+      // ── SUCCESS ──────────────────────────────────────────────────────────────
       if (response.statusCode == 200) {
         final prefs = await SharedPreferences.getInstance();
 
-        // ── Tokens ────────────────────────────────────────────────────────
+        // ── Tokens ──────────────────────────────────────────────────────────
         final String accessToken  = body['accessToken']  as String;
         final String refreshToken = body['refreshToken'] as String;
-
-        // Both keys saved — ApiService reads 'accessToken', legacy code reads
+        final String clientId     = body['client_id']    as String? ?? 'tracking_app';
+        final String appType      = body['app_type']     as String? ?? 'tracking';
+        final List   roles        = body['roles']        as List?   ?? [];
 
         await prefs.setString('accessToken',  accessToken);
-        await prefs.setString('auth_token',   accessToken);   // legacy key
-        await prefs.setString('refreshToken', refreshToken);  // ← was missing
+        await prefs.setString('auth_token',   accessToken);
+        await prefs.setString('refreshToken', refreshToken);
+        await prefs.setString('client_id',    clientId);
+        await prefs.setString('app_type',     appType);
+        await prefs.setString('roles',        jsonEncode(roles));
 
-        debugPrint(' Tokens saved — accessToken: ${accessToken.substring(0, 20)}...');
-        debugPrint(' refreshToken saved: ${refreshToken.substring(0, 20)}...');
+        // ── Re-arm the session expiry guard for this new session ─────────────
+        TokenRefreshService().resetSessionState();
 
-        // ── User ──────────────────────────────────────────────────────────
+        debugPrint('✅ Tokens saved | app_type=$appType | client=$clientId');
+
+        // ── User ────────────────────────────────────────────────────────────
         await prefs.setString('user', jsonEncode(body['user']));
-
         final int userId = (body['user']['id'] as num).toInt();
         await prefs.setInt('user_id', userId);
-
-        // Phone + country code (used by payment sheet pre-fill)
         await prefs.setString('user_phone',        fullPhone);
         await prefs.setString('user_country_code', _selectedCountry.isoCode);
 
-        // User type
-        final String userType = body['user_type'] as String? ?? 'regular';
-        await prefs.setString('user_type', userType);
-
-        // Partner id
-        if (body['user']['partner_id'] != null) {
-          await prefs.setInt(
-              'partner_id', (body['user']['partner_id'] as num).toInt());
+        // ── Notifications ────────────────────────────────────────────────────
+        try { await NotificationService.registerToken(); } catch (e) {
+          debugPrint('⚠️ FCM error: $e');
         }
 
+        final bool isFirstLogin = body['isFirstLogin'] as bool? ?? false;
+        setState(() => _isLoading = false);
+        if (!mounted) return;
 
+        // ── First login → force password reset ──────────────────────────────
+        if (isFirstLogin) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ResetPasswordScreen(userId: userId, isFirstLogin: true),
+            ),
+          );
+          return;
+        }
+
+        // ── Route by app_type ────────────────────────────────────────────────
+        if (appType == 'recouvrement') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => RecouvrementDashboard(
+                user:        body['user'] as Map<String, dynamic>,
+                accessToken: accessToken,
+                roles:       roles.map((e) => e.toString()).toList(),
+              ),
+            ),
+          );
+          return;
+        }
+
+        // ── Tracking dashboard (default) ─────────────────────────────────────
         final List vehicles = (body['vehicles'] as List?) ?? [];
 
         if (vehicles.isEmpty) {
@@ -185,7 +215,6 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
         }
 
         await prefs.setString('vehicles_list', jsonEncode(vehicles));
-
         final int firstVehicleId = (vehicles[0]['id'] as num).toInt();
         await prefs.setInt('current_vehicle_id', firstVehicleId);
 
@@ -193,41 +222,13 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
         final String firstName =
         (firstVehicle['nickname'] as String?)?.isNotEmpty == true
             ? firstVehicle['nickname'] as String
-            : '${firstVehicle['marque'] ?? firstVehicle['brand'] ?? ''} ${firstVehicle['model'] ?? ''}'
-            .trim();
+            : '${firstVehicle['marque'] ?? ''} ${firstVehicle['model'] ?? ''}'.trim();
         await prefs.setString('current_vehicle_name', firstName);
 
-        // ── Notifications ─────────────────────────────────────────────────
-        try {
-          await NotificationService.registerToken();
-        } catch (e) {
-          debugPrint('⚠️ Notification error: $e');
+        if (body['user']['partner_id'] != null) {
+          await prefs.setInt('partner_id', (body['user']['partner_id'] as num).toInt());
         }
 
-        try {
-          await NotificationService.registerToken();
-        } catch (e) {
-          debugPrint('⚠️ FCM retry failed: $e');
-        }
-
-        final bool isFirstLogin = body['isFirstLogin'] as bool? ?? false;
-
-        setState(() => _isLoading = false);
-        if (!mounted) return;
-
-        // ── First login → force password reset ────────────────────────────
-        if (isFirstLogin) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (_) =>
-                  ResetPasswordScreen(userId: userId, isFirstLogin: true),
-            ),
-          );
-          return;
-        }
-
-        // ── All good → dashboard ──────────────────────────────────────────
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -235,16 +236,13 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
           ),
         );
 
-        // ── FAILURE ────────────────────────────────────────────────────────────
+        // ── FAILURE ──────────────────────────────────────────────────────────────
       } else {
         setState(() => _isLoading = false);
-
         String msg = 'Login failed.';
         if (body['errors'] is List && (body['errors'] as List).isNotEmpty) {
           final first = (body['errors'] as List).first as Map;
-          msg = first['msg'] as String?
-              ?? first['message'] as String?
-              ?? msg;
+          msg = first['msg'] as String? ?? first['message'] as String? ?? msg;
         } else if (body['message'] != null) {
           msg = body['message'] as String;
         }
@@ -253,6 +251,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
 
     } catch (e) {
       setState(() => _isLoading = false);
+      debugPrint('🔥 Login error: $e');
       _showError('Connection error. Please try again.');
     }
   }
@@ -263,15 +262,12 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.error_outline_rounded,
-                color: Colors.white, size: 18),
+            const Icon(Icons.error_outline_rounded, color: Colors.white, size: 18),
             const SizedBox(width: 10),
             Expanded(
               child: Text(message,
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
+                    color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500,
                   )),
             ),
           ],
@@ -308,11 +304,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [
-              Color(0xFFFFF5F0),
-              Color(0xFFFFFFFF),
-              Color(0xFFFFF8F5),
-            ],
+            colors: [Color(0xFFFFF5F0), Color(0xFFFFFFFF), Color(0xFFFFF8F5)],
           ),
         ),
         child: Stack(
@@ -326,16 +318,12 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
                     const SizedBox(height: 40),
                     FadeTransition(
                       opacity: _fadeAnim,
-                      child: ScaleTransition(
-                          scale: _scaleAnim, child: const _LogoSection()),
+                      child: ScaleTransition(scale: _scaleAnim, child: const _LogoSection()),
                     ),
                     const SizedBox(height: 60),
                     SlideTransition(
                       position: _slideAnim,
-                      child: FadeTransition(
-                        opacity: _fadeAnim,
-                        child: _buildCard(),
-                      ),
+                      child: FadeTransition(opacity: _fadeAnim, child: _buildCard()),
                     ),
                     const SizedBox(height: 32),
                   ],
@@ -355,11 +343,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
         borderRadius: BorderRadius.circular(28),
         border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
         boxShadow: [
-          BoxShadow(
-            color: _kOrange.withOpacity(0.08),
-            blurRadius: 30,
-            offset: const Offset(0, 15),
-          ),
+          BoxShadow(color: _kOrange.withOpacity(0.08), blurRadius: 30, offset: const Offset(0, 15)),
         ],
       ),
       child: ClipRRect(
@@ -370,19 +354,10 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text('Welcome Back',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                    color: _kBlack,
-                    height: 1.2,
-                  )),
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: _kBlack, height: 1.2)),
               const SizedBox(height: 8),
-              Text('Sign in to track your vehicle',
-                  style: TextStyle(
-                    fontSize: 15,
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w500,
-                  )),
+              Text('Sign in to your account',
+                  style: TextStyle(fontSize: 15, color: Colors.grey[600], fontWeight: FontWeight.w500)),
               const SizedBox(height: 32),
               _buildPhoneField(),
               const SizedBox(height: 20),
@@ -405,11 +380,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text('Phone Number',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: _kBlack,
-            )),
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kBlack)),
         const SizedBox(height: 10),
         Container(
           decoration: BoxDecoration(
@@ -422,31 +393,20 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
               InkWell(
                 onTap: _showCountryPicker,
                 borderRadius: const BorderRadius.only(
-                  topLeft:    Radius.circular(14),
-                  bottomLeft: Radius.circular(14),
-                ),
+                    topLeft: Radius.circular(14), bottomLeft: Radius.circular(14)),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 18),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
                   decoration: BoxDecoration(
-                    border: Border(
-                      right: BorderSide(color: Colors.grey[200]!, width: 1.5),
-                    ),
+                    border: Border(right: BorderSide(color: Colors.grey[200]!, width: 1.5)),
                   ),
                   child: Row(
                     children: [
-                      Text(_selectedCountry.flag,
-                          style: const TextStyle(fontSize: 22)),
+                      Text(_selectedCountry.flag, style: const TextStyle(fontSize: 22)),
                       const SizedBox(width: 8),
                       Text(_selectedCountry.dialCode,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 15,
-                            color: _kBlack,
-                          )),
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: _kBlack)),
                       const SizedBox(width: 4),
-                      Icon(Icons.arrow_drop_down_rounded,
-                          color: Colors.grey[600], size: 20),
+                      Icon(Icons.arrow_drop_down_rounded, color: Colors.grey[600], size: 20),
                     ],
                   ),
                 ),
@@ -457,18 +417,11 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
                   child: TextField(
                     controller: _phoneCtrl,
                     keyboardType: TextInputType.phone,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: _kBlack,
-                    ),
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _kBlack),
                     decoration: InputDecoration(
                       border: InputBorder.none,
-                      hintText: '612 345 678',
-                      hintStyle: TextStyle(
-                        color: Colors.grey[400],
-                        fontWeight: FontWeight.w400,
-                      ),
+                      hintText: '6 012 345 678',
+                      hintStyle: TextStyle(color: Colors.grey[400], fontWeight: FontWeight.w400),
                     ),
                   ),
                 ),
@@ -485,11 +438,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text('Password',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: _kBlack,
-            )),
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kBlack)),
         const SizedBox(height: 10),
         Container(
           decoration: BoxDecoration(
@@ -501,37 +450,25 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
             children: [
               const Padding(
                 padding: EdgeInsets.only(left: 16, right: 12),
-                child: Icon(Icons.lock_outline_rounded,
-                    color: _kOrange, size: 22),
+                child: Icon(Icons.lock_outline_rounded, color: _kOrange, size: 22),
               ),
               Expanded(
                 child: TextField(
                   controller: _passwordCtrl,
                   obscureText: _obscurePassword,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    color: _kBlack,
-                  ),
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: _kBlack),
                   decoration: InputDecoration(
                     border: InputBorder.none,
                     hintText: 'Enter your password',
-                    hintStyle: TextStyle(
-                      color: Colors.grey[400],
-                      fontWeight: FontWeight.w400,
-                    ),
+                    hintStyle: TextStyle(color: Colors.grey[400], fontWeight: FontWeight.w400),
                   ),
                 ),
               ),
               IconButton(
-                onPressed: () =>
-                    setState(() => _obscurePassword = !_obscurePassword),
+                onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                 icon: Icon(
-                  _obscurePassword
-                      ? Icons.visibility_off_rounded
-                      : Icons.visibility_rounded,
-                  color: Colors.grey[600],
-                  size: 20,
+                  _obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                  color: Colors.grey[600], size: 20,
                 ),
               ),
             ],
@@ -548,43 +485,31 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
         Row(
           children: [
             SizedBox(
-              width: 22,
-              height: 22,
+              width: 22, height: 22,
               child: Checkbox(
                 value: _rememberMe,
                 onChanged: (v) => setState(() => _rememberMe = v ?? false),
                 activeColor: _kOrange,
                 checkColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
                 side: BorderSide(color: Colors.grey[300]!, width: 1.5),
               ),
             ),
             const SizedBox(width: 8),
             Text('Remember me',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.grey[700],
-                )),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey[700])),
           ],
         ),
         TextButton(
           onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => ForgotPasswordScreen()),
-          ),
+              context, MaterialPageRoute(builder: (_) => ForgotPasswordScreen())),
           style: TextButton.styleFrom(
             padding: EdgeInsets.zero,
             minimumSize: Size.zero,
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
           child: const Text('Forgot password?',
-              style: TextStyle(
-                fontSize: 13,
-                color: _kOrange,
-                fontWeight: FontWeight.w600,
-              )),
+              style: TextStyle(fontSize: 13, color: _kOrange, fontWeight: FontWeight.w600)),
         ),
       ],
     );
@@ -598,20 +523,15 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
         gradient: const LinearGradient(colors: [_kGradStart, _kGradEnd]),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(
-            color: _kOrange.withOpacity(0.4),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
+          BoxShadow(color: _kOrange.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 10)),
         ],
       ),
       child: ElevatedButton(
         onPressed: _isLoading ? null : _login,
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.transparent,
-          shadowColor:     Colors.transparent,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
         child: _isLoading
             ? const SizedBox(
@@ -625,12 +545,8 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text('Sign In',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                  letterSpacing: 0.5,
-                )),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+                    color: Colors.white, letterSpacing: 0.5)),
             SizedBox(width: 8),
             Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 20),
           ],
@@ -643,11 +559,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
     return Center(
       child: Text(
         '© ${DateTime.now().year} All rights reserved to PROXYM GROUP',
-        style: TextStyle(
-          fontSize: 11,
-          color: Colors.grey[500],
-          fontWeight: FontWeight.w500,
-        ),
+        style: TextStyle(fontSize: 11, color: Colors.grey[500], fontWeight: FontWeight.w500),
         textAlign: TextAlign.center,
       ),
     );
@@ -657,16 +569,13 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
 // ═══════════════════════════════════════════════════════════════════
 // COUNTRY PICKER SHEET
 // ═══════════════════════════════════════════════════════════════════
-
 class _CountryPickerSheet extends StatelessWidget {
   final List<Country> countries;
   final Country       selected;
   final ValueChanged<Country> onSelect;
 
   const _CountryPickerSheet({
-    required this.countries,
-    required this.selected,
-    required this.onSelect,
+    required this.countries, required this.selected, required this.onSelect,
   });
 
   @override
@@ -682,10 +591,7 @@ class _CountryPickerSheet extends StatelessWidget {
           Container(
             margin: const EdgeInsets.only(top: 12),
             width: 40, height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey[300],
-              borderRadius: BorderRadius.circular(2),
-            ),
+            decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 20, 8, 20),
@@ -693,11 +599,7 @@ class _CountryPickerSheet extends StatelessWidget {
               children: [
                 const Expanded(
                   child: Text('Select Country',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: _kBlack,
-                      )),
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _kBlack)),
                 ),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
@@ -712,20 +614,13 @@ class _CountryPickerSheet extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 8),
               itemCount: countries.length,
               itemBuilder: (_, i) {
-                final c          = countries[i];
+                final c = countries[i];
                 final isSelected = c.dialCode == selected.dialCode;
-
                 return InkWell(
-                  onTap: () {
-                    onSelect(c);
-                    Navigator.pop(context);
-                  },
+                  onTap: () { onSelect(c); Navigator.pop(context); },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 24, vertical: 16),
-                    color: isSelected
-                        ? _kOrange.withOpacity(0.08)
-                        : Colors.transparent,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    color: isSelected ? _kOrange.withOpacity(0.08) : Colors.transparent,
                     child: Row(
                       children: [
                         Text(c.flag, style: const TextStyle(fontSize: 32)),
@@ -737,16 +632,12 @@ class _CountryPickerSheet extends StatelessWidget {
                               Text(c.name,
                                   style: TextStyle(
                                     color: isSelected ? _kOrange : _kBlack,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600, fontSize: 15,
                                   )),
                               const SizedBox(height: 2),
                               Text(c.dialCode,
                                   style: TextStyle(
-                                    color: isSelected
-                                        ? _kOrange
-                                        : Colors.grey[600],
-                                    fontSize: 13,
+                                    color: isSelected ? _kOrange : Colors.grey[600], fontSize: 13,
                                   )),
                             ],
                           ),
@@ -754,12 +645,8 @@ class _CountryPickerSheet extends StatelessWidget {
                         if (isSelected)
                           Container(
                             width: 24, height: 24,
-                            decoration: const BoxDecoration(
-                              color: _kOrange,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.check_rounded,
-                                color: Colors.white, size: 16),
+                            decoration: const BoxDecoration(color: _kOrange, shape: BoxShape.circle),
+                            child: const Icon(Icons.check_rounded, color: Colors.white, size: 16),
                           ),
                       ],
                     ),
@@ -777,7 +664,6 @@ class _CountryPickerSheet extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════
 // LOGO SECTION
 // ═══════════════════════════════════════════════════════════════════
-
 class _LogoSection extends StatelessWidget {
   const _LogoSection();
 
@@ -790,11 +676,7 @@ class _LogoSection extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             boxShadow: [
-              BoxShadow(
-                color: _kOrange.withOpacity(0.3),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
+              BoxShadow(color: _kOrange.withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10)),
             ],
           ),
           child: ClipOval(
@@ -804,59 +686,34 @@ class _LogoSection extends StatelessWidget {
               errorBuilder: (_, __, ___) => Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+                    begin: Alignment.topLeft, end: Alignment.bottomRight,
                     colors: [_kGradStart, _kGradEnd],
                   ),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.gps_fixed_rounded,
-                    size: 50, color: Colors.white),
+                child: const Icon(Icons.gps_fixed_rounded, size: 50, color: Colors.white),
               ),
             ),
           ),
         ),
         const SizedBox(height: 24),
         const Text('FLEETRA',
-            style: TextStyle(
-              fontSize: 36,
-              fontWeight: FontWeight.w900,
-              color: _kOrange,
-              letterSpacing: 1.5,
-              height: 1.1,
-            )),
+            style: TextStyle(fontSize: 36, fontWeight: FontWeight.w900, color: _kOrange,
+                letterSpacing: 1.5, height: 1.1)),
         const SizedBox(height: 4),
         RichText(
           textAlign: TextAlign.center,
           text: TextSpan(
             children: [
-              TextSpan(
-                text: 'by ',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  color: Colors.grey[600],
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const TextSpan(
-                text: 'PROXYM ',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: _kBlack,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const TextSpan(
-                text: 'GROUP',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: _kOrange,
-                  letterSpacing: 0.5,
-                ),
-              ),
+              TextSpan(text: 'by ',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w400,
+                      color: Colors.grey[600], letterSpacing: 0.5)),
+              const TextSpan(text: 'PROXYM ',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
+                      color: _kBlack, letterSpacing: 0.5)),
+              const TextSpan(text: 'GROUP',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
+                      color: _kOrange, letterSpacing: 0.5)),
             ],
           ),
         ),
@@ -868,7 +725,6 @@ class _LogoSection extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════
 // FLOATING PINS BACKGROUND
 // ═══════════════════════════════════════════════════════════════════
-
 class _FloatingPins extends StatelessWidget {
   final AnimationController controller;
   const _FloatingPins({required this.controller});
@@ -881,18 +737,9 @@ class _FloatingPins extends StatelessWidget {
         final v = controller.value;
         return Stack(
           children: [
-            Positioned(
-              top: 100 + (v * 30), right: 40,
-              child: _pin(size: 40, opacity: 0.15),
-            ),
-            Positioned(
-              top: 250 + (v * -25), left: 30,
-              child: _pin(size: 35, opacity: 0.10),
-            ),
-            Positioned(
-              bottom: 200 + (v * 20), right: 60,
-              child: _pin(size: 30, opacity: 0.12),
-            ),
+            Positioned(top: 100 + (v * 30), right: 40, child: _pin(size: 40, opacity: 0.15)),
+            Positioned(top: 250 + (v * -25), left: 30, child: _pin(size: 35, opacity: 0.10)),
+            Positioned(bottom: 200 + (v * 20), right: 60, child: _pin(size: 30, opacity: 0.12)),
             Positioned(
               top: 0, left: 0, right: 0,
               child: Opacity(
@@ -915,17 +762,10 @@ class _FloatingPins extends StatelessWidget {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// GRID PAINTER
-// ═══════════════════════════════════════════════════════════════════
-
 class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = _kOrange.withOpacity(0.1)
-      ..strokeWidth = 1;
-
+    final paint = Paint()..color = _kOrange.withOpacity(0.1)..strokeWidth = 1;
     for (double x = 0; x < size.width; x += 40) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
     }

@@ -1,224 +1,268 @@
 // lib/src/services/token_refresh_service.dart
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../screens/login/login.dart';
 import 'env_config.dart';
+import 'socket_service.dart';
+
+import '../../../main.dart' show navigatorKey;
 
 class TokenRefreshService {
+  // ── Singleton ──────────────────────────────────────────────────────────────
   static final TokenRefreshService _instance = TokenRefreshService._internal();
   factory TokenRefreshService() => _instance;
   TokenRefreshService._internal();
 
+  // ── State ──────────────────────────────────────────────────────────────────
   bool _isRefreshing = false;
-  final List<Function> _pendingRequests = [];
+  bool _sessionExpiredGuard = false; // prevents double-redirect
 
-  // ── Refresh access token ──────────────────────────────────────────────────
-  Future<String?> refreshAccessToken() async {
-    if (_isRefreshing) {
-      debugPrint('⏳ Token refresh already in progress, waiting...');
-      return await _waitForRefresh();
-    }
+  final List<Completer<String?>> _queue = [];
 
-    _isRefreshing = true;
-    debugPrint('🔄 Starting token refresh...');
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final refreshToken = prefs.getString('refreshToken');
-
-      if (refreshToken == null) {
-        debugPrint('❌ No refresh token found — user needs to login');
-        _isRefreshing = false;
-        await _handleLogout();
-        return null;
-      }
-
-      debugPrint('✅ Found refresh token, sending to server...');
-
-      final response = await http.post(
-        Uri.parse('${EnvConfig.baseUrl}/auth/refresh-token'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refreshToken': refreshToken}),
-      ).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw Exception('Token refresh timeout'),
-      );
-
-      debugPrint('📡 Refresh token response: ${response.statusCode}');
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final newAccessToken  = data['accessToken']  as String?;
-        final newRefreshToken = data['refreshToken'] as String?;
-
-        if (newAccessToken != null) {
-          // Save new access token under both keys (legacy code reads 'auth_token')
-          await prefs.setString('accessToken', newAccessToken);
-          await prefs.setString('auth_token',  newAccessToken);
-
-          // ✅ Save the rotated refresh token — without this the next refresh
-          // fails because the server invalidates the old one on every rotation.
-          if (newRefreshToken != null) {
-            await prefs.setString('refreshToken', newRefreshToken);
-            debugPrint('✅ Rotated refresh token saved');
-          }
-
-          debugPrint('✅ Token refreshed successfully');
-          _isRefreshing = false;
-          _resolvePendingRequests();
-          return newAccessToken;
-        }
-      } else if (response.statusCode == 401) {
-        debugPrint('❌ Refresh token expired — user needs to login again');
-        _isRefreshing = false;
-        await _handleLogout();
-        return null;
-      }
-
-      debugPrint('❌ Token refresh failed: ${response.statusCode}');
-      debugPrint('📦 Response body: ${response.body}');
-      _isRefreshing = false;
-      return null;
-
-    } catch (error) {
-      debugPrint('🔥 Error refreshing token: $error');
-      _isRefreshing = false;
-      return null;
-    }
+  // Call this after a successful login to re-arm the guard
+  void resetSessionState() {
+    _sessionExpiredGuard = false;
+    debugPrint('🔓 [TokenRefresh] Session guard reset — ready for new session');
   }
 
-  // ── Wait for an in-progress refresh ──────────────────────────────────────
-  Future<String?> _waitForRefresh() async {
-    final completer = Completer<String?>();
-    _pendingRequests.add(() async {
-      final prefs = await SharedPreferences.getInstance();
-      completer.complete(prefs.getString('accessToken'));
-    });
-    return completer.future;
-  }
-
-  // ── Resolve all requests that queued behind a refresh ────────────────────
-  void _resolvePendingRequests() {
-    for (final req in _pendingRequests) {
-      req();
-    }
-    _pendingRequests.clear();
-  }
-
-  // ── Clear tokens and signal logout ───────────────────────────────────────
-  Future<void> _handleLogout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('accessToken');
-    await prefs.remove('auth_token');
-    await prefs.remove('refreshToken');
-    await prefs.remove('user');
-    debugPrint('🚪 Tokens cleared — redirect to login');
-  }
-
-  // ── Make an authenticated request, auto-retrying after a 401 ─────────────
   Future<http.Response> makeAuthenticatedRequest({
     required Future<http.Response> Function(String token) request,
     int retryCount = 0,
   }) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('accessToken');
+    final token = await getValidAccessToken();
 
-      if (token == null) {
-        debugPrint('❌ No access token available');
-        throw Exception('No access token available');
-      }
-
-      final response = await request(token);
-
-      // Backend auto-refreshed the token mid-request via authMiddleware.
-      // Save both the new access token AND the rotated refresh token.
-      final headerNewAccess  = response.headers['x-new-access-token'];
-      final headerNewRefresh = response.headers['x-new-refresh-token'];
-
-      if (headerNewAccess != null && headerNewAccess.isNotEmpty) {
-        debugPrint('🔄 Backend issued new access token via header — saving');
-        await prefs.setString('accessToken', headerNewAccess);
-        await prefs.setString('auth_token',  headerNewAccess);
-      }
-      if (headerNewRefresh != null && headerNewRefresh.isNotEmpty) {
-        debugPrint('🔄 Backend issued new refresh token via header — saving');
-        await prefs.setString('refreshToken', headerNewRefresh);
-      }
-
-      // 401 → attempt one refresh + retry
-      if (response.statusCode == 401 && retryCount < 1) {
-        debugPrint('🔄 401 detected, attempting token refresh...');
-        final newToken = await refreshAccessToken();
-
-        if (newToken != null) {
-          debugPrint('✅ Retrying request with refreshed token...');
-          return await makeAuthenticatedRequest(
-            request:    request,
-            retryCount: retryCount + 1,
-          );
-        } else {
-          debugPrint('❌ Token refresh failed — authentication required');
-          throw Exception('Authentication failed');
-        }
-      }
-
-      return response;
-
-    } catch (error) {
-      debugPrint('🔥 Request error: $error');
-      rethrow;
+    if (token == null) {
+      debugPrint('❌ [TokenRefresh] No valid token — forcing logout');
+      await _handleLogout();
+      throw Exception('Authentication required');
     }
+
+    final response = await request(token);
+
+    await _saveRotatedHeaderTokens(response);
+
+    if (response.statusCode == 401 && retryCount < 1) {
+      String? bodyCode;
+      try {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        bodyCode = body['code'] as String?;
+      } catch (_) {}
+
+      // Any 401 triggers a refresh attempt
+      debugPrint('🔄 [TokenRefresh] 401 received (code: $bodyCode) — refreshing...');
+      final newToken = await refreshAccessToken();
+      if (newToken != null) {
+        debugPrint('✅ [TokenRefresh] Retrying with new token');
+        return makeAuthenticatedRequest(request: request, retryCount: 1);
+      }
+      // refreshAccessToken already called _handleLogout if it failed
+    }
+
+    return response;
   }
 
-  // ── Get a valid (non-expired) access token, refreshing proactively ────────
   Future<String?> getValidAccessToken() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('accessToken');
+      if (token == null) return null;
 
-      if (token == null) {
-        debugPrint('❌ No access token found');
-        return null;
-      }
+      final exp = _decodeExp(token);
+      if (exp != null) {
+        final secondsLeft =
+            exp - (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+        debugPrint('⏱ [TokenRefresh] Token expires in ${secondsLeft}s');
 
-      // Decode JWT payload and check expiry without a package
-      try {
-        final parts = token.split('.');
-        if (parts.length == 3) {
-          final payload = jsonDecode(
-            utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
-          ) as Map<String, dynamic>;
-
-          final exp = payload['exp'] as int?;
-          if (exp != null) {
-            final expiry = DateTime.fromMillisecondsSinceEpoch(exp * 1000);
-            // Proactively refresh if less than 5 minutes remain
-            if (expiry.difference(DateTime.now()).inMinutes < 5) {
-              debugPrint('⏰ Token expires in < 5 min, refreshing proactively...');
-              final refreshed = await refreshAccessToken();
-              return refreshed ?? token;
-            }
-          }
+        if (secondsLeft <= 60) {
+          debugPrint('⚡ [TokenRefresh] Proactive refresh (≤60s left)');
+          final refreshed = await refreshAccessToken();
+          // If refresh failed, refreshAccessToken handled logout already.
+          // Return null so the caller knows no token is available.
+          return refreshed;
         }
-      } catch (e) {
-        debugPrint('⚠️ Could not decode token, using as-is: $e');
       }
 
       return token;
-
-    } catch (error) {
-      debugPrint('🔥 Error getting valid token: $error');
+    } catch (e) {
+      debugPrint('⚠️ [TokenRefresh] getValidAccessToken error: $e');
       return null;
     }
   }
 
-  // ── Quick auth check ──────────────────────────────────────────────────────
+  Future<String?> refreshAccessToken() async {
+    if (_isRefreshing) {
+      debugPrint('⏳ [TokenRefresh] Queued — refresh already in progress');
+      final completer = Completer<String?>();
+      _queue.add(completer);
+      return completer.future;
+    }
+
+    _isRefreshing = true;
+    String? newToken;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final refreshToken = prefs.getString('refreshToken');
+      final clientId = prefs.getString('client_id');
+
+      if (refreshToken == null) {
+        debugPrint('❌ [TokenRefresh] No refresh token — forcing logout');
+        await _handleLogout();
+        return null;
+      }
+
+      if (clientId == null) {
+        debugPrint('❌ [TokenRefresh] No client_id — forcing logout');
+        await _handleLogout();
+        return null;
+      }
+
+      debugPrint(
+          '🔄 [TokenRefresh] Calling /auth/refresh-token client=$clientId');
+
+      final response = await http
+          .post(
+        Uri.parse('${EnvConfig.baseUrl}/auth/refresh-token'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'refreshToken': refreshToken,
+          'client_id': clientId,
+        }),
+      )
+          .timeout(const Duration(seconds: 15));
+
+      debugPrint('📡 [TokenRefresh] Response: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final String? newAccess = data['accessToken'] as String?;
+        final String? newRefresh = data['refreshToken'] as String?;
+
+        if (newAccess == null) {
+          debugPrint('❌ [TokenRefresh] Response missing accessToken — logout');
+          await _handleLogout();
+          return null;
+        }
+
+        await prefs.setString('accessToken', newAccess);
+        await prefs.setString('auth_token', newAccess);
+        if (newRefresh != null) {
+          await prefs.setString('refreshToken', newRefresh);
+          debugPrint('✅ [TokenRefresh] Refresh token rotated and saved');
+        }
+
+        newToken = newAccess;
+        debugPrint('✅ [TokenRefresh] Tokens refreshed successfully');
+      } else if (response.statusCode == 401) {
+        debugPrint(
+            '❌ [TokenRefresh] Refresh token expired (401) — forcing logout');
+        await _handleLogout();
+      } else {
+        // 5xx or unexpected — treat as expired to be safe
+        debugPrint(
+            '⚠️ [TokenRefresh] Unexpected ${response.statusCode} — forcing logout');
+        await _handleLogout();
+      }
+    } on TimeoutException {
+      debugPrint('⏰ [TokenRefresh] Refresh timed out — forcing logout');
+      await _handleLogout();
+    } catch (e) {
+      debugPrint('🔥 [TokenRefresh] Network error: $e — forcing logout');
+      await _handleLogout();
+    } finally {
+      _isRefreshing = false;
+      for (final completer in _queue) {
+        completer.complete(newToken);
+      }
+      _queue.clear();
+    }
+
+    return newToken;
+  }
+
   Future<bool> isAuthenticated() async {
     final token = await getValidAccessToken();
     return token != null;
+  }
+
+  // ── Private helpers ────────────────────────────────────────────────────────
+
+  int? _decodeExp(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length != 3) return null;
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      ) as Map<String, dynamic>;
+      return payload['exp'] as int?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveRotatedHeaderTokens(http.Response response) async {
+    final newAccess = response.headers['x-new-access-token'];
+    final newRefresh = response.headers['x-new-refresh-token'];
+    if (newAccess == null && newRefresh == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    if (newAccess != null && newAccess.isNotEmpty) {
+      await prefs.setString('accessToken', newAccess);
+      await prefs.setString('auth_token', newAccess);
+      debugPrint('🔄 [TokenRefresh] Header rotation — new access token saved');
+    }
+    if (newRefresh != null && newRefresh.isNotEmpty) {
+      await prefs.setString('refreshToken', newRefresh);
+      debugPrint('🔄 [TokenRefresh] Header rotation — new refresh token saved');
+    }
+  }
+
+  Future<void> _handleLogout() async {
+    // Guard: only execute once per session — prevents race conditions where
+    // multiple in-flight requests all fail and each tries to redirect.
+    if (_sessionExpiredGuard) {
+      debugPrint('🔒 [TokenRefresh] Logout already in progress — skipping');
+      return;
+    }
+    _sessionExpiredGuard = true;
+
+    debugPrint('🚪 [TokenRefresh] Session expired — clearing credentials');
+
+    // Disconnect socket immediately so it stops streaming stale data
+    try {
+      SocketService().disconnect();
+      debugPrint('🔌 [TokenRefresh] Socket disconnected');
+    } catch (e) {
+      debugPrint('⚠️ [TokenRefresh] Socket disconnect error: $e');
+    }
+
+    // Clear all auth and session data
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('accessToken');
+      await prefs.remove('auth_token');
+      await prefs.remove('refreshToken');
+      await prefs.remove('client_id');
+      await prefs.remove('user');
+      await prefs.remove('vehicles_list');
+      await prefs.remove('current_vehicle_id');
+      await prefs.remove('current_vehicle_name');
+      await prefs.remove('user_id');
+      await prefs.remove('user_phone');
+      await prefs.remove('app_type');
+      await prefs.remove('roles');
+    } catch (e) {
+      debugPrint('⚠️ [TokenRefresh] Error clearing prefs: $e');
+    }
+
+    debugPrint('🚪 [TokenRefresh] Navigating to login screen');
+    navigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const ModernLoginScreen()),
+          (_) => false,
+    );
   }
 }

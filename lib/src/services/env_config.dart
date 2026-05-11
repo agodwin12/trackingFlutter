@@ -16,7 +16,7 @@ class EnvConfig {
     }
   }
 
-  /// Get base API URL
+  /// Get base API URL (Fleetra Node.js backend)
   static String get baseUrl {
     final url = dotenv.env['BASE_URL'] ?? 'http://10.0.2.2:5000/api';
     debugPrint("📡 Using BASE_URL: $url");
@@ -27,6 +27,15 @@ class EnvConfig {
   static String get socketUrl {
     final url = dotenv.env['SOCKET_URL'] ?? 'http://10.0.2.2:5000';
     debugPrint("🔌 Using SOCKET_URL: $url");
+    return url;
+  }
+
+  /// Get partner lease API base URL (recouvrement backend)
+  static String get partnerApiUrl {
+    final url = dotenv.env['PARTNER_API_URL'] ?? '';
+    if (url.isEmpty) {
+      debugPrint("⚠️ PARTNER_API_URL is not set in .env");
+    }
     return url;
   }
 
@@ -49,6 +58,7 @@ class EnvConfig {
     debugPrint("🔧 ===== ENVIRONMENT CONFIGURATION =====");
     debugPrint("📡 BASE_URL: $baseUrl");
     debugPrint("🔌 SOCKET_URL: $socketUrl");
+    debugPrint("🤝 PARTNER_API_URL: $partnerApiUrl");
     debugPrint("⏱️ API_TIMEOUT: ${apiTimeout.inSeconds}s");
     debugPrint("🐛 DEBUG_MODE: $isDebugMode");
     debugPrint("🔧 =====================================");
@@ -57,7 +67,7 @@ class EnvConfig {
   /// Validate that required environment variables are set
   static bool validate() {
     final requiredVars = ['BASE_URL'];
-    final missingVars = <String>[];
+    final missingVars  = <String>[];
 
     for (final varName in requiredVars) {
       if (dotenv.env[varName] == null || dotenv.env[varName]!.isEmpty) {

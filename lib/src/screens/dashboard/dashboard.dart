@@ -33,25 +33,36 @@ class _ModernDashboardState extends State<ModernDashboard>
   DashboardController? _controller;
   StreamSubscription<Map<String, dynamic>>? _alertSubscription;
   String _selectedLanguage = 'en';
-  bool   _userHasMovedMap  = false;
+  bool _userHasMovedMap = false;
 
   late AnimationController _pulseController;
-  late Animation<double>   _pulseAnimation;
+  late Animation<double> _pulseAnimation;
   late AnimationController _markerAnimationController;
+
+
   Animation<double>? _latAnimation;
   Animation<double>? _lngAnimation;
   Animation<double>? _rotationAnimation;
-  double _currentMarkerLat = 4.0511;
-  double _currentMarkerLng = 9.7679;
-  double _currentRotation  = 0.0;
 
-  // ── Locked-button palette ──────────────────────────────────────────────────
-  // Solid grey background, fully-opaque regular-weight black icon + label.
-  // No opacity wrapper on the container — the grey itself signals disabled.
-  static const Color _lockedBg     = Color(0xFFE0E0E0); // medium grey fill
-  static const Color _lockedIconBg = Color(0xFFF5F5F5); // slightly lighter inner circle
-  static const Color _lockedText   = Color(0xFF212121); // near-black, readable
-  // ──────────────────────────────────────────────────────────────────────────
+  // These are null until the vehicle sends its first valid GPS fix.
+  double? _currentMarkerLat;
+  double? _currentMarkerLng;
+  double _currentRotation = 0.0;
+
+  // Locked-button palette
+  static const Color _lockedBg = Color(0xFFE0E0E0);
+  static const Color _lockedIconBg = Color(0xFFF5F5F5);
+  static const Color _lockedText = Color(0xFF212121);
+  static const Color _lockedIconColor = Color(0xFF9E9E9E);
+
+
+  static const CameraPosition _noGpsCamera = CameraPosition(
+    target: LatLng(4.0, 12.3),
+    zoom: 6,
+  );
+
+
+  bool _isSwitchingVehicle = false;
 
   @override
   void initState() {
@@ -66,19 +77,36 @@ class _ModernDashboardState extends State<ModernDashboard>
     _handleVehiclesRefreshed();
   }
 
+
+  void _onMarkerTick() {
+    if (_latAnimation == null || _lngAnimation == null || _rotationAnimation == null) return;
+    if (_currentMarkerLat == null || _currentMarkerLng == null) return;
+    setState(() {
+      _currentMarkerLat = _latAnimation!.value;
+      _currentMarkerLng = _lngAnimation!.value;
+      _currentRotation  = _rotationAnimation!.value;
+    });
+  }
+
   Future<void> _initializeApp() async {
     await _loadSavedVehicleId();
     await _loadLanguagePreference();
 
+
+    if (!mounted) return;
+
     _controller = DashboardController(_savedVehicleId ?? widget.vehicleId);
     await _controller!.initialize();
 
-    if (mounted) {
-      setState(() {
+    if (!mounted) return;
+
+    setState(() {
+      if (_controller!.hasValidPosition) {
         _currentMarkerLat = _controller!.vehicleLat;
         _currentMarkerLng = _controller!.vehicleLng;
-      });
-    }
+      }
+
+    });
 
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1500),
@@ -94,6 +122,9 @@ class _ModernDashboardState extends State<ModernDashboard>
       vsync: this,
     );
 
+
+    _markerAnimationController.addListener(_onMarkerTick);
+
     _alertSubscription = _controller!.safeZoneAlertStream.listen((data) {
       if (mounted) _showSafeZoneAlert(data);
     });
@@ -105,16 +136,27 @@ class _ModernDashboardState extends State<ModernDashboard>
 
   Future<void> _loadSavedVehicleId() async {
     try {
-      final prefs   = await SharedPreferences.getInstance();
+      final prefs = await SharedPreferences.getInstance();
       final savedId = prefs.getInt('current_vehicle_id');
       if (savedId != null) _savedVehicleId = savedId;
     } catch (e) {
-      debugPrint('⚠️ Error loading saved vehicle ID: $e');
+      debugPrint('Error loading saved vehicle ID: $e');
     }
   }
 
   void _setupLocationListener() {
     _controller?.addListener(() {
+      if (!_controller!.hasValidPosition) {
+        // GPS signal lost — clear the stored position so the marker disappears.
+        if (_currentMarkerLat != null || _currentMarkerLng != null) {
+          setState(() {
+            _currentMarkerLat = null;
+            _currentMarkerLng = null;
+          });
+        }
+        return;
+      }
+      // GPS signal present — animate to the new position only if it changed.
       if (_controller!.vehicleLat != _currentMarkerLat ||
           _controller!.vehicleLng != _currentMarkerLng) {
         _animateMarkerToNewPosition(
@@ -123,10 +165,11 @@ class _ModernDashboardState extends State<ModernDashboard>
     });
   }
 
-  double _calculateBearing(double sLat, double sLng, double eLat, double eLng) {
+  double _calculateBearing(
+      double sLat, double sLng, double eLat, double eLng) {
     final dLon = (eLng - sLng) * (math.pi / 180);
-    final y    = math.sin(dLon) * math.cos(eLat * math.pi / 180);
-    final x    = math.cos(sLat * math.pi / 180) *
+    final y = math.sin(dLon) * math.cos(eLat * math.pi / 180);
+    final x = math.cos(sLat * math.pi / 180) *
         math.sin(eLat * math.pi / 180) -
         math.sin(sLat * math.pi / 180) *
             math.cos(eLat * math.pi / 180) *
@@ -134,11 +177,12 @@ class _ModernDashboardState extends State<ModernDashboard>
     return (math.atan2(y, x) * (180 / math.pi) + 360) % 360;
   }
 
-  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
-    const R    = 6371000.0;
+  double _calculateDistance(
+      double lat1, double lon1, double lat2, double lon2) {
+    const R = 6371000.0;
     final dLat = (lat2 - lat1) * math.pi / 180;
     final dLon = (lon2 - lon1) * math.pi / 180;
-    final a    = math.sin(dLat / 2) * math.sin(dLat / 2) +
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
         math.cos(lat1 * math.pi / 180) *
             math.cos(lat2 * math.pi / 180) *
             math.sin(dLon / 2) *
@@ -147,34 +191,57 @@ class _ModernDashboardState extends State<ModernDashboard>
   }
 
   void _animateMarkerToNewPosition(double newLat, double newLng) {
-    final distance   = _calculateDistance(_currentMarkerLat, _currentMarkerLng, newLat, newLng);
-    final durationMs = distance < 10 ? 500
-        : distance < 100 ? (1000 + distance * 10).clamp(1000, 2000).toInt()
+
+    if (_currentMarkerLat == null || _currentMarkerLng == null) {
+      setState(() {
+        _currentMarkerLat = newLat;
+        _currentMarkerLng = newLng;
+      });
+      // Also move the map camera to this first real position.
+      if (!_userHasMovedMap) {
+        _controller?.mapController?.animateCamera(
+          CameraUpdate.newCameraPosition(
+              CameraPosition(target: LatLng(newLat, newLng), zoom: 16)),
+        );
+      }
+      return;
+    }
+
+    final distance = _calculateDistance(
+        _currentMarkerLat!, _currentMarkerLng!, newLat, newLng);
+    final durationMs = distance < 10
+        ? 500
+        : distance < 100
+        ? (1000 + distance * 10).clamp(1000, 2000).toInt()
         : 2500;
-    final bearing = _calculateBearing(_currentMarkerLat, _currentMarkerLng, newLat, newLng);
+    final bearing = _calculateBearing(
+        _currentMarkerLat!, _currentMarkerLng!, newLat, newLng);
 
     _markerAnimationController.duration = Duration(milliseconds: durationMs);
-    _latAnimation = Tween<double>(begin: _currentMarkerLat, end: newLat).animate(
-        CurvedAnimation(parent: _markerAnimationController, curve: Curves.easeInOut));
-    _lngAnimation = Tween<double>(begin: _currentMarkerLng, end: newLng).animate(
-        CurvedAnimation(parent: _markerAnimationController, curve: Curves.easeInOut));
-    _rotationAnimation = Tween<double>(begin: _currentRotation, end: bearing).animate(
-        CurvedAnimation(parent: _markerAnimationController, curve: Curves.easeInOut));
+    _latAnimation = Tween<double>(begin: _currentMarkerLat!, end: newLat)
+        .animate(CurvedAnimation(
+        parent: _markerAnimationController, curve: Curves.easeInOut));
+    _lngAnimation = Tween<double>(begin: _currentMarkerLng!, end: newLng)
+        .animate(CurvedAnimation(
+        parent: _markerAnimationController, curve: Curves.easeInOut));
+    _rotationAnimation =
+        Tween<double>(begin: _currentRotation, end: bearing).animate(
+            CurvedAnimation(
+                parent: _markerAnimationController, curve: Curves.easeInOut));
 
-    _markerAnimationController.addListener(() {
-      if (_latAnimation != null && _lngAnimation != null && _rotationAnimation != null) {
-        setState(() {
-          _currentMarkerLat = _latAnimation!.value;
-          _currentMarkerLng = _lngAnimation!.value;
-          _currentRotation  = _rotationAnimation!.value;
-        });
-      }
-    });
     _markerAnimationController.forward(from: 0.0);
   }
 
   void _recenterMap() {
     if (_controller == null) return;
+    if (!_controller!.hasValidPosition) {
+
+      _controller!.mapController?.animateCamera(
+        CameraUpdate.newCameraPosition(_noGpsCamera),
+      );
+      setState(() => _userHasMovedMap = false);
+      return;
+    }
     _controller!.mapController?.animateCamera(
       CameraUpdate.newCameraPosition(CameraPosition(
         target: LatLng(_controller!.vehicleLat, _controller!.vehicleLng),
@@ -185,16 +252,19 @@ class _ModernDashboardState extends State<ModernDashboard>
   }
 
   Set<Marker> _createAnimatedMarkers() {
-    if (_controller == null ||
-        _controller!.selectedVehicle == null ||
-        _controller!.customCarIcon == null) return {};
+    if (_controller == null) return {};
+    if (!_controller!.hasValidPosition) return {};
+    if (_controller!.selectedVehicle == null) return {};
+    if (_controller!.customCarIcon == null) return {};
+    // Null check — lat/lng are nullable until first real GPS fix.
+    if (_currentMarkerLat == null || _currentMarkerLng == null) return {};
     return {
       Marker(
-        markerId:   const MarkerId('vehicle'),
-        position:   LatLng(_currentMarkerLat, _currentMarkerLng),
-        icon:       _controller!.customCarIcon!,
-        anchor:     const Offset(0.5, 0.5),
-        rotation:   _currentRotation,
+        markerId: const MarkerId('vehicle'),
+        position: LatLng(_currentMarkerLat!, _currentMarkerLng!),
+        icon: _controller!.customCarIcon!,
+        anchor: const Offset(0.5, 0.5),
+        rotation: _currentRotation,
         infoWindow: InfoWindow(
           title: _controller!.selectedVehicle!.nickname.isNotEmpty
               ? _controller!.selectedVehicle!.nickname
@@ -216,6 +286,8 @@ class _ModernDashboardState extends State<ModernDashboard>
   void dispose() {
     PaymentNotifier.instance.removeListener(_onPaymentNotification);
     _pulseController.dispose();
+
+    _markerAnimationController.removeListener(_onMarkerTick);
     _markerAnimationController.dispose();
     _alertSubscription?.cancel();
     _controller?.dispose();
@@ -235,14 +307,16 @@ class _ModernDashboardState extends State<ModernDashboard>
         const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
         const SizedBox(width: 10),
         Text(
-          _selectedLanguage == 'en' ? 'Subscription activated!' : 'Abonnement activé !',
+          _selectedLanguage == 'en'
+              ? 'Subscription activated!'
+              : 'Abonnement active !',
           style: const TextStyle(fontSize: 13),
         ),
       ]),
       backgroundColor: const Color(0xFF10B981),
       behavior: SnackBarBehavior.floating,
       duration: const Duration(seconds: 3),
-      shape:  RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       margin: const EdgeInsets.all(16),
     ));
   }
@@ -258,7 +332,7 @@ class _ModernDashboardState extends State<ModernDashboard>
         const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
         const SizedBox(width: 10),
         Text(
-          _selectedLanguage == 'en' ? 'Refreshed' : 'Actualisé',
+          _selectedLanguage == 'en' ? 'Refreshed' : 'Actualise',
           style: const TextStyle(fontSize: 13),
         ),
       ]),
@@ -286,8 +360,8 @@ class _ModernDashboardState extends State<ModernDashboard>
       context,
       MaterialPageRoute(
         builder: (_) => SubscriptionPlansScreen(
-          vehicleId:    vehicle.id,
-          vehicleName:  vehicleName,
+          vehicleId: vehicle.id,
+          vehicleName: vehicleName,
           onSubscribed: (_) {},
         ),
       ),
@@ -295,29 +369,29 @@ class _ModernDashboardState extends State<ModernDashboard>
   }
 
   void _showSafeZoneAlert(Map<String, dynamic> alertData) {
-    final title    = alertData['title'] ??
-        (_selectedLanguage == 'en' ? 'Safe Zone Alert' : 'Alerte zone sécurisée');
-    final message  = alertData['message'] ??
+    final title = alertData['title'] ??
+        (_selectedLanguage == 'en' ? 'Safe Zone Alert' : 'Alerte zone securisee');
+    final message = alertData['message'] ??
         (_selectedLanguage == 'en'
             ? 'Vehicle left safe zone'
-            : 'Véhicule a quitté la zone sécurisée');
+            : 'Vehicule a quitte la zone securisee');
     final severity = alertData['severity'] ?? 'warning';
     final Color bgColor;
     final IconData icon;
     if (severity == 'info') {
       bgColor = const Color(0xFF10B981);
-      icon    = Icons.check_circle_rounded;
+      icon = Icons.check_circle_rounded;
     } else if (severity == 'warning') {
       bgColor = const Color(0xFFF59E0B);
-      icon    = Icons.warning_amber_rounded;
+      icon = Icons.warning_amber_rounded;
     } else {
       bgColor = AppColors.error;
-      icon    = Icons.notifications_active_rounded;
+      icon = Icons.notifications_active_rounded;
     }
     ScaffoldMessenger.of(context).showMaterialBanner(
       MaterialBanner(
         backgroundColor: bgColor,
-        padding:         const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16),
         leading: Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -327,7 +401,7 @@ class _ModernDashboardState extends State<ModernDashboard>
         ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize:       MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(title,
                 style: AppTypography.subtitle1.copyWith(
@@ -342,11 +416,11 @@ class _ModernDashboardState extends State<ModernDashboard>
           TextButton.icon(
             onPressed: () =>
                 ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
-            icon:  const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+            icon: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
             label: Text(
               _selectedLanguage == 'en' ? 'DISMISS' : 'FERMER',
-              style: AppTypography.button.copyWith(
-                  color: Colors.white, fontWeight: FontWeight.w600),
+              style: AppTypography.button
+                  .copyWith(color: Colors.white, fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -354,7 +428,9 @@ class _ModernDashboardState extends State<ModernDashboard>
     );
     Future.delayed(const Duration(seconds: 8), () {
       if (mounted) {
-        try { ScaffoldMessenger.of(context).hideCurrentMaterialBanner(); } catch (_) {}
+        try {
+          ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+        } catch (_) {}
       }
     });
   }
@@ -368,16 +444,23 @@ class _ModernDashboardState extends State<ModernDashboard>
       content: Row(children: [
         Icon(
           success ? Icons.check_circle_rounded : Icons.error_outline_rounded,
-          color: Colors.white, size: 20,
+          color: Colors.white,
+          size: 20,
         ),
         SizedBox(width: AppSizes.spacingM),
         Expanded(
           child: Text(
             success
                 ? (_controller!.geofenceEnabled
-                ? (_selectedLanguage == 'en' ? 'Geofencing enabled'  : 'Géofence activée')
-                : (_selectedLanguage == 'en' ? 'Geofencing disabled' : 'Géofence désactivée'))
-                : (_selectedLanguage == 'en' ? 'Failed to toggle geofencing' : 'Échec'),
+                ? (_selectedLanguage == 'en'
+                ? 'Geofencing enabled'
+                : 'Geofence activee')
+                : (_selectedLanguage == 'en'
+                ? 'Geofencing disabled'
+                : 'Geofence desactivee'))
+                : (_selectedLanguage == 'en'
+                ? 'Failed to toggle geofencing'
+                : 'Echec'),
             style: AppTypography.body2.copyWith(color: Colors.white),
           ),
         ),
@@ -389,7 +472,7 @@ class _ModernDashboardState extends State<ModernDashboard>
           : AppColors.error,
       behavior: SnackBarBehavior.floating,
       duration: const Duration(seconds: 2),
-      shape:  RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       margin: const EdgeInsets.all(16),
     ));
   }
@@ -406,8 +489,12 @@ class _ModernDashboardState extends State<ModernDashboard>
           Expanded(
             child: Text(
               _controller!.safeZoneEnabled
-                  ? (_selectedLanguage == 'en' ? 'Safe Zone created!'  : 'Zone sécurisée créée!')
-                  : (_selectedLanguage == 'en' ? 'Safe Zone deleted'   : 'Zone sécurisée supprimée'),
+                  ? (_selectedLanguage == 'en'
+                  ? 'Safe Zone created!'
+                  : 'Zone securisee creee!')
+                  : (_selectedLanguage == 'en'
+                  ? 'Safe Zone deleted'
+                  : 'Zone securisee supprimee'),
               style: AppTypography.body2.copyWith(color: Colors.white),
             ),
           ),
@@ -416,17 +503,19 @@ class _ModernDashboardState extends State<ModernDashboard>
             ? const Color(0xFF10B981)
             : const Color(0xFF64748B),
         behavior: SnackBarBehavior.floating,
-        shape:  RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
       ));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(result['message'] ??
-            (_selectedLanguage == 'en' ? 'Failed to toggle safe zone' : 'Échec')),
+            (_selectedLanguage == 'en'
+                ? 'Failed to toggle safe zone'
+                : 'Echec')),
         backgroundColor: AppColors.error,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
-        shape:  RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
       ));
     }
@@ -440,26 +529,35 @@ class _ModernDashboardState extends State<ModernDashboard>
       content: Row(children: [
         Icon(
           success ? Icons.check_circle_rounded : Icons.error_outline_rounded,
-          color: Colors.white, size: 20,
+          color: Colors.white,
+          size: 20,
         ),
         SizedBox(width: AppSizes.spacingM),
         Expanded(
           child: Text(
             success
                 ? (_controller!.engineOn
-                ? (_selectedLanguage == 'en' ? 'Engine unlocked'   : 'Moteur déverrouillé')
-                : (_selectedLanguage == 'en' ? 'Engine locked'     : 'Moteur verrouillé'))
-                : (_selectedLanguage == 'en' ? 'Failed to toggle engine' : 'Échec'),
+                ? (_selectedLanguage == 'en'
+                ? 'Engine unlocked'
+                : 'Moteur deverrouille')
+                : (_selectedLanguage == 'en'
+                ? 'Engine locked'
+                : 'Moteur verrouille'))
+                : (_selectedLanguage == 'en'
+                ? 'Failed to toggle engine'
+                : 'Echec'),
             style: AppTypography.body2.copyWith(color: Colors.white),
           ),
         ),
       ]),
       backgroundColor: success
-          ? (_controller!.engineOn ? const Color(0xFF10B981) : AppColors.error)
+          ? (_controller!.engineOn
+          ? const Color(0xFF10B981)
+          : AppColors.error)
           : AppColors.error,
       behavior: SnackBarBehavior.floating,
       duration: Duration(seconds: success ? 2 : 3),
-      shape:  RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       margin: const EdgeInsets.all(16),
     ));
   }
@@ -478,18 +576,19 @@ class _ModernDashboardState extends State<ModernDashboard>
               color: AppColors.error.withOpacity(0.1),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 28),
+            child:
+            Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 28),
           ),
           SizedBox(width: AppSizes.spacingM),
           Expanded(
             child: Text(
-              _selectedLanguage == 'en' ? 'Report Stolen?' : 'Signaler Volé?',
+              _selectedLanguage == 'en' ? 'Report Stolen?' : 'Signaler Vole?',
               style: AppTypography.h3,
             ),
           ),
         ]),
         content: Column(
-          mainAxisSize:       MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
@@ -498,20 +597,20 @@ class _ModernDashboardState extends State<ModernDashboard>
             ),
             SizedBox(height: AppSizes.spacingM),
             _buildConfirmationItem(Icons.power_settings_new_rounded,
-                _selectedLanguage == 'en' ? 'Disable engine immediately' : 'Désactiver le moteur'),
+                _selectedLanguage == 'en' ? 'Disable engine immediately' : 'Desactiver le moteur'),
             _buildConfirmationItem(Icons.notification_add_rounded,
-                _selectedLanguage == 'en' ? 'Create theft alert'         : 'Créer alerte de vol'),
+                _selectedLanguage == 'en' ? 'Create theft alert' : 'Creer alerte de vol'),
             _buildConfirmationItem(Icons.my_location_rounded,
-                _selectedLanguage == 'en' ? 'Show vehicle location'      : 'Afficher localisation'),
+                _selectedLanguage == 'en' ? 'Show vehicle location' : 'Afficher localisation'),
             _buildConfirmationItem(Icons.local_police_rounded,
-                _selectedLanguage == 'en' ? 'Show nearby police'         : 'Afficher police'),
+                _selectedLanguage == 'en' ? 'Show nearby police' : 'Afficher police'),
             SizedBox(height: AppSizes.spacingM),
             Container(
               padding: EdgeInsets.all(AppSizes.spacingM),
               decoration: BoxDecoration(
-                color:        AppColors.error.withOpacity(0.1),
+                color: AppColors.error.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(12),
-                border:       Border.all(color: AppColors.error.withOpacity(0.3)),
+                border: Border.all(color: AppColors.error.withOpacity(0.3)),
               ),
               child: Row(children: [
                 Icon(Icons.info_outline_rounded, color: AppColors.error, size: 20),
@@ -520,7 +619,7 @@ class _ModernDashboardState extends State<ModernDashboard>
                   child: Text(
                     _selectedLanguage == 'en'
                         ? 'This action cannot be undone'
-                        : 'Action irréversible',
+                        : 'Action irreversible',
                     style: AppTypography.caption.copyWith(
                         color: AppColors.error, fontWeight: FontWeight.w600),
                   ),
@@ -532,16 +631,20 @@ class _ModernDashboardState extends State<ModernDashboard>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text(_selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
-                style: AppTypography.button.copyWith(color: AppColors.textSecondary)),
+            child: Text(
+                _selectedLanguage == 'en' ? 'Cancel' : 'Annuler',
+                style: AppTypography.button
+                    .copyWith(color: AppColors.textSecondary)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.error,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
             ),
-            child: Text(_selectedLanguage == 'en' ? 'Report Stolen' : 'Signaler',
+            child: Text(
+                _selectedLanguage == 'en' ? 'Report Stolen' : 'Signaler',
                 style: AppTypography.button.copyWith(color: Colors.white)),
           ),
         ],
@@ -550,11 +653,11 @@ class _ModernDashboardState extends State<ModernDashboard>
     if (confirmed != true || !mounted) return;
 
     showDialog(
-      context:            context,
+      context: context,
       barrierDismissible: false,
       builder: (context) => Center(
         child: Container(
-          margin:  const EdgeInsets.all(32),
+          margin: const EdgeInsets.all(32),
           padding: const EdgeInsets.all(32),
           decoration: BoxDecoration(
               color: Colors.white, borderRadius: BorderRadius.circular(20)),
@@ -578,27 +681,33 @@ class _ModernDashboardState extends State<ModernDashboard>
     Navigator.pop(context);
 
     if (success) {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (context) => StolenAlertScreen(
-          vehicleId:    _controller!.selectedVehicleId,
-          vehicleLat:   _controller!.vehicleLat,
-          vehicleLng:   _controller!.vehicleLng,
-          vehicleName:  _controller!.selectedVehicle?.nickname.isNotEmpty == true
-              ? _controller!.selectedVehicle!.nickname
-              : '${_controller!.selectedVehicle?.brand ?? ''} '
-              '${_controller!.selectedVehicle?.model ?? ''}'.trim(),
-          nearbyPolice: _controller!.nearbyPolice,
-        ),
-      ));
+      Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => StolenAlertScreen(
+              vehicleId: _controller!.selectedVehicleId,
+              vehicleLat: _controller!.vehicleLat,
+              vehicleLng: _controller!.vehicleLng,
+              vehicleName: _controller!.selectedVehicle?.nickname.isNotEmpty ==
+                  true
+                  ? _controller!.selectedVehicle!.nickname
+                  : '${_controller!.selectedVehicle?.brand ?? ''} '
+                  '${_controller!.selectedVehicle?.model ?? ''}'
+                  .trim(),
+              nearbyPolice: _controller!.nearbyPolice,
+            ),
+          ));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
-          _selectedLanguage == 'en' ? 'Failed to report. Try again.' : 'Échec. Réessayez.',
+          _selectedLanguage == 'en'
+              ? 'Failed to report. Try again.'
+              : 'Echec. Reessayez.',
           style: AppTypography.body1.copyWith(color: Colors.white),
         ),
         backgroundColor: AppColors.error,
         behavior: SnackBarBehavior.floating,
-        shape:  RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         margin: const EdgeInsets.all(16),
       ));
     }
@@ -611,7 +720,7 @@ class _ModernDashboardState extends State<ModernDashboard>
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color:        const Color(0xFF10B981).withOpacity(0.1),
+            color: const Color(0xFF10B981).withOpacity(0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, color: const Color(0xFF10B981), size: 18),
@@ -624,11 +733,18 @@ class _ModernDashboardState extends State<ModernDashboard>
 
   void _showVehicleSelectorModal() {
     showModalBottomSheet(
-      context:            context,
-      backgroundColor:    Colors.transparent,
+      context: context,
+      backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      useRootNavigator:   true,
-      builder: (context) => _buildMinimalistVehicleSelector(),
+      useRootNavigator: true,
+
+      builder: (context) {
+        if (_controller == null) return const SizedBox.shrink();
+        return ListenableBuilder(
+          listenable: _controller!,
+          builder: (context, _) => _buildMinimalistVehicleSelector(),
+        );
+      },
     );
   }
 
@@ -636,8 +752,8 @@ class _ModernDashboardState extends State<ModernDashboard>
     showDialog(
       context: context,
       builder: (context) => EngineConfirmDialog(
-        controller:       controller,
-        onConfirm:        _handleEngineToggle,
+        controller: controller,
+        onConfirm: _handleEngineToggle,
         selectedLanguage: _selectedLanguage,
       ),
     );
@@ -647,8 +763,8 @@ class _ModernDashboardState extends State<ModernDashboard>
     showDialog(
       context: context,
       builder: (context) => ReportStolenDialog(
-        controller:       controller,
-        onConfirm:        _handleReportStolen,
+        controller: controller,
+        onConfirm: _handleReportStolen,
         selectedLanguage: _selectedLanguage,
       ),
     );
@@ -671,6 +787,14 @@ class _ModernDashboardState extends State<ModernDashboard>
           }
           final bool locked = !controller.hasActiveSubscription;
 
+          final CameraPosition initialCamera = controller.hasValidPosition
+              ? CameraPosition(
+            target:
+            LatLng(controller.vehicleLat, controller.vehicleLng),
+            zoom: 16,
+          )
+              : _noGpsCamera;
+
           return Scaffold(
             backgroundColor: AppColors.background,
             body: SafeArea(
@@ -680,35 +804,72 @@ class _ModernDashboardState extends State<ModernDashboard>
                 Expanded(
                   child: Stack(children: [
                     GoogleMap(
-                      initialCameraPosition: CameraPosition(
-                        target: LatLng(controller.vehicleLat, controller.vehicleLng),
-                        zoom: 16,
-                      ),
+                      initialCameraPosition: initialCamera,
                       markers: _createAnimatedMarkers(),
                       circles: controller.activeSafeZone != null
                           ? {
                         Circle(
-                          circleId:    const CircleId('safe_zone'),
-                          center:      LatLng(
+                          circleId: const CircleId('safe_zone'),
+                          center: LatLng(
                             controller.activeSafeZone!.centerLatitude,
                             controller.activeSafeZone!.centerLongitude,
                           ),
-                          radius:      controller.activeSafeZone!.radiusMeters.toDouble(),
-                          fillColor:   const Color(0xFF10B981).withOpacity(0.15),
+                          radius: controller.activeSafeZone!.radiusMeters
+                              .toDouble(),
+                          fillColor: const Color(0xFF10B981)
+                              .withOpacity(0.15),
                           strokeColor: const Color(0xFF10B981),
                           strokeWidth: 2,
                         ),
                       }
                           : const {},
-                      mapType:              controller.currentMapType,
-                      onMapCreated:         controller.setMapController,
+                      mapType: controller.currentMapType,
+                      onMapCreated: controller.setMapController,
                       onCameraMove: (_) {
-                        if (!_userHasMovedMap) setState(() => _userHasMovedMap = true);
+                        if (!_userHasMovedMap) {
+                          setState(() => _userHasMovedMap = true);
+                        }
                       },
                       myLocationButtonEnabled: false,
-                      zoomControlsEnabled:     false,
-                      mapToolbarEnabled:       false,
+                      zoomControlsEnabled: false,
+                      mapToolbarEnabled: false,
                     ),
+
+                    if (!controller.hasValidPosition)
+                      Positioned(
+                        bottom: 120,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.65),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child:
+                            Row(mainAxisSize: MainAxisSize.min, children: [
+                              const SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 1.5, color: Colors.white),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _selectedLanguage == 'en'
+                                    ? 'Waiting for GPS signal...'
+                                    : 'En attente du signal GPS...',
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500),
+                              ),
+                            ]),
+                          ),
+                        ),
+                      ),
 
                     _buildCompactVehicleSelectorButton(controller),
                     _buildCompactMapTypeButton(controller),
@@ -718,22 +879,29 @@ class _ModernDashboardState extends State<ModernDashboard>
 
                     if (controller.isReloadingVehicles)
                       Positioned(
-                        top: 0, left: 0, right: 0,
+                        top: 0,
+                        left: 0,
+                        right: 0,
                         child: Container(
-                          color:   Colors.black.withOpacity(0.05),
-                          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+                          color: Colors.black.withOpacity(0.05),
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 6, horizontal: 16),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               const SizedBox(
-                                width: 12, height: 12,
+                                width: 12,
+                                height: 12,
                                 child: CircularProgressIndicator(
                                     strokeWidth: 1.5, color: Colors.black54),
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                _selectedLanguage == 'en' ? 'Updating...' : 'Mise à jour...',
-                                style: const TextStyle(fontSize: 11, color: Colors.black54),
+                                _selectedLanguage == 'en'
+                                    ? 'Updating...'
+                                    : 'Mise a jour...',
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.black54),
                               ),
                             ],
                           ),
@@ -756,13 +924,17 @@ class _ModernDashboardState extends State<ModernDashboard>
   // ═══════════════════════════════════════════════════════════════════════════
 
   Widget _buildCompactHeader(DashboardController controller) {
-    final bool busy = controller.isRefreshing || controller.isReloadingVehicles;
+    final bool busy =
+        controller.isRefreshing || controller.isReloadingVehicles;
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 4, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2))
+        ],
       ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -775,21 +947,25 @@ class _ModernDashboardState extends State<ModernDashboard>
             blendMode: BlendMode.srcIn,
             child: const Text('FLEETRA',
                 style: TextStyle(
-                  fontSize:   19,
+                  fontSize: 19,
                   fontWeight: FontWeight.w900,
                   fontFamily: 'Roboto',
-                  color:      Colors.white,
+                  color: Colors.white,
                 )),
           ),
           Row(children: [
             _buildSimpleIconButton(
               icon: busy
                   ? const SizedBox(
-                  width: 18, height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black54))
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.black54))
                   : Icon(Icons.refresh_rounded,
                   size: 20,
-                  color: controller.isOffline ? Colors.grey : Colors.black54),
+                  color: controller.isOffline
+                      ? Colors.grey
+                      : Colors.black54),
               onTap: (busy || controller.isOffline) ? null : _handleFullRefresh,
             ),
             const SizedBox(width: 10),
@@ -808,12 +984,14 @@ class _ModernDashboardState extends State<ModernDashboard>
               ),
               if (controller.notificationCount > 0)
                 Positioned(
-                  right: 4, top: 4,
+                  right: 4,
+                  top: 4,
                   child: Container(
-                    width: 8, height: 8,
+                    width: 8,
+                    height: 8,
                     decoration: BoxDecoration(
-                      color:  AppColors.error,
-                      shape:  BoxShape.circle,
+                      color: AppColors.error,
+                      shape: BoxShape.circle,
                       border: Border.all(color: Colors.white, width: 1.5),
                     ),
                   ),
@@ -821,12 +999,14 @@ class _ModernDashboardState extends State<ModernDashboard>
             ]),
             const SizedBox(width: 10),
             _buildSimpleIconButton(
-              icon: const Icon(Icons.settings_outlined, size: 20, color: Colors.black54),
+              icon: const Icon(Icons.settings_outlined,
+                  size: 20, color: Colors.black54),
               onTap: () async {
                 final result = await Navigator.push(
                   context,
                   MaterialPageRoute(
-                      builder: (_) => SettingsScreen(vehicleId: widget.vehicleId)),
+                      builder: (_) =>
+                          SettingsScreen(vehicleId: widget.vehicleId)),
                 );
                 if (result == 'language_changed' && mounted) {
                   await _loadLanguagePreference();
@@ -845,38 +1025,49 @@ class _ModernDashboardState extends State<ModernDashboard>
 
   Widget _buildCompactVehicleSelectorButton(DashboardController controller) {
     return Positioned(
-      top: 12, left: 0, right: 0,
+      top: 12,
+      left: 0,
+      right: 0,
       child: Center(
         child: GestureDetector(
           onTap: _showVehicleSelectorModal,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color:        Colors.white,
+              color: Colors.white,
               borderRadius: BorderRadius.circular(20),
-              boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
-                  blurRadius: 8, offset: const Offset(0, 2))],
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withOpacity(0.15),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2))
+              ],
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.directions_car, color: Colors.black87, size: 18),
+              const Icon(Icons.directions_car,
+                  color: Colors.black87, size: 18),
               const SizedBox(width: 8),
               Text(
                 controller.selectedVehicle!.nickname.isNotEmpty
                     ? controller.selectedVehicle!.nickname
                     : controller.selectedVehicle!.immatriculation,
                 style: const TextStyle(
-                    fontWeight: FontWeight.w600, color: Colors.black87, fontSize: 13),
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                    fontSize: 13),
               ),
               const SizedBox(width: 4),
               if (controller.selectedVehicle!.isOnline)
                 Container(
-                  width: 6, height: 6,
+                  width: 6,
+                  height: 6,
                   decoration: const BoxDecoration(
                       color: Color(0xFF10B981), shape: BoxShape.circle),
                 ),
               const SizedBox(width: 4),
-              const Icon(Icons.keyboard_arrow_down, color: Colors.black54, size: 16),
+              const Icon(Icons.keyboard_arrow_down,
+                  color: Colors.black54, size: 16),
             ]),
           ),
         ),
@@ -886,18 +1077,25 @@ class _ModernDashboardState extends State<ModernDashboard>
 
   Widget _buildCompactMapTypeButton(DashboardController controller) {
     return Positioned(
-      top: 12, left: 12,
+      top: 12,
+      left: 12,
       child: GestureDetector(
         onTap: controller.cycleMapType,
         child: Container(
-          width: 40, height: 40,
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
-            color: Colors.white, shape: BoxShape.circle,
-            boxShadow: [BoxShadow(
-                color: Colors.black.withOpacity(0.15),
-                blurRadius: 8, offset: const Offset(0, 2))],
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2))
+            ],
           ),
-          child: const Icon(Icons.layers, color: Colors.black87, size: 20),
+          child:
+          const Icon(Icons.layers, color: Colors.black87, size: 20),
         ),
       ),
     );
@@ -905,58 +1103,84 @@ class _ModernDashboardState extends State<ModernDashboard>
 
   Widget _buildRecenterButton(DashboardController controller) {
     return Positioned(
-      top: 62, left: 12,
+      top: 62,
+      left: 12,
       child: GestureDetector(
         onTap: _recenterMap,
         child: Container(
-          width: 40, height: 40,
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
-            color: Colors.white, shape: BoxShape.circle,
-            boxShadow: [BoxShadow(
-                color: Colors.black.withOpacity(0.15),
-                blurRadius: 8, offset: const Offset(0, 2))],
+            color: Colors.white,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2))
+            ],
           ),
           child: Icon(Icons.my_location_rounded,
-              color: _userHasMovedMap ? const Color(0xFF1A73E8) : Colors.black38,
+              color: _userHasMovedMap
+                  ? const Color(0xFF1A73E8)
+                  : Colors.black38,
               size: 20),
         ),
       ),
     );
   }
 
-  Widget _buildCompactEngineButton(DashboardController controller, bool locked) {
-    final bool fullyDisabled = locked || controller.isOffline || controller.isTogglingEngine;
+  Widget _buildCompactEngineButton(
+      DashboardController controller, bool locked) {
+    final bool fullyDisabled =
+        locked || controller.isOffline || controller.isTogglingEngine;
     return Positioned(
-      top: 12, right: 12,
+      top: 12,
+      right: 12,
       child: Opacity(
         opacity: fullyDisabled ? 0.4 : 1.0,
         child: GestureDetector(
-          onTap: fullyDisabled ? null : () => _showEngineConfirmDialog(controller),
+          onTap: fullyDisabled
+              ? null
+              : () => _showEngineConfirmDialog(controller),
           child: Container(
-            width: 44, height: 44,
+            width: 44,
+            height: 44,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: locked
                   ? const Color(0xFFB0B0B0)
-                  : (controller.engineOn ? Colors.white : const Color(0xFFEF4444)),
+                  : (controller.engineOn
+                  ? Colors.white
+                  : const Color(0xFFEF4444)),
               shape: BoxShape.circle,
-              boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
-                  blurRadius: 8, offset: const Offset(0, 2))],
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withOpacity(0.15),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2))
+              ],
             ),
             child: controller.isTogglingEngine
                 ? SizedBox(
-              width: 20, height: 20,
+              width: 20,
+              height: 20,
               child: CircularProgressIndicator(
-                  color: locked ? Colors.white : Colors.black87, strokeWidth: 2),
+                  color: locked ? Colors.white : Colors.black87,
+                  strokeWidth: 2),
             )
                 : Image.asset(
-              locked || !controller.engineOn ? 'assets/lock.ico' : 'assets/open.ico',
-              width: 24, height: 24,
-              fit:            BoxFit.contain,
-              color:          locked
+              locked || !controller.engineOn
+                  ? 'assets/lock.ico'
+                  : 'assets/open.ico',
+              width: 24,
+              height: 24,
+              fit: BoxFit.contain,
+              color: locked
                   ? Colors.white
-                  : (controller.engineOn ? const Color(0xFF10B981) : Colors.white),
+                  : (controller.engineOn
+                  ? const Color(0xFF10B981)
+                  : Colors.white),
               colorBlendMode: BlendMode.srcIn,
             ),
           ),
@@ -965,32 +1189,46 @@ class _ModernDashboardState extends State<ModernDashboard>
     );
   }
 
-  Widget _buildCompactStolenButton(DashboardController controller, bool locked) {
-    final bool fullyDisabled = locked || controller.isOffline || controller.isReportingStolen;
+  Widget _buildCompactStolenButton(
+      DashboardController controller, bool locked) {
+    final bool fullyDisabled =
+        locked || controller.isOffline || controller.isReportingStolen;
     return Positioned(
-      top: 64, right: 12,
+      top: 64,
+      right: 12,
       child: Opacity(
         opacity: fullyDisabled ? 0.4 : 1.0,
         child: GestureDetector(
-          onTap: fullyDisabled ? null : () => _showReportStolenDialog(controller),
+          onTap: fullyDisabled
+              ? null
+              : () => _showReportStolenDialog(controller),
           child: Container(
-            width: 44, height: 44,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              color: locked ? const Color(0xFFB0B0B0) : const Color(0xFFEF4444),
+              color: locked
+                  ? const Color(0xFFB0B0B0)
+                  : const Color(0xFFEF4444),
               shape: BoxShape.circle,
-              boxShadow: [BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
-                  blurRadius: 8, offset: const Offset(0, 2))],
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withOpacity(0.15),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2))
+              ],
             ),
             child: controller.isReportingStolen
                 ? const Padding(
               padding: EdgeInsets.all(12),
-              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+              child: CircularProgressIndicator(
+                  color: Colors.white, strokeWidth: 2),
             )
-                : Image.asset('assets/stolen.png',
-              width: 24, height: 24,
-              fit:            BoxFit.cover,
-              color:          Colors.white,
+                : Image.asset(
+              'assets/stolen.png',
+              width: 24,
+              height: 24,
+              fit: BoxFit.cover,
+              color: Colors.white,
               colorBlendMode: BlendMode.srcIn,
             ),
           ),
@@ -1005,7 +1243,9 @@ class _ModernDashboardState extends State<ModernDashboard>
 
   Widget _buildBottomControls(DashboardController controller, bool locked) {
     return Positioned(
-      bottom: 0, left: 0, right: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
       child: ClipRRect(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         child: BackdropFilter(
@@ -1013,9 +1253,11 @@ class _ModernDashboardState extends State<ModernDashboard>
           child: Container(
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.05),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(24)),
               border: Border(
-                  top: BorderSide(color: Colors.white.withOpacity(0.2), width: 1)),
+                  top: BorderSide(
+                      color: Colors.white.withOpacity(0.2), width: 1)),
             ),
             padding: const EdgeInsets.fromLTRB(12, 14, 12, 14),
             child: Column(
@@ -1024,58 +1266,66 @@ class _ModernDashboardState extends State<ModernDashboard>
                 Row(children: [
                   Expanded(
                     child: _buildFeatureButton(
-                      icon:      Icons.radio_button_checked_rounded,
-                      label:     _selectedLanguage == 'en' ? 'Geofence' : 'Barrière\nVirtuelle',
-                      isActive:  controller.geofenceEnabled,
+                      icon: Icons.radio_button_checked_rounded,
+                      label: _selectedLanguage == 'en'
+                          ? 'Geofence'
+                          : 'Barriere\nVirtuelle',
+                      isActive: controller.geofenceEnabled,
                       isLoading: controller.isTogglingGeofence,
-                      locked:    locked,
-                      onTap:     _handleGeofenceToggle,
+                      locked: locked,
+                      onTap: _handleGeofenceToggle,
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: _buildFeatureButton(
-                      icon:      Icons.shield_rounded,
-                      label:     _selectedLanguage == 'en' ? 'Safe Zone' : 'Zone\nSécurisée',
-                      isActive:  controller.safeZoneEnabled,
+                      icon: Icons.shield_rounded,
+                      label: _selectedLanguage == 'en'
+                          ? 'Safe Zone'
+                          : 'Zone\nSecurisee',
+                      isActive: controller.safeZoneEnabled,
                       isLoading: controller.isTogglingSafeZone,
-                      locked:    locked,
-                      onTap:     _handleSafeZoneToggle,
+                      locked: locked,
+                      onTap: _handleSafeZoneToggle,
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: _buildActionButton(
-                      icon:   Icons.timeline_rounded,
-                      label:  _selectedLanguage == 'en' ? 'Trip History' : 'Historique\nTrajet',
+                      icon: Icons.timeline_rounded,
+                      label: _selectedLanguage == 'en'
+                          ? 'Trip History'
+                          : 'Historique\nTrajet',
                       locked: locked,
-                      onTap:  () => Navigator.push(
+                      onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) =>
-                              TripsScreen(vehicleId: controller.selectedVehicleId),
+                          builder: (_) => TripsScreen(
+                              vehicleId: controller.selectedVehicleId),
                         ),
                       ),
                     ),
                   ),
                 ]),
 
-                // No-subscription banner
                 if (locked) ...[
                   const SizedBox(height: 10),
                   GestureDetector(
                     onTap: _navigateToRenewal,
                     child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 10, horizontal: 14),
                       decoration: BoxDecoration(
-                        color:        AppColors.error.withOpacity(0.10),
+                        color: AppColors.error.withOpacity(0.10),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                            color: AppColors.error.withOpacity(0.35), width: 1),
+                            color: AppColors.error.withOpacity(0.35),
+                            width: 1),
                       ),
                       child: Row(children: [
-                        Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 16),
+                        Icon(Icons.warning_amber_rounded,
+                            color: AppColors.error, size: 16),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
@@ -1083,9 +1333,9 @@ class _ModernDashboardState extends State<ModernDashboard>
                                 ? 'No active subscription — tap to renew'
                                 : 'Aucun abonnement actif — appuyer pour renouveler',
                             style: TextStyle(
-                              fontSize:   12,
+                              fontSize: 12,
                               fontWeight: FontWeight.w600,
-                              color:      AppColors.error,
+                              color: AppColors.error,
                             ),
                           ),
                         ),
@@ -1103,79 +1353,83 @@ class _ModernDashboardState extends State<ModernDashboard>
     );
   }
 
-  // ── Feature button (Geofence / Safe Zone) ──────────────────────────────────
-  // locked  → solid grey (#E0E0E0), white inner square, regular-weight black text/icon
-  //           NO opacity wrapper — grey itself signals disabled state
-  // unlocked → glassmorphic with coloured status dot
   Widget _buildFeatureButton({
-    required IconData     icon,
-    required String       label,
-    required bool         isActive,
-    required bool         isLoading,
-    required bool         locked,
+    required IconData icon,
+    required String label,
+    required bool isActive,
+    required bool isLoading,
+    required bool locked,
     required VoidCallback onTap,
   }) {
-    final Color activeColor   = const Color(0xFF10B981);
+    final Color activeColor = const Color(0xFF10B981);
     final Color inactiveColor = const Color(0xFFEF4444);
 
     return GestureDetector(
-      onTap: locked || isLoading || (_controller?.isOffline ?? false) ? null : onTap,
+      onTap: locked || isLoading || (_controller?.isOffline ?? false)
+          ? null
+          : onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
         decoration: BoxDecoration(
           color: locked ? _lockedBg : Colors.white.withOpacity(0.25),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            // Slightly darker border when locked so the button edge is visible
-            color: locked ? const Color(0xFFBDBDBD) : Colors.white.withOpacity(0.5),
+            color: locked
+                ? const Color(0xFFBDBDBD)
+                : Colors.white.withOpacity(0.5),
             width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
-              color:      Colors.black.withOpacity(0.07),
+              color: Colors.black.withOpacity(0.07),
               blurRadius: 6,
-              offset:     const Offset(0, 2),
+              offset: const Offset(0, 2),
             ),
           ],
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Stack(clipBehavior: Clip.none, children: [
             Container(
-              width: 36, height: 36,
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
-                // Inner square: white when locked, translucent white when unlocked
-                color:        locked ? _lockedIconBg : Colors.white.withOpacity(0.35),
+                color: locked
+                    ? _lockedIconBg
+                    : Colors.white.withOpacity(0.35),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: isLoading
                   ? const Center(
                 child: SizedBox(
-                  width: 18, height: 18,
+                  width: 18,
+                  height: 18,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: Colors.black54),
                 ),
               )
                   : Icon(
                 icon,
-                // Regular weight black — not bold, fully visible on grey
-                color: locked ? _lockedText : Colors.black87,
+                color: locked ? _lockedIconColor : Colors.black87,
                 size: 20,
               ),
             ),
-            // Status dot only when unlocked
             if (!locked)
               Positioned(
-                top: -2, right: -2,
+                top: -2,
+                right: -2,
                 child: Container(
-                  width: 10, height: 10,
+                  width: 10,
+                  height: 10,
                   decoration: BoxDecoration(
-                    color:  isActive ? activeColor : inactiveColor,
-                    shape:  BoxShape.circle,
+                    color: isActive ? activeColor : inactiveColor,
+                    shape: BoxShape.circle,
                     border: Border.all(color: Colors.white, width: 2),
                     boxShadow: [
                       BoxShadow(
-                        color: (isActive ? activeColor : inactiveColor).withOpacity(0.6),
-                        blurRadius: 4, spreadRadius: 1,
+                        color: (isActive ? activeColor : inactiveColor)
+                            .withOpacity(0.6),
+                        blurRadius: 4,
+                        spreadRadius: 1,
                       ),
                     ],
                   ),
@@ -1188,11 +1442,10 @@ class _ModernDashboardState extends State<ModernDashboard>
               label,
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize:   11,
-                // Regular weight (w400) — not bold — as requested
+                fontSize: 11,
                 fontWeight: locked ? FontWeight.w400 : FontWeight.w700,
-                color:      locked ? _lockedText : Colors.black87,
-                height:     1.1,
+                color: locked ? _lockedText : Colors.black87,
+                height: 1.1,
               ),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -1203,13 +1456,10 @@ class _ModernDashboardState extends State<ModernDashboard>
     );
   }
 
-  // ── Action button (Trip History) ──────────────────────────────────────────
-  // locked  → same grey treatment, regular-weight black text/icon
-  // unlocked → AppColors.primary fill
   Widget _buildActionButton({
-    required IconData     icon,
-    required String       label,
-    required bool         locked,
+    required IconData icon,
+    required String label,
+    required bool locked,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
@@ -1220,7 +1470,9 @@ class _ModernDashboardState extends State<ModernDashboard>
           color: locked ? _lockedBg : AppColors.primary,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: locked ? const Color(0xFFBDBDBD) : AppColors.primary.withOpacity(0.8),
+            color: locked
+                ? const Color(0xFFBDBDBD)
+                : AppColors.primary.withOpacity(0.8),
             width: 1.5,
           ),
           boxShadow: [
@@ -1229,21 +1481,23 @@ class _ModernDashboardState extends State<ModernDashboard>
                   ? Colors.black.withOpacity(0.07)
                   : AppColors.primary.withOpacity(0.4),
               blurRadius: 6,
-              offset:     const Offset(0, 2),
+              offset: const Offset(0, 2),
             ),
           ],
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(
-            width: 36, height: 36,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
-              color:        locked ? _lockedIconBg : Colors.white.withOpacity(0.2),
+              color: locked
+                  ? _lockedIconBg
+                  : Colors.white.withOpacity(0.2),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(
               icon,
-              // Regular weight black when locked
-              color: locked ? _lockedText : Colors.white,
+              color: locked ? _lockedIconColor : Colors.white,
               size: 20,
             ),
           ),
@@ -1253,10 +1507,10 @@ class _ModernDashboardState extends State<ModernDashboard>
               label,
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize:   11,
+                fontSize: 11,
                 fontWeight: locked ? FontWeight.w400 : FontWeight.w700,
-                color:      locked ? _lockedText : Colors.white,
-                height:     1.1,
+                color: locked ? _lockedText : Colors.white,
+                height: 1.1,
               ),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -1275,163 +1529,197 @@ class _ModernDashboardState extends State<ModernDashboard>
     if (_controller == null) return const SizedBox.shrink();
     final double bottomInset = MediaQuery.of(context).padding.bottom;
 
-    return SafeArea(
-      bottom: true,
-      child: Container(
-        constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.55),
-        decoration: const BoxDecoration(
-          color:        Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    return Container(
+      constraints:
+      BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          margin: const EdgeInsets.only(top: 8),
+          width: 32,
+          height: 4,
+          decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2)),
         ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            width: 32, height: 4,
-            decoration: BoxDecoration(
-                color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                _selectedLanguage == 'en' ? 'Select Vehicle' : 'Sélectionner véhicule',
-                style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
-              ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              _selectedLanguage == 'en'
+                  ? 'Select Vehicle'
+                  : 'Selectionner vehicule',
+              style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87),
             ),
           ),
-          Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
-          Flexible(
-            child: ListView.separated(
-              shrinkWrap: true,
-              padding: EdgeInsets.only(top: 4, bottom: bottomInset + 12),
-              itemCount: _controller!.vehicles.length,
-              separatorBuilder: (_, __) =>
-                  Divider(height: 1, color: Colors.grey.shade100),
-              itemBuilder: (context, index) {
-                final vehicle    = _controller!.vehicles[index];
-                final isSelected = vehicle.id == _controller!.selectedVehicleId;
+        ),
+        Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
+        Flexible(
+          child: ListView.separated(
+            shrinkWrap: true,
 
-                return InkWell(
-                  onTap: () async {
-                    try {
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setInt('current_vehicle_id', vehicle.id);
-                      final displayName = vehicle.nickname?.isNotEmpty == true
-                          ? vehicle.nickname as String
-                          : vehicle.immatriculation;
-                      await prefs.setString(
-                          'vehicle_name_${vehicle.id}', displayName);
-                      await prefs.setString('current_vehicle_name', displayName);
-                    } catch (e) {
-                      debugPrint('⚠️ Error saving vehicle ID: $e');
-                    }
-                    _controller!.onVehicleSelected(vehicle.id);
-                    setState(() {
-                      _currentMarkerLat = _controller!.vehicleLat;
-                      _currentMarkerLng = _controller!.vehicleLng;
-                      _currentRotation  = 0.0;
-                      _userHasMovedMap  = false;
-                    });
-                    _recenterMap();
-                    Navigator.pop(context);
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    color: isSelected
-                        ? AppColors.primary.withOpacity(0.05)
-                        : Colors.transparent,
-                    child: Row(children: [
-                      Icon(Icons.directions_car,
-                          color: isSelected
-                              ? AppColors.primary
-                              : Colors.grey.shade600,
-                          size: 20),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              vehicle.nickname?.isNotEmpty == true
-                                  ? vehicle.nickname
-                                  : '${vehicle.brand} ${vehicle.model}',
-                              style: TextStyle(
-                                fontSize:   14,
-                                fontWeight: FontWeight.w600,
-                                color: isSelected ? AppColors.primary : Colors.black87,
-                              ),
+            padding: EdgeInsets.only(top: 4, bottom: bottomInset + 12),
+            itemCount: _controller!.vehicles.length,
+            separatorBuilder: (_, __) =>
+                Divider(height: 1, color: Colors.grey.shade100),
+            itemBuilder: (context, index) {
+              final vehicle = _controller!.vehicles[index];
+              final isSelected =
+                  vehicle.id == _controller!.selectedVehicleId;
+
+              return InkWell(
+                onTap: () => _onVehicleSelected(vehicle),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  color: isSelected
+                      ? AppColors.primary.withOpacity(0.05)
+                      : Colors.transparent,
+                  child: Row(children: [
+                    Icon(Icons.directions_car,
+                        color: isSelected
+                            ? AppColors.primary
+                            : Colors.grey.shade600,
+                        size: 20),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            vehicle.nickname?.isNotEmpty == true
+                                ? vehicle.nickname
+                                : '${vehicle.brand} ${vehicle.model}',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: isSelected
+                                  ? AppColors.primary
+                                  : Colors.black87,
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              vehicle.nickname?.isNotEmpty == true
-                                  ? '${vehicle.brand} ${vehicle.model} — ${vehicle.immatriculation}'
-                                  : vehicle.immatriculation,
-                              style: TextStyle(
-                                  fontSize: 12, color: Colors.grey.shade600),
-                            ),
-                          ],
-                        ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            vehicle.nickname?.isNotEmpty == true
+                                ? '${vehicle.brand} ${vehicle.model} — ${vehicle.immatriculation}'
+                                : vehicle.immatriculation,
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600),
+                          ),
+                        ],
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: vehicle.hasActiveSubscription
+                            ? const Color(0xFF10B981).withOpacity(0.1)
+                            : Colors.red.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(
+                          vehicle.hasActiveSubscription
+                              ? Icons.check_circle_rounded
+                              : Icons.cancel_rounded,
+                          size: 13,
                           color: vehicle.hasActiveSubscription
-                              ? const Color(0xFF10B981).withOpacity(0.1)
-                              : Colors.red.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(20),
+                              ? const Color(0xFF10B981)
+                              : Colors.red,
                         ),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(
-                            vehicle.hasActiveSubscription
-                                ? Icons.check_circle_rounded
-                                : Icons.cancel_rounded,
-                            size:  13,
+                        const SizedBox(width: 4),
+                        Text(
+                          vehicle.hasActiveSubscription
+                              ? (_selectedLanguage == 'en' ? 'Active' : 'Actif')
+                              : (_selectedLanguage == 'en'
+                              ? 'No plan'
+                              : 'Sans Abonement '),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
                             color: vehicle.hasActiveSubscription
                                 ? const Color(0xFF10B981)
                                 : Colors.red,
                           ),
-                          const SizedBox(width: 4),
-                          Text(
-                            vehicle.hasActiveSubscription
-                                ? (_selectedLanguage == 'en' ? 'Active'  : 'Actif')
-                                : (_selectedLanguage == 'en' ? 'No plan' : 'Sans plan'),
-                            style: TextStyle(
-                              fontSize:   10,
-                              fontWeight: FontWeight.w600,
-                              color:      vehicle.hasActiveSubscription
-                                  ? const Color(0xFF10B981)
-                                  : Colors.red,
-                            ),
-                          ),
-                        ]),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        width: 8, height: 8,
-                        decoration: BoxDecoration(
-                          color: vehicle.isOnline
-                              ? const Color(0xFF10B981)
-                              : Colors.grey.shade400,
-                          shape: BoxShape.circle,
                         ),
+                      ]),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: vehicle.isOnline
+                            ? const Color(0xFF10B981)
+                            : Colors.grey.shade400,
+                        shape: BoxShape.circle,
                       ),
-                      if (isSelected) ...[
-                        const SizedBox(width: 8),
-                        Icon(Icons.check_circle, color: AppColors.primary, size: 20),
-                      ],
-                    ]),
-                  ),
-                );
-              },
-            ),
+                    ),
+                    if (isSelected) ...[
+                      const SizedBox(width: 8),
+                      Icon(Icons.check_circle,
+                          color: AppColors.primary, size: 20),
+                    ],
+                  ]),
+                ),
+              );
+            },
           ),
-        ]),
-      ),
+        ),
+      ]),
     );
+  }
+
+
+  Future<void> _onVehicleSelected(dynamic vehicle) async {
+    if (_isSwitchingVehicle) return; // FIX #5: guard against double-tap
+    _isSwitchingVehicle = true;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('current_vehicle_id', vehicle.id);
+      final displayName = vehicle.nickname?.isNotEmpty == true
+          ? vehicle.nickname as String
+          : vehicle.immatriculation;
+      await prefs.setString('vehicle_name_${vehicle.id}', displayName);
+      await prefs.setString('current_vehicle_name', displayName);
+    } catch (e) {
+      debugPrint('Error saving vehicle ID: $e');
+    } finally {
+      _isSwitchingVehicle = false; // FIX #5: always release the lock
+    }
+
+    if (!mounted) return;
+
+    _controller!.onVehicleSelected(vehicle.id);
+
+    setState(() {
+      if (_controller!.hasValidPosition) {
+        // New vehicle already has a confirmed GPS fix — seed marker there.
+        _currentMarkerLat = _controller!.vehicleLat;
+        _currentMarkerLng = _controller!.vehicleLng;
+      } else {
+        // No valid position for the new vehicle.
+        // Null out the coords so the marker disappears completely until
+        // the first real GPS fix arrives. No hardcoded fallback position.
+        _currentMarkerLat = null;
+        _currentMarkerLng = null;
+      }
+      _currentRotation = 0.0;
+      _userHasMovedMap = false;
+    });
+
+    _recenterMap();
+    Navigator.pop(context);
   }
 
   Widget _buildSimpleIconButton(

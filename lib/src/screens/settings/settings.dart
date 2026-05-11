@@ -1,12 +1,14 @@
 // lib/src/screens/settings/settings_screen.dart
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/utility/app_theme.dart';
 import '../contact us/contact_us.dart';
 import '../login/login.dart';
 import '../profile/profile.dart';
-import '../subscriptions/renewal_payment_screen.dart';
+// import '../subscriptions/renewal_payment_screen.dart';  // 🔒 Temporarily disabled
 import '../users subscriptions/my_subscriptions_screen.dart';
 import '../vehicles/my_cars.dart';
 import 'services/settings_service.dart';
@@ -44,6 +46,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // PIN
   bool _hasPinSet = false;
 
+  // ✅ Payment UI flag — controlled by backend, hidden for Apple review
+  bool _showPaymentUI = false;
+
   @override
   void initState() {
     super.initState();
@@ -56,6 +61,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _loadLanguagePreference();
     await _loadUserData();
     await _loadSettings();
+    await _loadAppConfig(); // ✅ fetch payment visibility flag
+  }
+
+  // ========== APP CONFIG ==========
+  Future<void> _loadAppConfig() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final baseUrl = prefs.getString('base_url') ?? 'https://api.proxymgroup.com';
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/app-config'),
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (mounted) {
+          setState(() => _showPaymentUI = data['show_payment_ui'] == true);
+        }
+      }
+    } catch (e) {
+      debugPrint('🔥 Failed to load app config: $e');
+      // fail safe — stays false, payment UI stays hidden
+    }
   }
 
   Future<void> _redirectIfLoggedOut() async {
@@ -533,9 +560,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   ),
 
-                  // ── SUBSCRIPTION TILES (regular users only) ───────────────
-                  if (_userType == 'regular') ...[
-                    _buildSubscriptionTile(),
+                  // ── SUBSCRIPTION TILES ────────────────────────────────────
+                  if (_userType == 'regular' && _showPaymentUI) ...[
+                    // _buildSubscriptionTile(), // 🔒 Temporarily disabled
                     _buildMySubscriptionsTile(),
                   ],
 
@@ -607,37 +634,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ========== SUBSCRIPTION TILE ==========
-  // Opens the plans screen to subscribe / renew for the current vehicle.
-  // Badge and status indicator removed — tile is plain with no trailing widget.
-  Widget _buildSubscriptionTile() {
-    return SettingsTile(
-      icon: Icons.subscriptions_outlined,
-      title: _selectedLanguage == 'en' ? 'Subscription' : 'Abonnement',
-      subtitle: _selectedLanguage == 'en'
-          ? 'Manage your plan and renewals'
-          : 'Gérer votre forfait et renouvellements',
-      onTap: () {
-        if (_userVehicleId != null) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => SubscriptionPlansScreen(
-                vehicleId:   _userVehicleId!,
-                vehicleName: _vehicleName,
-              ),
-            ),
-          );
-        } else {
-          _showSnack(
-            _selectedLanguage == 'en'
-                ? 'Vehicle data not loaded'
-                : 'Données du véhicule non chargées',
-            AppColors.error,
-          );
-        }
-      },
-    );
-  }
+  // 🔒 Temporarily disabled — uncomment the call site above to re-enable
+  //
+  // Widget _buildSubscriptionTile() {
+  //   return SettingsTile(
+  //     icon: Icons.subscriptions_outlined,
+  //     title: _selectedLanguage == 'en' ? 'Subscription' : 'Abonnement',
+  //     subtitle: _selectedLanguage == 'en'
+  //         ? 'Manage your plan and renewals'
+  //         : 'Gérer votre forfait et renouvellements',
+  //     onTap: () {
+  //       if (_userVehicleId != null) {
+  //         Navigator.push(
+  //           context,
+  //           MaterialPageRoute(
+  //             builder: (context) => SubscriptionPlansScreen(
+  //               vehicleId:   _userVehicleId!,
+  //               vehicleName: _vehicleName,
+  //             ),
+  //           ),
+  //         );
+  //       } else {
+  //         _showSnack(
+  //           _selectedLanguage == 'en'
+  //               ? 'Vehicle data not loaded'
+  //               : 'Données du véhicule non chargées',
+  //           AppColors.error,
+  //         );
+  //       }
+  //     },
+  //   );
+  // }
 
   // ========== MY SUBSCRIPTIONS TILE ==========
   Widget _buildMySubscriptionsTile() {

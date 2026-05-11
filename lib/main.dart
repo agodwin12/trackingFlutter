@@ -1,7 +1,9 @@
+// lib/main.dart
 import 'package:FLEETRA/src/screens/change%20password%20in%20app/change_password.dart';
 import 'package:FLEETRA/src/screens/contact%20us/contact_us.dart';
 import 'package:FLEETRA/src/screens/dashboard/dashboard.dart';
 import 'package:FLEETRA/src/screens/lock%20screen/lock_screen.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:FLEETRA/src/screens/login/login.dart';
 import 'package:FLEETRA/src/screens/notification/notification_screen.dart';
 import 'package:FLEETRA/src/screens/onBoarding/onBoardingScreen.dart';
@@ -17,17 +19,17 @@ import 'package:FLEETRA/src/services/connectivity_service.dart';
 import 'package:FLEETRA/src/services/env_config.dart';
 import 'package:FLEETRA/src/services/notification_service.dart';
 import 'package:FLEETRA/src/services/pin_service.dart';
+import 'package:FLEETRA/src/services/token_refresh_service.dart';
+import 'package:FLEETRA/src/providers/locale_provider.dart';       // ← ADD
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';                            // ← ADD
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-
-// Firebase
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:FLEETRA/l10n/app_localizations.dart';              // ← ADD (generated)
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MAIN
-// ─────────────────────────────────────────────────────────────────────────────
+final GlobalKey<NavigatorState> navigatorKey = NotificationService.navigatorKey;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,38 +37,38 @@ void main() async {
   try {
     debugPrint('\n🚀 APP INITIALIZATION START — ${DateTime.now()}');
 
-    // 1. Environment
     await dotenv.load(fileName: '.env');
     await EnvConfig.load();
     if (!EnvConfig.validate()) {
       debugPrint('⚠️ Some environment variables are missing');
     }
 
-    // 2. Firebase
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
     debugPrint('✅ Firebase initialized');
 
-    // 3. Notifications — single source of truth for permissions + token flow
     await NotificationService.initialize();
-
-    // 4. Connectivity
     await ConnectivityService().initialize();
-
-    // 5. App Lifecycle
     AppLifecycleService().initialize();
+    TokenRefreshService().resetSessionState();
 
     debugPrint('🚀 APP INITIALIZATION COMPLETE\n');
-    runApp(const MyApp());
+    runApp(
+      ChangeNotifierProvider(          // ← ADD wrapper
+        create: (_) => LocaleProvider(),
+        child: const MyApp(),
+      ),
+    );
   } catch (e, st) {
     debugPrint('❌ FATAL INIT ERROR: $e\n$st');
-    runApp(const MyApp());
+    runApp(
+      ChangeNotifierProvider(
+        create: (_) => LocaleProvider(),
+        child: const MyApp(),
+      ),
+    );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// APP WIDGET
-// ─────────────────────────────────────────────────────────────────────────────
 
 class MyApp extends StatefulWidget {
   const MyApp({Key? key}) : super(key: key);
@@ -104,7 +106,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     final vehicleId = prefs.getInt('current_vehicle_id');
     if (vehicleId == null) return;
 
-    NotificationService.navigatorKey.currentState?.pushNamedAndRemoveUntil(
+    navigatorKey.currentState?.pushNamedAndRemoveUntil(
       '/pin-entry',
           (route) => false,
       arguments: vehicleId,
@@ -113,10 +115,28 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // Rebuilds MaterialApp whenever locale is toggled
+    final localeProvider = context.watch<LocaleProvider>();
+
     return MaterialApp(
       title: 'FLEETRA',
       debugShowCheckedModeBanner: false,
-      navigatorKey: NotificationService.navigatorKey,
+      navigatorKey: navigatorKey,
+
+      // ── i18n ──────────────────────────────────────────────────────────
+      locale: localeProvider.locale,
+      supportedLocales: const [
+        Locale('fr'), // French — default
+        Locale('en'), // English
+      ],
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      // ──────────────────────────────────────────────────────────────────
+
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
@@ -140,27 +160,18 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     switch (settings.name) {
       case '/splash':
         return _route(settings, const SplashScreen());
-
       case '/login':
         return _route(settings, ModernLoginScreen());
-
       case '/onboarding':
         return _route(settings, OnboardingScreen());
-
       case '/dashboard':
         final vehicleId = settings.arguments as int?;
-        if (vehicleId == null) {
-          return _errorRoute('Missing vehicleId for Dashboard');
-        }
+        if (vehicleId == null) return _errorRoute('Missing vehicleId for Dashboard');
         return _route(settings, ModernDashboard(vehicleId: vehicleId));
-
       case '/profile':
         final vehicleId = settings.arguments as int?;
-        if (vehicleId == null) {
-          return _errorRoute('Missing vehicleId for Profile');
-        }
+        if (vehicleId == null) return _errorRoute('Missing vehicleId for Profile');
         return _route(settings, ProfileScreen(vehicleId: vehicleId));
-
       case '/change-password':
         final args = settings.arguments as Map<String, dynamic>?;
         if (args?['phone'] == null || args?['userId'] == null) {
@@ -173,24 +184,16 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             userId: args['userId'] as int,
           ),
         );
-
       case '/settings':
         final vehicleId = settings.arguments as int?;
-        if (vehicleId == null) {
-          return _errorRoute('Missing vehicleId for Settings');
-        }
+        if (vehicleId == null) return _errorRoute('Missing vehicleId for Settings');
         return _route(settings, SettingsScreen(vehicleId: vehicleId));
-
       case '/contact':
         return _route(settings, ContactScreen());
-
       case '/track':
         final vehicleId = settings.arguments as int?;
-        if (vehicleId == null) {
-          return _errorRoute('Missing vehicleId for Tracking');
-        }
+        if (vehicleId == null) return _errorRoute('Missing vehicleId for Tracking');
         return _route(settings, VehicleTrackingMap(vehicleId: vehicleId));
-
       case '/trip-map':
         final args = settings.arguments as Map<String, dynamic>?;
         if (args?['tripId'] == null || args?['vehicleId'] == null) {
@@ -203,33 +206,22 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             vehicleId: args['vehicleId'],
           ),
         );
-
       case '/trips':
         final vehicleId = settings.arguments as int?;
-        if (vehicleId == null) {
-          return _errorRoute('Missing vehicleId for Trips');
-        }
+        if (vehicleId == null) return _errorRoute('Missing vehicleId for Trips');
         return _route(settings, TripsScreen(vehicleId: vehicleId));
-
       case '/notifications':
         final args = settings.arguments as Map<String, dynamic>?;
         final vehicleId = args?['vehicleId'] as int?;
-        if (vehicleId == null) {
-          return _errorRoute('Missing vehicleId for Notifications');
-        }
+        if (vehicleId == null) return _errorRoute('Missing vehicleId for Notifications');
         return _route(settings, NotificationScreen(vehicleId: vehicleId));
-
       case '/subscription':
       case '/subscription-plans':
         final args = settings.arguments;
         final int? vehicleId = args is int
             ? args
             : (args is Map<String, dynamic> ? args['vehicleId'] as int? : null);
-
-        if (vehicleId == null) {
-          return _errorRoute('Missing vehicleId for Subscription');
-        }
-
+        if (vehicleId == null) return _errorRoute('Missing vehicleId for Subscription');
         return _route(
           settings,
           SubscriptionPlansScreen(
@@ -242,14 +234,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             onSubscribed: (_) {},
           ),
         );
-
       case '/pin-entry':
         final vehicleId = settings.arguments as int?;
-        if (vehicleId == null) {
-          return _errorRoute('Missing vehicleId for PIN Entry');
-        }
+        if (vehicleId == null) return _errorRoute('Missing vehicleId for PIN Entry');
         return _route(settings, PinEntryScreen(vehicleId: vehicleId));
-
       default:
         return _errorRoute('Route not found: ${settings.name}');
     }
@@ -276,20 +264,15 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               children: [
                 const Icon(Icons.error_outline, size: 64, color: Colors.red),
                 const SizedBox(height: 24),
-                const Text(
-                  'Navigation Error',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.red,
-                  ),
-                ),
+                const Text('Navigation Error',
+                    style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red)),
                 const SizedBox(height: 16),
-                Text(
-                  message,
-                  style: const TextStyle(fontSize: 16, color: Colors.black87),
-                  textAlign: TextAlign.center,
-                ),
+                Text(message,
+                    style: const TextStyle(fontSize: 16, color: Colors.black87),
+                    textAlign: TextAlign.center),
                 const SizedBox(height: 32),
                 ElevatedButton.icon(
                   onPressed: () =>
@@ -300,9 +283,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                     backgroundColor: const Color(0xFF3B82F6),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
-                    ),
+                        horizontal: 24, vertical: 12),
                   ),
                 ),
               ],

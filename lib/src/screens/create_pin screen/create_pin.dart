@@ -6,14 +6,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/pin_service.dart';
 import '../../core/utility/app_theme.dart';
 import '../dashboard/dashboard.dart';
+import '../recouvrement/dashboard/recouvrement_dashboard.dart';
 
 class CreatePinScreen extends StatefulWidget {
   final int userId;
 
-  const CreatePinScreen({
-    Key? key,
-    required this.userId,
-  }) : super(key: key);
+  const CreatePinScreen({Key? key, required this.userId}) : super(key: key);
 
   @override
   State<CreatePinScreen> createState() => _CreatePinScreenState();
@@ -22,50 +20,43 @@ class CreatePinScreen extends StatefulWidget {
 class _CreatePinScreenState extends State<CreatePinScreen> {
   final PinService _pinService = PinService();
 
-  String _pin = '';
-  String _confirmPin = '';
-  bool _isConfirmStep = false;
-  bool _isCreatingPin = false;
-  String _errorMessage = '';
+  String _pin              = '';
+  String _confirmPin       = '';
+  bool   _isConfirmStep    = false;
+  bool   _isCreatingPin    = false;
+  String _errorMessage     = '';
   String _selectedLanguage = 'en';
 
   @override
   void initState() {
     super.initState();
     _loadLanguagePreference();
-    _syncUserIdToPrefs(); // ✅ ensure PinService reads the correct user_id
+    _syncUserIdToPrefs();
   }
 
   Future<void> _syncUserIdToPrefs() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs   = await SharedPreferences.getInstance();
       final current = prefs.getInt('user_id');
-
-      // Force coherence: this screen's userId must be the one used by PinService
       if (current != widget.userId) {
         await prefs.setInt('user_id', widget.userId);
-        debugPrint('🧩 Synced prefs user_id=$current -> ${widget.userId}');
-      } else {
-        debugPrint('🧩 prefs user_id already matches: ${widget.userId}');
+        debugPrint('🧩 Synced prefs user_id=$current → ${widget.userId}');
       }
     } catch (e) {
-      debugPrint('❌ Failed to sync user_id to prefs: $e');
-      // Do not block UI; createPin will still fail safely if user_id is missing
+      debugPrint('❌ Failed to sync user_id: $e');
     }
   }
 
   Future<void> _loadLanguagePreference() async {
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
-      setState(() {
-        _selectedLanguage = prefs.getString('language') ?? 'en';
-      });
+      setState(() => _selectedLanguage = prefs.getString('language') ?? 'en');
     }
   }
 
+  // ── keypad ────────────────────────────────────────────────────────────────
   void _onNumberPressed(String number) {
     if (_isCreatingPin) return;
-
     setState(() {
       _errorMessage = '';
       if (!_isConfirmStep) {
@@ -80,9 +71,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       } else {
         if (_confirmPin.length < 4) {
           _confirmPin += number;
-          if (_confirmPin.length == 4) {
-            _verifyAndSavePin();
-          }
+          if (_confirmPin.length == 4) _verifyAndSavePin();
         }
       }
     });
@@ -90,29 +79,26 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
 
   void _onDeletePressed() {
     if (_isCreatingPin) return;
-
     setState(() {
       _errorMessage = '';
       if (!_isConfirmStep) {
-        if (_pin.isNotEmpty) {
-          _pin = _pin.substring(0, _pin.length - 1);
-        }
+        if (_pin.isNotEmpty) _pin = _pin.substring(0, _pin.length - 1);
       } else {
-        if (_confirmPin.isNotEmpty) {
+        if (_confirmPin.isNotEmpty)
           _confirmPin = _confirmPin.substring(0, _confirmPin.length - 1);
-        }
       }
     });
   }
 
+  // ── create PIN ────────────────────────────────────────────────────────────
   Future<void> _verifyAndSavePin() async {
     if (_pin != _confirmPin) {
       setState(() {
         _errorMessage = _selectedLanguage == 'en'
             ? 'PINs do not match. Please try again.'
             : 'Les codes PIN ne correspondent pas. Veuillez réessayer.';
-        _pin = '';
-        _confirmPin = '';
+        _pin           = '';
+        _confirmPin    = '';
         _isConfirmStep = false;
       });
       return;
@@ -121,107 +107,160 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
     setState(() => _isCreatingPin = true);
 
     try {
-      // ✅ Ensure PinService uses the correct user_id before calling createPin()
       await _syncUserIdToPrefs();
-
       final success = await _pinService.createPin(_pin);
 
       if (!success) {
         setState(() {
           _isCreatingPin = false;
-          _errorMessage = _selectedLanguage == 'en'
+          _errorMessage  = _selectedLanguage == 'en'
               ? 'Error creating PIN. Please try again.'
               : 'Erreur lors de la création du PIN. Veuillez réessayer.';
-          _pin = '';
-          _confirmPin = '';
+          _pin           = '';
+          _confirmPin    = '';
           _isConfirmStep = false;
         });
         return;
       }
 
-      debugPrint('✅ PIN created successfully — navigating to dashboard');
+      debugPrint('✅ PIN created — navigating');
       await _navigateToDashboard();
+
     } catch (e) {
-      debugPrint('❌ Error in _verifyAndSavePin: $e');
+      debugPrint('❌ _verifyAndSavePin error: $e');
+      if (!mounted) return;
       setState(() {
         _isCreatingPin = false;
-        _errorMessage = _selectedLanguage == 'en'
+        _errorMessage  = _selectedLanguage == 'en'
             ? 'An error occurred. Please try again.'
             : 'Une erreur s\'est produite. Veuillez réessayer.';
-        _pin = '';
-        _confirmPin = '';
+        _pin           = '';
+        _confirmPin    = '';
         _isConfirmStep = false;
       });
     }
   }
 
-  // ========== NAVIGATE TO DASHBOARD ==========
-  // ✅ Reads vehicle ID from SharedPreferences — saved at login
-  // Works for both regular users and chauffeurs
+  // ── navigate after PIN created ────────────────────────────────────────────
   Future<void> _navigateToDashboard() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs    = await SharedPreferences.getInstance();
+      final userType = prefs.getString('user_type') ?? '';
 
-      // ✅ Primary: use current_vehicle_id saved at login
-      final int? vehicleId = prefs.getInt('current_vehicle_id');
+      debugPrint('🧭 _navigateToDashboard userType="$userType"');
 
-      if (vehicleId != null) {
-        debugPrint('🚗 Navigating to dashboard with vehicle ID: $vehicleId');
+      // ── lease / recouvrement users — no vehicle needed ──────────────────
+      if (userType == 'tracking_lease' || userType == 'lease') {
+        final userJson = prefs.getString('user_data');
+        final token    = prefs.getString('accessToken') ?? '';
+        final roles    = prefs.getStringList('user_roles') ?? [];
+
+        Map<String, dynamic> user = {};
+        if (userJson != null) {
+          try { user = jsonDecode(userJson) as Map<String, dynamic>; }
+          catch (e) { debugPrint('❌ Failed to parse user_data: $e'); }
+        }
+
+        debugPrint('🚀 → RecouvrementDashboard');
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) => ModernDashboard(vehicleId: vehicleId),
+            builder: (_) => RecouvrementDashboard(
+              user       : user,
+              accessToken: token,
+              roles      : roles,
+            ),
           ),
         );
         return;
       }
 
-      // ✅ Fallback: read from vehicles_list saved at login
+      // ── tracking users — need a vehicle ─────────────────────────────────
+
+      // Primary: current_vehicle_id saved at login
+      final int? vehicleId = prefs.getInt('current_vehicle_id');
+      if (vehicleId != null) {
+        debugPrint('🚗 → ModernDashboard vehicleId=$vehicleId');
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ModernDashboard(vehicleId: vehicleId),
+          ),
+        );
+        return;
+      }
+
+      // Fallback: first vehicle in vehicles_list
       final vehiclesJson = prefs.getString('vehicles_list');
       if (vehiclesJson != null) {
-        final List vehicles = jsonDecode(vehiclesJson);
-        if (vehicles.isNotEmpty) {
-          final int firstVehicleId = vehicles[0]["id"];
-          await prefs.setInt('current_vehicle_id', firstVehicleId);
-
-          debugPrint('🚗 Fallback vehicle ID: $firstVehicleId');
-          if (!mounted) return;
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ModernDashboard(vehicleId: firstVehicleId),
-            ),
-          );
-          return;
+        try {
+          final List vehicles = jsonDecode(vehiclesJson);
+          if (vehicles.isNotEmpty) {
+            final int firstId = vehicles[0]['id'] as int;
+            await prefs.setInt('current_vehicle_id', firstId);
+            debugPrint('🚗 → ModernDashboard (fallback) vehicleId=$firstId');
+            if (!mounted) return;
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ModernDashboard(vehicleId: firstId),
+              ),
+            );
+            return;
+          }
+        } catch (e) {
+          debugPrint('❌ Failed to parse vehicles_list: $e');
         }
       }
 
-      // No vehicle found at all
-      debugPrint('⚠️ No vehicle found in SharedPreferences');
-      setState(() {
-        _isCreatingPin = false;
-        _errorMessage = _selectedLanguage == 'en'
-            ? 'No vehicles found for this account'
-            : 'Aucun véhicule trouvé pour ce compte';
-        _pin = '';
-        _confirmPin = '';
-        _isConfirmStep = false;
-      });
+      // ── no vehicle + no lease user type ──────────────────────────────────
+      // PIN was created OK. user_type was not saved at login (common first-login
+      // race condition) or account is not fully configured.
+      // Show a brief message and pop back to login — never leave user stuck.
+      debugPrint('⚠️ No vehicle and no recognised user_type — popping to root');
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _selectedLanguage == 'en'
+                ? 'PIN created! Please log in again to continue.'
+                : 'PIN créé ! Veuillez vous reconnecter pour continuer.',
+          ),
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+
+      // Always navigate — never leave user on PIN screen
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+
     } catch (error) {
-      debugPrint('❌ Error navigating to dashboard: $error');
-      setState(() {
-        _isCreatingPin = false;
-        _errorMessage = _selectedLanguage == 'en'
-            ? 'Connection error. Please try again.'
-            : 'Erreur de connexion. Veuillez réessayer.';
-        _pin = '';
-        _confirmPin = '';
-        _isConfirmStep = false;
-      });
+      debugPrint('❌ _navigateToDashboard error: $error');
+      if (!mounted) return;
+      // Even on error — pop back to login so user is never stuck
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _selectedLanguage == 'en'
+                ? 'PIN created! Please log in again.'
+                : 'PIN créé ! Veuillez vous reconnecter.',
+          ),
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      await Future.delayed(const Duration(milliseconds: 400));
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
     }
   }
 
+  // ── build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
@@ -237,31 +276,24 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
                 children: [
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // Lock Icon
+                  // lock icon
                   Center(
                     child: Container(
-                      width: 100,
-                      height: 100,
+                      width: 100, height: 100,
                       decoration: BoxDecoration(
-                        color: AppColors.primaryLight,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.lock_outline,
-                        color: AppColors.primary,
-                        size: 50,
-                      ),
+                          color: AppColors.primaryLight, shape: BoxShape.circle),
+                      child: Icon(Icons.lock_outline,
+                          color: AppColors.primary, size: 50),
                     ),
                   ),
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // Title
+                  // title
                   Center(
                     child: Text(
                       _selectedLanguage == 'en'
-                          ? 'Create Your PIN'
-                          : 'Créer votre PIN',
+                          ? 'Create Your PIN' : 'Créer votre PIN',
                       style: AppTypography.h2,
                       textAlign: TextAlign.center,
                     ),
@@ -283,25 +315,23 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // PIN Dots
+                  // PIN dots
                   Center(
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: List.generate(4, (index) {
-                        final currentPin = !_isConfirmStep ? _pin : _confirmPin;
-                        final isFilled = index < currentPin.length;
+                        final current = !_isConfirmStep ? _pin : _confirmPin;
+                        final filled  = index < current.length;
                         return Container(
-                          margin:
-                          EdgeInsets.symmetric(horizontal: AppSizes.spacingM),
-                          width: 20,
-                          height: 20,
+                          margin: EdgeInsets.symmetric(
+                              horizontal: AppSizes.spacingM),
+                          width: 20, height: 20,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: isFilled ? AppColors.primary : Colors.transparent,
+                            color: filled
+                                ? AppColors.primary : Colors.transparent,
                             border: Border.all(
-                              color: AppColors.primary,
-                              width: 2,
-                            ),
+                                color: AppColors.primary, width: 2),
                           ),
                         );
                       }),
@@ -310,70 +340,59 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
 
                   SizedBox(height: AppSizes.spacingL),
 
-                  // Error Message
+                  // error
                   if (_errorMessage.isNotEmpty)
                     Container(
                       padding: EdgeInsets.all(AppSizes.spacingM),
                       decoration: BoxDecoration(
                         color: AppColors.error.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        borderRadius:
+                        BorderRadius.circular(AppSizes.radiusM),
                         border: Border.all(
-                          color: AppColors.error.withOpacity(0.3),
-                        ),
+                            color: AppColors.error.withOpacity(0.3)),
                       ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.error_outline,
-                              color: AppColors.error, size: 20),
-                          SizedBox(width: AppSizes.spacingS),
-                          Expanded(
-                            child: Text(
-                              _errorMessage,
+                      child: Row(children: [
+                        Icon(Icons.error_outline,
+                            color: AppColors.error, size: 20),
+                        SizedBox(width: AppSizes.spacingS),
+                        Expanded(
+                          child: Text(_errorMessage,
                               style: AppTypography.caption.copyWith(
-                                color: AppColors.error,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                                  color: AppColors.error,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ]),
                     ),
 
-                  // Loading Indicator
+                  // loading
                   if (_isCreatingPin)
                     Container(
                       padding: EdgeInsets.all(AppSizes.spacingM),
                       decoration: BoxDecoration(
                         color: AppColors.primaryLight,
-                        borderRadius: BorderRadius.circular(AppSizes.radiusM),
+                        borderRadius:
+                        BorderRadius.circular(AppSizes.radiusM),
                       ),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
+                      child: Row(children: [
+                        SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppColors.primary),
+                        ),
+                        SizedBox(width: AppSizes.spacingM),
+                        Text(
+                          _selectedLanguage == 'en'
+                              ? 'Setting up your account...'
+                              : 'Configuration de votre compte...',
+                          style: AppTypography.caption.copyWith(
                               color: AppColors.primary,
-                            ),
-                          ),
-                          SizedBox(width: AppSizes.spacingM),
-                          Text(
-                            _selectedLanguage == 'en'
-                                ? 'Setting up your account...'
-                                : 'Configuration de votre compte...',
-                            style: AppTypography.caption.copyWith(
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ]),
                     ),
 
                   SizedBox(height: AppSizes.spacingXL),
 
-                  // Number Pad
                   _buildNumberPad(),
 
                   SizedBox(height: AppSizes.spacingL),
@@ -386,35 +405,31 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
     );
   }
 
+  // ── number pad ────────────────────────────────────────────────────────────
   Widget _buildNumberPad() {
-    return Column(
-      children: [
-        _buildNumberRow(['1', '2', '3']),
-        SizedBox(height: AppSizes.spacingM),
-        _buildNumberRow(['4', '5', '6']),
-        SizedBox(height: AppSizes.spacingM),
-        _buildNumberRow(['7', '8', '9']),
-        SizedBox(height: AppSizes.spacingM),
-        _buildNumberRow(['', '0', 'delete']),
-      ],
-    );
+    return Column(children: [
+      _buildNumberRow(['1', '2', '3']),
+      SizedBox(height: AppSizes.spacingM),
+      _buildNumberRow(['4', '5', '6']),
+      SizedBox(height: AppSizes.spacingM),
+      _buildNumberRow(['7', '8', '9']),
+      SizedBox(height: AppSizes.spacingM),
+      _buildNumberRow(['', '0', 'delete']),
+    ]);
   }
 
   Widget _buildNumberRow(List<String> numbers) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: numbers.map((number) {
-        if (number.isEmpty) {
-          return const SizedBox(width: 80, height: 56);
-        }
+        if (number.isEmpty) return const SizedBox(width: 80, height: 56);
 
         if (number == 'delete') {
           return InkWell(
             onTap: _isCreatingPin ? null : _onDeletePressed,
             borderRadius: BorderRadius.circular(AppSizes.radiusM),
             child: Container(
-              width: 80,
-              height: 56,
+              width: 80, height: 56,
               decoration: BoxDecoration(
                 color: AppColors.background,
                 borderRadius: BorderRadius.circular(AppSizes.radiusM),
@@ -430,21 +445,17 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
           onTap: _isCreatingPin ? null : () => _onNumberPressed(number),
           borderRadius: BorderRadius.circular(AppSizes.radiusM),
           child: Container(
-            width: 80,
-            height: 56,
+            width: 80, height: 56,
             decoration: BoxDecoration(
               color: AppColors.background,
               borderRadius: BorderRadius.circular(AppSizes.radiusM),
               border: Border.all(color: AppColors.border, width: 1.5),
             ),
             child: Center(
-              child: Text(
-                number,
-                style: AppTypography.h2.copyWith(
-                  color: AppColors.black,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              child: Text(number,
+                  style: AppTypography.h2.copyWith(
+                      color: AppColors.black,
+                      fontWeight: FontWeight.w600)),
             ),
           ),
         );

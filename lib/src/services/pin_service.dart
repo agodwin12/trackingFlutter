@@ -6,251 +6,186 @@ import 'env_config.dart';
 
 class PinService {
   static const String _failedAttemptsKey = 'failed_pin_attempts';
-  static const int _maxFailedAttempts = 5;
+  static const int    _maxFailedAttempts = 5;
 
-  // ---------- Helpers ----------
+  // ── helpers ───────────────────────────────────────────────────────────────
   Future<SharedPreferences> get _prefs async => SharedPreferences.getInstance();
 
   Future<String?> _getToken() async {
     final prefs = await _prefs;
-    // you save both, keep compatibility
     return prefs.getString('accessToken') ?? prefs.getString('auth_token');
   }
 
-  Future<int?> getLoggedInUserId() async {
-    final prefs = await _prefs;
-    return prefs.getInt('user_id');
-  }
-
-  Map<String, String> _jsonHeaders({String? token}) => {
+  Map<String, String> _headers({String? token}) => {
     'Content-Type': 'application/json',
     if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
   };
 
-  // ---------- PIN Existence ----------
-  // ✅ IMPORTANT: Prefer checking for an explicit userId (e.g. first-login flow)
-  Future<bool> hasPinSetFor(int userId) async {
+  // ── PIN existence ─────────────────────────────────────────────────────────
+  /// Checks whether the currently logged-in user has a PIN set.
+  /// userId is resolved from the JWT on the backend — not sent in the URL.
+  Future<bool> hasPinSet() async {
     try {
       final token = await _getToken();
-      final url = Uri.parse('${EnvConfig.baseUrl}/pin/exists/$userId');
-      print('🔍 Checking PIN existence at: $url (userId=$userId)');
+      final url   = Uri.parse('${EnvConfig.baseUrl}/pin/exists');
+      print('🔍 Checking PIN existence at: $url');
 
-      final response = await http.get(url, headers: _jsonHeaders(token: token));
-      print('📥 PIN exists status: ${response.statusCode}');
-      print('📥 PIN exists body: ${response.body}');
+      final res = await http.get(url, headers: _headers(token: token));
+      print('📥 PIN exists ${res.statusCode}: ${res.body}');
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
         return data['hasPinSet'] == true;
       }
-
-      // If server errors, don't block onboarding — force PIN creation
+      // Server error — don't block onboarding, let user create PIN
       return false;
     } catch (e) {
-      print('❌ Error checking PIN: $e');
+      print('❌ hasPinSet error: $e');
       return false;
     }
   }
 
-  // Backward-compatible method: uses prefs user_id
-  Future<bool> hasPinSet() async {
-    final userId = await getLoggedInUserId();
-    if (userId == null) {
-      print('❌ No user ID found in prefs for hasPinSet()');
-      return false;
-    }
-    return hasPinSetFor(userId);
-  }
+  /// Backward-compatible alias — kept so existing call sites don't break.
+  Future<bool> hasPinSetFor(int userId) => hasPinSet();
 
-  // ---------- Create PIN ----------
-  // ✅ Prefer explicit userId if you have it; falls back to prefs user_id
+  // ── create PIN ────────────────────────────────────────────────────────────
   Future<bool> createPin(String pin, {int? userId}) async {
-    if (!_isValidPin(pin)) {
-      print('❌ Invalid PIN format');
-      return false;
-    }
+    if (!_isValidPin(pin)) { print('❌ Invalid PIN format'); return false; }
 
     try {
-      final uid = userId ?? await getLoggedInUserId();
-      if (uid == null) {
-        print('❌ No user ID found');
-        return false;
-      }
-
       final token = await _getToken();
-      final url = Uri.parse('${EnvConfig.baseUrl}/pin/set');
-      print('📤 Creating PIN at: $url (userId=$uid)');
+      final url   = Uri.parse('${EnvConfig.baseUrl}/pin/set');
+      print('📤 Creating PIN at: $url');
 
-      final response = await http.post(
-        url,
-        headers: _jsonHeaders(token: token),
-        body: json.encode({'userId': uid, 'pin': pin}),
+      final res = await http.post(url,
+        headers: _headers(token: token),
+        body   : json.encode({'pin': pin}), // userId from JWT on backend
       );
+      print('📥 Create PIN ${res.statusCode}: ${res.body}');
 
-      print('📥 Create PIN status: ${response.statusCode}');
-      print('📥 Create PIN body: ${response.body}');
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
         if (data['success'] == true) {
           await resetFailedAttempts();
-          print('✅ PIN created successfully');
+          print('✅ PIN created');
           return true;
         }
       }
-
       return false;
     } catch (e) {
-      print('❌ Error creating PIN: $e');
+      print('❌ createPin error: $e');
       return false;
     }
   }
 
-  // ---------- Verify PIN ----------
+  // ── verify PIN ────────────────────────────────────────────────────────────
   Future<bool> verifyPin(String pin, {int? userId}) async {
-    if (!_isValidPin(pin)) {
-      print('❌ Invalid PIN format');
-      return false;
-    }
+    if (!_isValidPin(pin)) { print('❌ Invalid PIN format'); return false; }
 
     try {
-      final uid = userId ?? await getLoggedInUserId();
-      if (uid == null) {
-        print('❌ No user ID found');
-        return false;
-      }
-
       final token = await _getToken();
-      final url = Uri.parse('${EnvConfig.baseUrl}/pin/verify');
-      print('🔐 Verifying PIN at: $url (userId=$uid)');
+      final url   = Uri.parse('${EnvConfig.baseUrl}/pin/verify');
+      print('🔐 Verifying PIN at: $url');
 
-      final response = await http.post(
-        url,
-        headers: _jsonHeaders(token: token),
-        body: json.encode({'userId': uid, 'pin': pin}),
+      final res = await http.post(url,
+        headers: _headers(token: token),
+        body   : json.encode({'pin': pin}), // userId from JWT on backend
       );
+      print('📥 Verify PIN ${res.statusCode}: ${res.body}');
 
-      print('📥 Verify PIN status: ${response.statusCode}');
-      print('📥 Verify PIN body: ${response.body}');
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
         if (data['success'] == true) {
           await resetFailedAttempts();
-          print('✅ PIN verified successfully');
+          print('✅ PIN verified');
           return true;
         }
       }
 
-      final failedAttempts = await incrementFailedAttempts();
-      print('❌ Wrong PIN - Attempt $failedAttempts/$_maxFailedAttempts');
+      final attempts = await incrementFailedAttempts();
+      print('❌ Wrong PIN — attempt $attempts/$_maxFailedAttempts');
       return false;
     } catch (e) {
-      print('❌ Error verifying PIN: $e');
+      print('❌ verifyPin error: $e');
       return false;
     }
   }
 
-  // ---------- Change PIN ----------
+  // ── change PIN ────────────────────────────────────────────────────────────
   Future<bool> changePin(String oldPin, String newPin, {int? userId}) async {
     if (!_isValidPin(oldPin) || !_isValidPin(newPin)) {
-      print('❌ Invalid PIN format');
-      return false;
+      print('❌ Invalid PIN format'); return false;
     }
 
     try {
-      final uid = userId ?? await getLoggedInUserId();
-      if (uid == null) {
-        print('❌ No user ID found');
-        return false;
-      }
-
       final token = await _getToken();
-      final url = Uri.parse('${EnvConfig.baseUrl}/pin/change');
-      print('🔄 Changing PIN at: $url (userId=$uid)');
+      final url   = Uri.parse('${EnvConfig.baseUrl}/pin/change');
+      print('🔄 Changing PIN at: $url');
 
-      final response = await http.post(
-        url,
-        headers: _jsonHeaders(token: token),
-        body: json.encode({'userId': uid, 'oldPin': oldPin, 'newPin': newPin}),
+      final res = await http.post(url,
+        headers: _headers(token: token),
+        body   : json.encode({'oldPin': oldPin, 'newPin': newPin}),
       );
+      print('📥 Change PIN ${res.statusCode}: ${res.body}');
 
-      print('📥 Change PIN status: ${response.statusCode}');
-      print('📥 Change PIN body: ${response.body}');
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
         return data['success'] == true;
       }
-
       return false;
     } catch (e) {
-      print('❌ Error changing PIN: $e');
+      print('❌ changePin error: $e');
       return false;
     }
   }
 
-  // ---------- Delete PIN (optional / usually NOT on logout) ----------
-  // ⚠️ Security note: generally you should NOT delete PIN on logout.
-  // Keep it for "Reset PIN" flows only.
-  Future<bool> deletePinFor(int userId) async {
+  // ── delete PIN ────────────────────────────────────────────────────────────
+  /// Deletes the PIN for the currently logged-in user.
+  /// Use only for "Reset PIN" flows — not on regular logout.
+  Future<bool> deletePin() async {
     try {
       final token = await _getToken();
-      final url = Uri.parse('${EnvConfig.baseUrl}/pin/delete/$userId');
-      print('🗑️ Deleting PIN at: $url (userId=$userId)');
+      final url   = Uri.parse('${EnvConfig.baseUrl}/pin/delete');
+      print('🗑️ Deleting PIN at: $url');
 
-      final response = await http.delete(url, headers: _jsonHeaders(token: token));
-      print('📥 Delete PIN status: ${response.statusCode}');
-      print('📥 Delete PIN body: ${response.body}');
+      final res = await http.delete(url, headers: _headers(token: token));
+      print('📥 Delete PIN ${res.statusCode}: ${res.body}');
 
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         await resetFailedAttempts();
         return true;
       }
       return false;
     } catch (e) {
-      print('❌ Error deleting PIN: $e');
+      print('❌ deletePin error: $e');
       return false;
     }
   }
 
-  // Backward-compatible delete using prefs user_id
-  Future<bool> deletePin() async {
-    final uid = await getLoggedInUserId();
-    if (uid == null) return false;
-    return deletePinFor(uid);
+  /// Backward-compatible alias.
+  Future<bool> deletePinFor(int userId) => deletePin();
+
+  // ── failed attempts (local) ───────────────────────────────────────────────
+  Future<int>  getFailedAttempts()    async =>
+      ((await _prefs).getInt(_failedAttemptsKey) ?? 0);
+
+  Future<int>  incrementFailedAttempts() async {
+    final prefs    = await _prefs;
+    final next     = (prefs.getInt(_failedAttemptsKey) ?? 0) + 1;
+    await prefs.setInt(_failedAttemptsKey, next);
+    return next;
   }
 
-  // ---------- Failed attempts (local) ----------
-  Future<int> getFailedAttempts() async {
-    final prefs = await _prefs;
-    return prefs.getInt(_failedAttemptsKey) ?? 0;
-  }
+  Future<bool> isMaxAttemptsReached() async =>
+      (await getFailedAttempts()) >= _maxFailedAttempts;
 
-  Future<int> incrementFailedAttempts() async {
-    final prefs = await _prefs;
-    final currentAttempts = prefs.getInt(_failedAttemptsKey) ?? 0;
-    final newAttempts = currentAttempts + 1;
-    await prefs.setInt(_failedAttemptsKey, newAttempts);
-    return newAttempts;
-  }
-
-  Future<bool> isMaxAttemptsReached() async {
-    final attempts = await getFailedAttempts();
-    return attempts >= _maxFailedAttempts;
-  }
-
-  Future<void> resetFailedAttempts() async {
-    final prefs = await _prefs;
-    await prefs.setInt(_failedAttemptsKey, 0);
+  Future<void> resetFailedAttempts()  async {
+    await (await _prefs).setInt(_failedAttemptsKey, 0);
     print('✅ Failed attempts reset');
   }
 
   int get maxAttempts => _maxFailedAttempts;
 
-  // ---------- Validation ----------
-  bool _isValidPin(String pin) {
-    if (pin.length != 4) return false;
-    return RegExp(r'^\d{4}$').hasMatch(pin);
-  }
+  // ── validation ────────────────────────────────────────────────────────────
+  bool _isValidPin(String pin) => RegExp(r'^\d{4}$').hasMatch(pin);
 }

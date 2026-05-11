@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "FLEETRA",
-      "version": "1.3.3+701",
+      "version": "1.3.3+702",
       "dependencies": [
         "carousel_slider",
         "connectivity_plus",
@@ -17,6 +17,7 @@
         "flutter_dotenv",
         "flutter_launcher_icons",
         "flutter_local_notifications",
+        "flutter_localizations",
         "geolocator",
         "google_fonts",
         "google_maps_flutter",
@@ -24,18 +25,39 @@
         "intl",
         "local_auth",
         "local_auth_android",
-        "local_auth_ios",
         "provider",
         "shared_preferences",
         "shimmer",
         "socket_io_client",
         "sticky_headers",
         "url_launcher",
+        "video_player",
         "webview_flutter"
       ],
       "devDependencies": [
         "flutter_lints",
         "flutter_test"
+      ]
+    },
+    {
+      "name": "flutter_localizations",
+      "version": "0.0.0",
+      "dependencies": [
+        "flutter",
+        "intl",
+        "path"
+      ]
+    },
+    {
+      "name": "flutter",
+      "version": "0.0.0",
+      "dependencies": [
+        "characters",
+        "collection",
+        "material_color_utilities",
+        "meta",
+        "sky_engine",
+        "vector_math"
       ]
     },
     {
@@ -92,15 +114,6 @@
       "version": "3.0.7",
       "dependencies": [
         "typed_data"
-      ]
-    },
-    {
-      "name": "local_auth_ios",
-      "version": "1.1.7",
-      "dependencies": [
-        "flutter",
-        "intl",
-        "local_auth_platform_interface"
       ]
     },
     {
@@ -174,15 +187,6 @@
       "version": "5.2.1",
       "dependencies": [
         "flutter"
-      ]
-    },
-    {
-      "name": "intl",
-      "version": "0.18.1",
-      "dependencies": [
-        "clock",
-        "meta",
-        "path"
       ]
     },
     {
@@ -295,21 +299,67 @@
       ]
     },
     {
+      "name": "video_player",
+      "version": "2.10.1",
+      "dependencies": [
+        "flutter",
+        "html",
+        "video_player_android",
+        "video_player_avfoundation",
+        "video_player_platform_interface",
+        "video_player_web"
+      ]
+    },
+    {
       "name": "cupertino_icons",
       "version": "1.0.8",
       "dependencies": []
     },
     {
-      "name": "flutter",
-      "version": "0.0.0",
+      "name": "intl",
+      "version": "0.20.2",
       "dependencies": [
-        "characters",
-        "collection",
-        "material_color_utilities",
+        "clock",
         "meta",
-        "sky_engine",
-        "vector_math"
+        "path"
       ]
+    },
+    {
+      "name": "path",
+      "version": "1.9.1",
+      "dependencies": []
+    },
+    {
+      "name": "sky_engine",
+      "version": "0.0.0",
+      "dependencies": []
+    },
+    {
+      "name": "vector_math",
+      "version": "2.2.0",
+      "dependencies": []
+    },
+    {
+      "name": "meta",
+      "version": "1.17.0",
+      "dependencies": []
+    },
+    {
+      "name": "material_color_utilities",
+      "version": "0.11.1",
+      "dependencies": [
+        "collection"
+      ]
+    },
+    {
+      "name": "collection",
+      "version": "1.19.1",
+      "dependencies": []
+    },
+    {
+      "name": "characters",
+      "version": "1.4.0",
+      "dependencies": []
     },
     {
       "name": "lints",
@@ -324,16 +374,6 @@
       ]
     },
     {
-      "name": "meta",
-      "version": "1.17.0",
-      "dependencies": []
-    },
-    {
-      "name": "collection",
-      "version": "1.19.1",
-      "dependencies": []
-    },
-    {
       "name": "leak_tracker_flutter_testing",
       "version": "3.0.10",
       "dependencies": [
@@ -343,11 +383,6 @@
         "matcher",
         "meta"
       ]
-    },
-    {
-      "name": "vector_math",
-      "version": "2.2.0",
-      "dependencies": []
     },
     {
       "name": "stack_trace",
@@ -368,11 +403,6 @@
         "clock",
         "collection"
       ]
-    },
-    {
-      "name": "path",
-      "version": "1.9.1",
-      "dependencies": []
     },
     {
       "name": "matcher",
@@ -877,21 +907,46 @@
       ]
     },
     {
-      "name": "sky_engine",
-      "version": "0.0.0",
-      "dependencies": []
-    },
-    {
-      "name": "material_color_utilities",
-      "version": "0.11.1",
+      "name": "video_player_web",
+      "version": "2.4.0",
       "dependencies": [
-        "collection"
+        "flutter",
+        "flutter_web_plugins",
+        "video_player_platform_interface",
+        "web"
       ]
     },
     {
-      "name": "characters",
-      "version": "1.4.0",
-      "dependencies": []
+      "name": "video_player_platform_interface",
+      "version": "6.6.0",
+      "dependencies": [
+        "flutter",
+        "plugin_platform_interface"
+      ]
+    },
+    {
+      "name": "video_player_avfoundation",
+      "version": "2.8.9",
+      "dependencies": [
+        "flutter",
+        "video_player_platform_interface"
+      ]
+    },
+    {
+      "name": "video_player_android",
+      "version": "2.9.5",
+      "dependencies": [
+        "flutter",
+        "video_player_platform_interface"
+      ]
+    },
+    {
+      "name": "html",
+      "version": "0.15.6",
+      "dependencies": [
+        "csslib",
+        "source_span"
+      ]
     },
     {
       "name": "leak_tracker_testing",
@@ -1086,6 +1141,13 @@
       ]
     },
     {
+      "name": "csslib",
+      "version": "1.0.2",
+      "dependencies": [
+        "source_span"
+      ]
+    },
+    {
       "name": "vm_service",
       "version": "15.0.2",
       "dependencies": []
@@ -1113,24 +1175,9 @@
       ]
     },
     {
-      "name": "html",
-      "version": "0.15.6",
-      "dependencies": [
-        "csslib",
-        "source_span"
-      ]
-    },
-    {
       "name": "platform",
       "version": "3.1.6",
       "dependencies": []
-    },
-    {
-      "name": "csslib",
-      "version": "1.0.2",
-      "dependencies": [
-        "source_span"
-      ]
     }
   ],
   "configVersion": 1
