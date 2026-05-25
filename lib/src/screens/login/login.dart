@@ -118,7 +118,7 @@ class _ModernLoginScreenState extends State<ModernLoginScreen>
     final password = _passwordCtrl.text.trim();
 
     if (phone.isEmpty || password.isEmpty) {
-      _showError('Phone and password are required.');
+      _showError('Phone and passWsdfdsword are required.');
       return;
     }
 

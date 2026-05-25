@@ -556,6 +556,8 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
             blurRadius: 16, offset: const Offset(0, 4))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+        // ── Header row ──────────────────────────────────────────────────────
         Row(children: [
           Container(width: 40, height: 40,
               decoration: BoxDecoration(color: color.withOpacity(0.12),
@@ -577,9 +579,12 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
                 fontSize: 10, fontWeight: FontWeight.w700, color: color)),
           ),
         ]),
+
         const SizedBox(height: 16),
         const Divider(color: _border, height: 1),
         const SizedBox(height: 14),
+
+        // ── Financials ──────────────────────────────────────────────────────
         _detailRow(t.detailExpected, 'XAF ${_fmt(lease.montantAttendu)}'),
         const SizedBox(height: 8),
         _detailRow(t.detailPaid, 'XAF ${_fmt(lease.montantPaye)}',
@@ -587,6 +592,7 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
         const SizedBox(height: 8),
         _detailRow(t.detailRemaining, 'XAF ${_fmt(lease.resteAPayer)}',
             valueColor: lease.resteAPayer > 0 ? _red : _green),
+
         if (calDay.status == _DayStatus.partial) ...[
           const SizedBox(height: 12),
           ClipRRect(
@@ -600,12 +606,46 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
             ),
           ),
         ],
+
+        // ── Payment details (inlined, no second card) ────────────────────────
         if (payment != null) ...[
           const SizedBox(height: 16),
-          _sectionLabel('DÉTAILS DU PAIEMENT'),
+          const Divider(color: _border, height: 1),
+          const SizedBox(height: 12),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            _sectionLabel('PAIEMENT'),
+            _methodBadge(payment.methode),
+          ]),
           const SizedBox(height: 10),
-          _paymentDetailCard(payment),
+          _detailRow('Référence', payment.reference),
+          const SizedBox(height: 7),
+          _detailRow('Montant payé', 'XAF ${_fmt(payment.montant)}',
+              valueColor: _green),
+          const SizedBox(height: 7),
+          _detailRow('Date & heure', '${payment.formattedDate}  ·  ${payment.formattedTime}'),
+          if (payment.methode == 'MOBILE' && payment.sessionTelephone != null) ...[
+            const SizedBox(height: 7),
+            _detailRow('Téléphone', payment.sessionTelephone!),
+          ],
+          if (payment.enregistrePar != null && payment.enregistrePar!.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            _detailRow('Enregistré par', payment.enregistrePar!),
+          ],
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(color: _green.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.check_circle_rounded, color: _green, size: 12),
+              const SizedBox(width: 4),
+              const Text('VALIDÉ', style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700, color: _green)),
+            ]),
+          ),
         ],
+
+        // ── Pay button ──────────────────────────────────────────────────────
         if (canPay) ...[
           const SizedBox(height: 16),
           SizedBox(
@@ -617,7 +657,8 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _orange, foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
                 elevation: 0,
               ),
             ),

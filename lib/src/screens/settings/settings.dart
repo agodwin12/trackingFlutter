@@ -1,6 +1,8 @@
 // lib/src/screens/settings/settings_screen.dart
+
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,7 +10,7 @@ import '../../core/utility/app_theme.dart';
 import '../contact us/contact_us.dart';
 import '../login/login.dart';
 import '../profile/profile.dart';
-// import '../subscriptions/renewal_payment_screen.dart';  // 🔒 Temporarily disabled
+import '../subscriptions/renewal_payment_screen.dart';
 import '../users subscriptions/my_subscriptions_screen.dart';
 import '../vehicles/my_cars.dart';
 import 'services/settings_service.dart';
@@ -32,7 +34,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // User data
   int? _userId;
   int? _userVehicleId;
-  String _userType = 'regular';
   String _vehicleName = '';
 
   // Alert settings
@@ -46,7 +47,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // PIN
   bool _hasPinSet = false;
 
-  // ✅ Payment UI flag — controlled by backend, hidden for Apple review
+  // Payment UI flag — controlled only by backend
+  // If backend says true: visible for everyone
+  // If backend says false: hidden for everyone
   bool _showPaymentUI = false;
 
   @override
@@ -61,45 +64,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _loadLanguagePreference();
     await _loadUserData();
     await _loadSettings();
-    await _loadAppConfig(); // ✅ fetch payment visibility flag
+    await _loadAppConfig();
   }
 
   // ========== APP CONFIG ==========
   Future<void> _loadAppConfig() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final baseUrl = prefs.getString('base_url') ?? 'https://api.proxymgroup.com';
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/app-config'),
-      ).timeout(const Duration(seconds: 5));
+      final envBaseUrl = dotenv.env['BASE_URL']?.trim();
+
+      if (envBaseUrl == null || envBaseUrl.isEmpty) {
+        debugPrint('⚠️ BASE_URL is missing in .env');
+        return;
+      }
+
+      // BASE_URL already includes /api
+      // Example: BASE_URL=http://192.168.1.70:5000/api
+      final cleanBaseUrl = envBaseUrl.endsWith('/')
+          ? envBaseUrl.substring(0, envBaseUrl.length - 1)
+          : envBaseUrl;
+
+      final url = '$cleanBaseUrl/app-config';
+
+      debugPrint('🌍 App config URL: $url');
+
+      final response = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 5));
+
+      debugPrint('💳 App config status: ${response.statusCode}');
+      debugPrint('💳 App config body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+
         if (mounted) {
-          setState(() => _showPaymentUI = data['show_payment_ui'] == true);
+          setState(() {
+            _showPaymentUI = data['show_payment_ui'] == true;
+          });
         }
+
+        debugPrint('💳 showPaymentUI=$_showPaymentUI');
+      } else {
+        debugPrint('⚠️ App config failed with status ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('🔥 Failed to load app config: $e');
-      // fail safe — stays false, payment UI stays hidden
     }
   }
 
   Future<void> _redirectIfLoggedOut() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('accessToken');
-    final uid   = prefs.getInt('user_id');
+    final uid = prefs.getInt('user_id');
 
     if (token == null || uid == null) {
       if (mounted) {
-        Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/login',
+              (route) => false,
+        );
       }
     }
   }
 
   Future<void> _loadLanguagePreference() async {
     final lang = await SettingsService.loadLanguage();
-    if (mounted) setState(() => _selectedLanguage = lang);
+
+    if (mounted) {
+      setState(() => _selectedLanguage = lang);
+    }
   }
 
   // ========== LOAD USER DATA ==========
@@ -108,31 +141,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final userData = await SettingsService.loadUserData();
 
       if (userData == null) {
-        if (mounted) setState(() => _isLoading = false);
+        if (mounted) {
+          setState(() => _isLoading = false);
+        }
         return;
       }
 
       _userId = userData['id'];
 
-      final prefs = await SharedPreferences.getInstance();
-      _userType = prefs.getString('user_type') ?? 'regular';
-      debugPrint('👤 User type from prefs: $_userType');
-
       _userVehicleId = await SettingsService.loadCurrentVehicleId(
         fallback: widget.vehicleId,
       );
 
+      final prefs = await SharedPreferences.getInstance();
+
       final savedName = prefs.getString('current_vehicle_name') ?? '';
+
       _vehicleName = savedName.isNotEmpty
           ? savedName
           : (_selectedLanguage == 'en' ? 'My Vehicle' : 'Mon véhicule');
 
       debugPrint(
-          '✅ User ID: $_userId | Type: $_userType | Vehicle: $_userVehicleId | Name: $_vehicleName');
+        '✅ User ID: $_userId | Vehicle: $_userVehicleId | Name: $_vehicleName',
+      );
 
       if (_userId != null) {
         final hasPinSet = await SettingsService.checkPinStatus(_userId!);
-        if (mounted) setState(() => _hasPinSet = hasPinSet);
+
+        if (mounted) {
+          setState(() => _hasPinSet = hasPinSet);
+        }
       }
     } catch (e) {
       debugPrint('🔥 Error loading user data: $e');
@@ -148,13 +186,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
         setState(() {
           _geofenceAlerts = settings['geofenceAlerts'] as bool;
           _safeZoneAlerts = settings['safeZoneAlerts'] as bool;
-          _tripTracking   = settings['tripTracking']   as bool;
-          _isLoading      = false;
+          _tripTracking = settings['tripTracking'] as bool;
+          _isLoading = false;
         });
       }
     } catch (e) {
       debugPrint('🔥 Error loading settings: $e');
-      if (mounted) setState(() => _isLoading = false);
+
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -169,7 +210,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await SettingsService.saveSettingsLocally(
         geofenceAlerts: _geofenceAlerts,
         safeZoneAlerts: _safeZoneAlerts,
-        tripTracking:   _tripTracking,
+        tripTracking: _tripTracking,
       );
 
       if (settingName == 'Trip Tracking' && _userId != null) {
@@ -179,10 +220,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           debugPrint('🔥 Backend save failed: $e');
 
           setState(() => _tripTracking = !_tripTracking);
+
           await SettingsService.saveSettingsLocally(
             geofenceAlerts: _geofenceAlerts,
             safeZoneAlerts: _safeZoneAlerts,
-            tripTracking:   _tripTracking,
+            tripTracking: _tripTracking,
           );
 
           _showSnack(
@@ -191,6 +233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 : 'Échec de l\'enregistrement. Veuillez réessayer.',
             AppColors.error,
           );
+
           return;
         }
       }
@@ -198,6 +241,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _showToggleNotification(settingName, settingValue);
     } catch (e) {
       debugPrint('🔥 Error saving settings: $e');
+
       _showSnack(
         _selectedLanguage == 'en'
             ? 'Failed to save settings'
@@ -205,7 +249,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         AppColors.error,
       );
     } finally {
-      if (mounted) setState(() => _isSaving = false);
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
     }
   }
 
@@ -218,7 +264,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         decoration: BoxDecoration(
           color: AppColors.white,
           borderRadius: BorderRadius.only(
-            topLeft:  Radius.circular(AppSizes.radiusXL),
+            topLeft: Radius.circular(AppSizes.radiusXL),
             topRight: Radius.circular(AppSizes.radiusXL),
           ),
         ),
@@ -227,7 +273,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 40, height: 4,
+              width: 40,
+              height: 4,
               decoration: BoxDecoration(
                 color: AppColors.border,
                 borderRadius: BorderRadius.circular(2),
@@ -235,7 +282,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             SizedBox(height: AppSizes.spacingL),
             Text(
-              _selectedLanguage == 'en' ? 'Select Language' : 'Choisir la langue',
+              _selectedLanguage == 'en'
+                  ? 'Select Language'
+                  : 'Choisir la langue',
               style: AppTypography.h3.copyWith(fontSize: 18),
             ),
             SizedBox(height: AppSizes.spacingL),
@@ -263,10 +312,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _changeLanguage(String languageCode) async {
     await SettingsService.saveLanguage(languageCode);
-    if (mounted) setState(() => _selectedLanguage = languageCode);
+
+    if (mounted) {
+      setState(() => _selectedLanguage = languageCode);
+    }
+
     Navigator.pop(context);
+
     await Future.delayed(const Duration(milliseconds: 100));
-    if (mounted) Navigator.pop(context, 'language_changed');
+
+    if (mounted) {
+      Navigator.pop(context, 'language_changed');
+    }
   }
 
   // ========== LOGOUT ==========
@@ -286,7 +343,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: AppColors.error.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.logout_rounded, color: AppColors.error, size: 20),
+              child: Icon(
+                Icons.logout_rounded,
+                color: AppColors.error,
+                size: 20,
+              ),
             ),
             SizedBox(width: AppSizes.spacingM),
             Text(
@@ -320,7 +381,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 borderRadius: BorderRadius.circular(AppSizes.radiusM),
               ),
               elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 10,
+              ),
             ),
             child: Text(
               _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
@@ -336,6 +400,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (confirm == true) {
       await SettingsService.logout();
+
       if (mounted) {
         Navigator.pushAndRemoveUntil(
           context,
@@ -349,6 +414,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ========== HELPERS ==========
   void _showSnack(String message, Color color) {
     if (!mounted) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -358,7 +424,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppSizes.radiusM)),
+          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+        ),
         margin: EdgeInsets.all(AppSizes.spacingM),
         duration: const Duration(seconds: 3),
       ),
@@ -372,28 +439,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
     switch (settingName) {
       case 'Geofence Alerts':
         message = _selectedLanguage == 'en'
-            ? (isEnabled ? 'Geofence alerts enabled' : 'Geofence alerts disabled')
-            : (isEnabled ? 'Alertes géofence activées' : 'Alertes géofence désactivées');
+            ? (isEnabled
+            ? 'Geofence alerts enabled'
+            : 'Geofence alerts disabled')
+            : (isEnabled
+            ? 'Alertes géofence activées'
+            : 'Alertes géofence désactivées');
         icon = Icons.radar_outlined;
         break;
+
       case 'Safe Zone Alerts':
         message = _selectedLanguage == 'en'
-            ? (isEnabled ? 'Safe zone alerts enabled' : 'Safe zone alerts disabled')
+            ? (isEnabled
+            ? 'Safe zone alerts enabled'
+            : 'Safe zone alerts disabled')
             : (isEnabled
             ? 'Alertes Zone de sécurité activées'
             : 'Alertes Zone de sécurité désactivées');
         icon = Icons.shield_outlined;
         break;
+
       case 'Trip Tracking':
         message = _selectedLanguage == 'en'
-            ? (isEnabled ? 'Trip tracking enabled' : 'Trip tracking disabled')
-            : (isEnabled ? 'Suivi des trajets activé' : 'Suivi des trajets désactivé');
+            ? (isEnabled
+            ? 'Trip tracking enabled'
+            : 'Trip tracking disabled')
+            : (isEnabled
+            ? 'Suivi des trajets activé'
+            : 'Suivi des trajets désactivé');
         icon = Icons.route_outlined;
         break;
+
       default:
         message = isEnabled
-            ? (_selectedLanguage == 'en' ? 'Setting enabled' : 'Paramètre activé')
-            : (_selectedLanguage == 'en' ? 'Setting disabled' : 'Paramètre désactivé');
+            ? (_selectedLanguage == 'en'
+            ? 'Setting enabled'
+            : 'Paramètre activé')
+            : (_selectedLanguage == 'en'
+            ? 'Setting disabled'
+            : 'Paramètre désactivé');
         icon = Icons.check_circle;
     }
 
@@ -404,15 +488,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Icon(icon, color: AppColors.white, size: 20),
             SizedBox(width: AppSizes.spacingM),
             Expanded(
-              child: Text(message,
-                  style: AppTypography.body2.copyWith(color: AppColors.white)),
+              child: Text(
+                message,
+                style: AppTypography.body2.copyWith(
+                  color: AppColors.white,
+                ),
+              ),
             ),
           ],
         ),
         backgroundColor: isEnabled ? AppColors.success : AppColors.warning,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppSizes.radiusM)),
+          borderRadius: BorderRadius.circular(AppSizes.radiusM),
+        ),
         margin: EdgeInsets.all(AppSizes.spacingM),
         duration: const Duration(seconds: 3),
       ),
@@ -439,6 +528,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: _selectedLanguage == 'en' ? 'ALERTS' : 'ALERTES',
                   ),
                   SizedBox(height: AppSizes.spacingM),
+
                   SettingsToggleTile(
                     icon: Icons.radar_outlined,
                     title: _selectedLanguage == 'en'
@@ -451,9 +541,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (value) {
                       setState(() => _geofenceAlerts = value);
                       _saveSettings(
-                          settingName: 'Geofence Alerts', settingValue: value);
+                        settingName: 'Geofence Alerts',
+                        settingValue: value,
+                      );
                     },
                   ),
+
                   SettingsToggleTile(
                     icon: Icons.shield_outlined,
                     title: _selectedLanguage == 'en'
@@ -466,9 +559,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (value) {
                       setState(() => _safeZoneAlerts = value);
                       _saveSettings(
-                          settingName: 'Safe Zone Alerts', settingValue: value);
+                        settingName: 'Safe Zone Alerts',
+                        settingValue: value,
+                      );
                     },
                   ),
+
                   SettingsToggleTile(
                     icon: Icons.route_outlined,
                     title: _selectedLanguage == 'en'
@@ -481,7 +577,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (value) {
                       setState(() => _tripTracking = value);
                       _saveSettings(
-                          settingName: 'Trip Tracking', settingValue: value);
+                        settingName: 'Trip Tracking',
+                        settingValue: value,
+                      );
                     },
                   ),
 
@@ -489,16 +587,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   // ── SECURITY ──────────────────────────────────────────────
                   SettingsSectionHeader(
-                    title: _selectedLanguage == 'en' ? 'SECURITY' : 'SÉCURITÉ',
+                    title: _selectedLanguage == 'en'
+                        ? 'SECURITY'
+                        : 'SÉCURITÉ',
                   ),
                   SizedBox(height: AppSizes.spacingM),
+
                   SettingsTile(
-                    icon: _hasPinSet
-                        ? Icons.lock_reset
-                        : Icons.lock_outline,
+                    icon: _hasPinSet ? Icons.lock_reset : Icons.lock_outline,
                     title: _hasPinSet
-                        ? (_selectedLanguage == 'en' ? 'Change PIN' : 'Changer le PIN')
-                        : (_selectedLanguage == 'en' ? 'Create PIN' : 'Créer un PIN'),
+                        ? (_selectedLanguage == 'en'
+                        ? 'Change PIN'
+                        : 'Changer le PIN')
+                        : (_selectedLanguage == 'en'
+                        ? 'Create PIN'
+                        : 'Créer un PIN'),
                     subtitle: _hasPinSet
                         ? (_selectedLanguage == 'en'
                         ? 'Update your app security PIN'
@@ -508,6 +611,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         : 'Configurer un PIN de sécurité'),
                     onTap: () {
                       if (_userId == null) return;
+
                       if (_hasPinSet) {
                         PinDialogs.showChangePinDialog(
                           context: context,
@@ -520,7 +624,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           userId: _userId!,
                           selectedLanguage: _selectedLanguage,
                           onPinCreated: () {
-                            if (mounted) setState(() => _hasPinSet = true);
+                            if (mounted) {
+                              setState(() => _hasPinSet = true);
+                            }
                           },
                         );
                       }
@@ -534,6 +640,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: _selectedLanguage == 'en' ? 'ACCOUNT' : 'COMPTE',
                   ),
                   SizedBox(height: AppSizes.spacingM),
+
                   SettingsTile(
                     icon: Icons.person_outline,
                     title: _selectedLanguage == 'en' ? 'Profile' : 'Profil',
@@ -545,8 +652,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) =>
-                                ProfileScreen(vehicleId: _userVehicleId!),
+                            builder: (context) => ProfileScreen(
+                              vehicleId: _userVehicleId!,
+                            ),
                           ),
                         );
                       } else {
@@ -560,9 +668,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                   ),
 
-                  // ── SUBSCRIPTION TILES ────────────────────────────────────
-                  if (_userType == 'regular' && _showPaymentUI) ...[
-                    // _buildSubscriptionTile(), // 🔒 Temporarily disabled
+                  // ── PAYMENT / SUBSCRIPTION TILES ─────────────────────────
+                  // Controlled ONLY by backend app config.
+                  // If SHOW_PAYMENT_UI=true: visible for everyone.
+                  // If SHOW_PAYMENT_UI=false: hidden for everyone.
+                  if (_showPaymentUI) ...[
+                    _buildSubscriptionTile(),
                     _buildMySubscriptionsTile(),
                   ],
 
@@ -589,6 +700,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   // ── SUPPORT ───────────────────────────────────────────────
                   SettingsSectionHeader(title: 'SUPPORT'),
                   SizedBox(height: AppSizes.spacingM),
+
                   SettingsTile(
                     icon: Icons.headset_mic_outlined,
                     title: _selectedLanguage == 'en'
@@ -611,7 +723,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   // ── LOGOUT ────────────────────────────────────────────────
                   SettingsLogoutButton(
-                    label: _selectedLanguage == 'en' ? 'Logout' : 'Déconnexion',
+                    label: _selectedLanguage == 'en'
+                        ? 'Logout'
+                        : 'Déconnexion',
                     onTap: _handleLogout,
                   ),
 
@@ -620,8 +734,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Center(
                     child: Text(
                       'Version 1.0.0',
-                      style: AppTypography.caption
-                          .copyWith(color: AppColors.textSecondary),
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 ],
@@ -634,37 +749,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ========== SUBSCRIPTION TILE ==========
-  // 🔒 Temporarily disabled — uncomment the call site above to re-enable
-  //
-  // Widget _buildSubscriptionTile() {
-  //   return SettingsTile(
-  //     icon: Icons.subscriptions_outlined,
-  //     title: _selectedLanguage == 'en' ? 'Subscription' : 'Abonnement',
-  //     subtitle: _selectedLanguage == 'en'
-  //         ? 'Manage your plan and renewals'
-  //         : 'Gérer votre forfait et renouvellements',
-  //     onTap: () {
-  //       if (_userVehicleId != null) {
-  //         Navigator.push(
-  //           context,
-  //           MaterialPageRoute(
-  //             builder: (context) => SubscriptionPlansScreen(
-  //               vehicleId:   _userVehicleId!,
-  //               vehicleName: _vehicleName,
-  //             ),
-  //           ),
-  //         );
-  //       } else {
-  //         _showSnack(
-  //           _selectedLanguage == 'en'
-  //               ? 'Vehicle data not loaded'
-  //               : 'Données du véhicule non chargées',
-  //           AppColors.error,
-  //         );
-  //       }
-  //     },
-  //   );
-  // }
+  Widget _buildSubscriptionTile() {
+    return SettingsTile(
+      icon: Icons.subscriptions_outlined,
+      title: _selectedLanguage == 'en' ? 'Subscription' : 'Abonnement',
+      subtitle: _selectedLanguage == 'en'
+          ? 'Manage your plan and renewals'
+          : 'Gérer votre forfait et renouvellements',
+      onTap: () {
+        if (_userVehicleId != null) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => SubscriptionPlansScreen(
+                vehicleId: _userVehicleId!,
+                vehicleName: _vehicleName,
+                onSubscribed: (_) {
+                  debugPrint('✅ Subscription updated');
+                },
+              ),
+            ),
+          );
+        } else {
+          _showSnack(
+            _selectedLanguage == 'en'
+                ? 'Vehicle data not loaded'
+                : 'Données du véhicule non chargées',
+            AppColors.error,
+          );
+        }
+      },
+    );
+  }
 
   // ========== MY SUBSCRIPTIONS TILE ==========
   Widget _buildMySubscriptionsTile() {

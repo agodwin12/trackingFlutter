@@ -176,7 +176,6 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
         return;
       }
 
-      // ── tracking users — need a vehicle ─────────────────────────────────
 
       // Primary: current_vehicle_id saved at login
       final int? vehicleId = prefs.getInt('current_vehicle_id');
@@ -237,7 +236,10 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       // Always navigate — never leave user on PIN screen
       await Future.delayed(const Duration(milliseconds: 400));
       if (!mounted) return;
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        '/login',
+            (route) => false,
+      );
 
     } catch (error) {
       debugPrint('❌ _navigateToDashboard error: $error');
@@ -256,7 +258,10 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
       );
       await Future.delayed(const Duration(milliseconds: 400));
       if (!mounted) return;
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        '/login',
+            (route) => false,
+      );
     }
   }
 

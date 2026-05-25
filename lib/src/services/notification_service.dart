@@ -96,6 +96,59 @@ class NotificationService {
   // INITIALIZE
   // ─────────────────────────────────────────────────────────────────────────
 
+  static bool _listenersAttached = false;
+
+  static Future<void> _attachFirebaseMessageListeners() async {
+    if (_listenersAttached) {
+      await addDebugLog('Firebase message listeners already attached');
+      return;
+    }
+
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    await addDebugLog('Background message handler attached');
+
+    FirebaseMessaging.onMessage.listen((message) {
+      debugPrint('📨 Foreground: ${message.notification?.title}');
+      addDebugLog(
+        'Foreground message received: '
+            'title=${message.notification?.title} '
+            'body=${message.notification?.body} '
+            'data=${message.data}',
+      );
+      _handleForegroundMessage(message);
+    });
+
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      debugPrint(
+        '📬 Opened from notification: ${message.notification?.title}',
+      );
+      addDebugLog(
+        'Notification opened app: '
+            'title=${message.notification?.title} '
+            'data=${message.data}',
+      );
+      _handleNotificationTap(message);
+    });
+
+    final initial = await _firebaseMessaging.getInitialMessage();
+    if (initial != null) {
+      debugPrint(
+        '📬 Launched from notification: ${initial.notification?.title}',
+      );
+      await addDebugLog(
+        'App launched from notification: '
+            'title=${initial.notification?.title} '
+            'data=${initial.data}',
+      );
+      _handleNotificationTap(initial);
+    } else {
+      await addDebugLog('No initial notification used to launch app');
+    }
+
+    _listenersAttached = true;
+  }
+
+
   static Future<void> initialize() async {
     if (_initialized) {
       await addDebugLog('initialize() skipped: already initialized');
@@ -107,6 +160,7 @@ class NotificationService {
 
       await _initializeLocalNotifications();
       await addDebugLog('Local notifications initialized');
+      await _attachFirebaseMessageListeners();
 
       try {
         await addDebugLog('Requesting notification permission...');

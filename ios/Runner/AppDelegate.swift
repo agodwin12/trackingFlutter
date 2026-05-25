@@ -2,7 +2,6 @@ import UIKit
 import Flutter
 import GoogleMaps
 import FirebaseCore
-import FirebaseMessaging
 import UserNotifications
 
 @main
@@ -16,25 +15,26 @@ import UserNotifications
         print("\n🚀 App launch started")
 
         // Google Maps
-        GMSServices.provideAPIKey("AIzaSyBn88TP5X-xaRCYo5gYxvGnVy_0WYotZWo")
+        GMSServices.provideAPIKey("YOUR_GOOGLE_MAPS_API_KEY")
         print("✅ Google Maps configured")
 
-        // Firebase
-        FirebaseApp.configure()
-        print("✅ Firebase configured")
+        // Firebase native config
+        if FirebaseApp.app() == nil {
+            FirebaseApp.configure()
+            print("✅ Firebase configured")
+        } else {
+            print("ℹ️ Firebase already configured")
+        }
 
-        // Foreground notification presentation
-        UNUserNotificationCenter.current().delegate = self
-        print("✅ UNUserNotificationCenter delegate set")
+        // Required for foreground notification callbacks
+        if #available(iOS 10.0, *) {
+            UNUserNotificationCenter.current().delegate = self
+            print("✅ UNUserNotificationCenter delegate set")
+        }
 
-        // Flutter plugins
         GeneratedPluginRegistrant.register(with: self)
         print("✅ Flutter plugins registered")
 
-        // IMPORTANT:
-        // Do NOT ask permission here.
-        // Flutter handles permission prompt.
-        // We only ask iOS to register with APNs so a device token can be issued.
         DispatchQueue.main.async {
             application.registerForRemoteNotifications()
             print("✅ registerForRemoteNotifications() called")
@@ -42,10 +42,12 @@ import UserNotifications
 
         print("✅ App launch completed\n")
 
-        return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+        return super.application(
+            application,
+            didFinishLaunchingWithOptions: launchOptions
+        )
     }
 
-    // MARK: - APNs token received
     override func application(
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
@@ -53,60 +55,52 @@ import UserNotifications
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
         print("✅ APNs token received: \(token)")
 
-        #if DEBUG
-        Messaging.messaging().setAPNSToken(deviceToken, type: .sandbox)
-        print("✅ APNs token set in Firebase (sandbox)")
-        #else
-        Messaging.messaging().setAPNSToken(deviceToken, type: .prod)
-        print("✅ APNs token set in Firebase (production)")
-        #endif
+        Messaging.messaging().setAPNSToken(deviceToken, type: .unknown)
+        print("✅ APNs token set in Firebase")
 
-        super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+        super.application(
+            application,
+            didRegisterForRemoteNotificationsWithDeviceToken: deviceToken
+        )
     }
 
-    // MARK: - APNs registration failed
     override func application(
     _ application: UIApplication,
     didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
         print("❌ Failed to register for remote notifications: \(error.localizedDescription)")
-        super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+
+        super.application(
+            application,
+            didFailToRegisterForRemoteNotificationsWithError: error
+        )
     }
 
-    // MARK: - Foreground notification display
-    override func userNotificationCenter(
-    _ center: UNUserNotificationCenter,
-    willPresent notification: UNNotification,
-    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        let content = notification.request.content
-        print("📩 Foreground notification: \(content.title) | \(content.body)")
-
-        if #available(iOS 14.0, *) {
-            completionHandler([.banner, .sound, .badge])
-        } else {
-            completionHandler([.alert, .sound, .badge])
-        }
-    }
-
-    // MARK: - Notification tap
     override func userNotificationCenter(
     _ center: UNUserNotificationCenter,
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         print("👆 Notification tapped: \(response.notification.request.content.userInfo)")
-        completionHandler()
+
+        super.userNotificationCenter(
+            center,
+            didReceive: response,
+            withCompletionHandler: completionHandler
+        )
     }
 
-    // MARK: - Background / silent notification
     override func application(
     _ application: UIApplication,
     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
         print("🌙 Background notification received: \(userInfo)")
-        Messaging.messaging().appDidReceiveMessage(userInfo)
-        completionHandler(.newData)
+
+        super.application(
+            application,
+            didReceiveRemoteNotification: userInfo,
+            fetchCompletionHandler: completionHandler
+        )
     }
 }
