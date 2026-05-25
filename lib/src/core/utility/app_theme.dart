@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppColors {
-  // ========== PROXYM MOBILITY BRAND COLORS (From Charte Graphique) ==========
+  // ========== P 
 
   /// JAUNE AMBRE (Primary Brand Color)
   /// HEX: #f8c812 | RVB: 248-200-18 | CMJN: 3-20-99-0
