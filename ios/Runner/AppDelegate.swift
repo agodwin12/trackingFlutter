@@ -3,6 +3,8 @@ import Flutter
 import GoogleMaps
 import FirebaseCore
 import UserNotifications
+import Firebase
+import FirebaseMessaging
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
