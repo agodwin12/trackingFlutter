@@ -214,10 +214,7 @@ class _CreatePinScreenState extends State<CreatePinScreen> {
         }
       }
 
-      // ── no vehicle + no lease user type ──────────────────────────────────
-      // PIN was created OK. user_type was not saved at login (common first-login
-      // race condition) or account is not fully configured.
-      // Show a brief message and pop back to login — never leave user stuck.
+
       debugPrint('⚠️ No vehicle and no recognised user_type — popping to root');
       if (!mounted) return;
 
