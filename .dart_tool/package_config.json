@@ -410,6 +410,12 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "lottie",
+      "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/lottie-3.3.3",
+      "packageUri": "lib/",
+      "languageVersion": "3.9"
+    },
+    {
       "name": "matcher",
       "rootUri": "file:///C:/Users/insta/AppData/Local/Pub/Cache/hosted/pub.dev/matcher-0.12.17",
       "packageUri": "lib/",

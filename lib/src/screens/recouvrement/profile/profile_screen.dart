@@ -531,9 +531,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return fallback;
   }
 
-  int    get _activeCount   => _contracts.where((c) => c.statut == 'ACTIF').length;
-  int    get _settledCount  => _contracts.where((c) => c.statut == 'SOLDE').length;
-  double get _totalRemaining => _contracts.fold(0.0, (s, c) => s + c.montantRestant);
+  // ── quick stats: contracts AND sub-contracts counted at the same level ────
+  // _contracts only holds grouped mains; this flattens mains + all their subs
+  // so the stat cards treat every contract individually.
+  List<Contract> get _allContracts =>
+      [for (final c in _contracts) ...[c, ...c.sousContrats]];
+
+  int    get _activeCount    => _allContracts.where((c) => c.statut == 'ACTIF').length;
+  int    get _settledCount   => _allContracts.where((c) => c.statut == 'SOLDE').length;
+  double get _totalRemaining => _allContracts.fold(0.0, (s, c) => s + c.montantRestant);
 
   // ── build ─────────────────────────────────────────────────────────────────
   @override
@@ -696,6 +702,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         style: const TextStyle(fontSize: 12, color: _textMuted)),
   ]);
 
+  // Quick stats — counts span contracts AND sub-contracts (flattened)
   Widget _buildQuickStats() => Row(children: [
     Expanded(child: _statBox(icon: Icons.assignment_turned_in_rounded,
         label: 'Actifs',   value: '$_activeCount',           color: _green)),

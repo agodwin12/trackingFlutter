@@ -63,6 +63,7 @@ class _ModernDashboardState extends State<ModernDashboard>
 
 
   bool _isSwitchingVehicle = false;
+  String _vehicleSearchQuery = '';
 
   @override
   void initState() {
@@ -732,12 +733,12 @@ class _ModernDashboardState extends State<ModernDashboard>
   }
 
   void _showVehicleSelectorModal() {
+    setState(() => _vehicleSearchQuery = '');
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+      isScrollControlled: true,  // ← essential: lets sheet grow with keyboard
       useRootNavigator: true,
-
       builder: (context) {
         if (_controller == null) return const SizedBox.shrink();
         return ListenableBuilder(
@@ -1527,155 +1528,269 @@ class _ModernDashboardState extends State<ModernDashboard>
 
   Widget _buildMinimalistVehicleSelector() {
     if (_controller == null) return const SizedBox.shrink();
-    final double bottomInset = MediaQuery.of(context).padding.bottom;
 
-    return Container(
-      constraints:
-      BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          margin: const EdgeInsets.only(top: 8),
-          width: 32,
-          height: 4,
-          decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(2)),
+    // ── Keyboard-aware inset ────────────────────────────────────────────────
+    // viewInsets.bottom = keyboard height when visible.
+    // padding.bottom    = safe area (notch/home indicator).
+    // Adding both ensures the sheet lifts above the keyboard and the
+    // search bar remains visible at all times.
+    final mediaQuery  = MediaQuery.of(context);
+    final bottomInset = mediaQuery.viewInsets.bottom + mediaQuery.padding.bottom;
+
+    final filtered = _vehicleSearchQuery.isEmpty
+        ? _controller!.vehicles
+        : _controller!.vehicles.where((v) {
+      final q        = _vehicleSearchQuery.toLowerCase();
+      final nickname = (v.nickname ?? '').toLowerCase();
+      final brand    = (v.brand ?? '').toLowerCase();
+      final model    = (v.model ?? '').toLowerCase();
+      final plate    = (v.immatriculation ?? '').toLowerCase();
+      return nickname.contains(q) ||
+          brand.contains(q) ||
+          model.contains(q) ||
+          plate.contains(q);
+    }).toList();
+
+    return Padding(
+      // This single Padding lifts the entire sheet when the keyboard appears
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Container(
+        constraints: BoxConstraints(
+          // Cap at 65% of screen; when keyboard is up this naturally shrinks
+          // the list area while keeping the search bar visible
+          maxHeight: mediaQuery.size.height * 0.65,
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              _selectedLanguage == 'en'
-                  ? 'Select Vehicle'
-                  : 'Selectionner vehicule',
-              style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── drag handle ──────────────────────────────────────────────
+            Container(
+              margin: const EdgeInsets.only(top: 8),
+              width: 32,
+              height: 4,
+              decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2)),
             ),
-          ),
-        ),
-        Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
-        Flexible(
-          child: ListView.separated(
-            shrinkWrap: true,
 
-            padding: EdgeInsets.only(top: 4, bottom: bottomInset + 12),
-            itemCount: _controller!.vehicles.length,
-            separatorBuilder: (_, __) =>
-                Divider(height: 1, color: Colors.grey.shade100),
-            itemBuilder: (context, index) {
-              final vehicle = _controller!.vehicles[index];
-              final isSelected =
-                  vehicle.id == _controller!.selectedVehicleId;
+            // ── title ────────────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _selectedLanguage == 'en'
+                      ? 'Select Vehicle'
+                      : 'Sélectionner véhicule',
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black87),
+                ),
+              ),
+            ),
 
-              return InkWell(
-                onTap: () => _onVehicleSelected(vehicle),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 12),
-                  color: isSelected
-                      ? AppColors.primary.withOpacity(0.05)
-                      : Colors.transparent,
-                  child: Row(children: [
-                    Icon(Icons.directions_car,
-                        color: isSelected
-                            ? AppColors.primary
-                            : Colors.grey.shade600,
-                        size: 20),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            vehicle.nickname?.isNotEmpty == true
-                                ? vehicle.nickname
-                                : '${vehicle.brand} ${vehicle.model}',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: isSelected
-                                  ? AppColors.primary
-                                  : Colors.black87,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            vehicle.nickname?.isNotEmpty == true
-                                ? '${vehicle.brand} ${vehicle.model} — ${vehicle.immatriculation}'
-                                : vehicle.immatriculation,
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade600),
-                          ),
-                        ],
+            // ── search bar ───────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: StatefulBuilder(
+                builder: (context, setLocal) {
+                  return TextField(
+                    autofocus: false,
+                    onChanged: (value) {
+                      setLocal(() => _vehicleSearchQuery = value);
+                      setState(() => _vehicleSearchQuery = value);
+                    },
+                    style: const TextStyle(fontSize: 13, color: Colors.black87),
+                    decoration: InputDecoration(
+                      hintText: _selectedLanguage == 'en'
+                          ? 'Search by name, plate...'
+                          : 'Rechercher par nom, plaque...',
+                      hintStyle: TextStyle(
+                          fontSize: 13, color: Colors.grey.shade400),
+                      prefixIcon: Icon(Icons.search_rounded,
+                          size: 18, color: Colors.grey.shade400),
+                      suffixIcon: _vehicleSearchQuery.isNotEmpty
+                          ? GestureDetector(
+                        onTap: () {
+                          setLocal(() => _vehicleSearchQuery = '');
+                          setState(() => _vehicleSearchQuery = '');
+                        },
+                        child: Icon(Icons.close_rounded,
+                            size: 16, color: Colors.grey.shade400),
+                      )
+                          : null,
+                      contentPadding: const EdgeInsets.symmetric(
+                          vertical: 10, horizontal: 12),
+                      filled: true,
+                      fillColor: Colors.grey.shade100,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide.none,
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide:
+                        BorderSide(color: AppColors.primary, width: 1.5),
                       ),
                     ),
-                    Container(
+                  );
+                },
+              ),
+            ),
+
+            Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
+
+            // ── list ─────────────────────────────────────────────────────
+            Flexible(
+              child: filtered.isEmpty
+                  ? Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.search_off_rounded,
+                        size: 36, color: Colors.grey.shade300),
+                    const SizedBox(height: 8),
+                    Text(
+                      _selectedLanguage == 'en'
+                          ? 'No vehicles found'
+                          : 'Aucun véhicule trouvé',
+                      style: TextStyle(
+                          fontSize: 13, color: Colors.grey.shade500),
+                    ),
+                  ],
+                ),
+              )
+                  : ListView.separated(
+                shrinkWrap: true,
+                // No bottom padding needed here — the outer Padding
+                // already accounts for safe area + keyboard
+                padding: const EdgeInsets.only(top: 4, bottom: 12),
+                itemCount: filtered.length,
+                separatorBuilder: (_, __) =>
+                    Divider(height: 1, color: Colors.grey.shade100),
+                itemBuilder: (context, index) {
+                  final vehicle    = filtered[index];
+                  final isSelected =
+                      vehicle.id == _controller!.selectedVehicleId;
+
+                  return InkWell(
+                    onTap: () => _onVehicleSelected(vehicle),
+                    child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: vehicle.hasActiveSubscription
-                            ? const Color(0xFF10B981).withOpacity(0.1)
-                            : Colors.red.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(
-                          vehicle.hasActiveSubscription
-                              ? Icons.check_circle_rounded
-                              : Icons.cancel_rounded,
-                          size: 13,
-                          color: vehicle.hasActiveSubscription
-                              ? const Color(0xFF10B981)
-                              : Colors.red,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          vehicle.hasActiveSubscription
-                              ? (_selectedLanguage == 'en' ? 'Active' : 'Actif')
-                              : (_selectedLanguage == 'en'
-                              ? 'No plan'
-                              : 'Sans Abonement '),
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: vehicle.hasActiveSubscription
-                                ? const Color(0xFF10B981)
-                                : Colors.red,
+                          horizontal: 16, vertical: 12),
+                      color: isSelected
+                          ? AppColors.primary.withOpacity(0.05)
+                          : Colors.transparent,
+                      child: Row(children: [
+                        Icon(Icons.directions_car,
+                            color: isSelected
+                                ? AppColors.primary
+                                : Colors.grey.shade600,
+                            size: 20),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                vehicle.nickname?.isNotEmpty == true
+                                    ? vehicle.nickname
+                                    : '${vehicle.brand} ${vehicle.model}',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: isSelected
+                                      ? AppColors.primary
+                                      : Colors.black87,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                vehicle.nickname?.isNotEmpty == true
+                                    ? '${vehicle.brand} ${vehicle.model} — ${vehicle.immatriculation}'
+                                    : vehicle.immatriculation,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey.shade600),
+                              ),
+                            ],
                           ),
                         ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: vehicle.hasActiveSubscription
+                                ? const Color(0xFF10B981).withOpacity(0.1)
+                                : Colors.red.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  vehicle.hasActiveSubscription
+                                      ? Icons.check_circle_rounded
+                                      : Icons.cancel_rounded,
+                                  size: 13,
+                                  color: vehicle.hasActiveSubscription
+                                      ? const Color(0xFF10B981)
+                                      : Colors.red,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  vehicle.hasActiveSubscription
+                                      ? (_selectedLanguage == 'en'
+                                      ? 'Active'
+                                      : 'Actif')
+                                      : (_selectedLanguage == 'en'
+                                      ? 'No plan'
+                                      : 'Sans abonnement'),
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: vehicle.hasActiveSubscription
+                                        ? const Color(0xFF10B981)
+                                        : Colors.red,
+                                  ),
+                                ),
+                              ]),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: vehicle.isOnline
+                                ? const Color(0xFF10B981)
+                                : Colors.grey.shade400,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        if (isSelected) ...[
+                          const SizedBox(width: 8),
+                          Icon(Icons.check_circle,
+                              color: AppColors.primary, size: 20),
+                        ],
                       ]),
                     ),
-                    const SizedBox(width: 8),
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: vehicle.isOnline
-                            ? const Color(0xFF10B981)
-                            : Colors.grey.shade400,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    if (isSelected) ...[
-                      const SizedBox(width: 8),
-                      Icon(Icons.check_circle,
-                          color: AppColors.primary, size: 20),
-                    ],
-                  ]),
-                ),
-              );
-            },
-          ),
+                  );
+                },
+              ),
+            ),
+          ],
         ),
-      ]),
+      ),
     );
   }
 

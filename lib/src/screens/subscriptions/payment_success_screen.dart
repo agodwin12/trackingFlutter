@@ -4,12 +4,17 @@
 // Mobile Money payments are confirmed by PaymentPendingScreen
 // which handles success inline and uses the same PaymentNotifier.
 import 'package:flutter/material.dart';
+import 'package:lottie/lottie.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/utility/app_theme.dart';
 import '../../services/vehicles_refresh_service.dart';
 import '../../services/payment_notifier.dart';
 
 String _t(String lang, String en, String fr) => lang == 'fr' ? fr : en;
+
+// ── Lottie assets (LottieFiles CDN) ───────────────────────────────────────────
+const _lottieSuccess = 'https://assets9.lottiefiles.com/packages/lf20_lk80fpsm.json';
+const _lottieFailed  = 'https://assets4.lottiefiles.com/packages/lf20_qp1q7mct.json';
 
 class PaymentSuccessScreen extends StatefulWidget {
   final String  method;
@@ -37,10 +42,9 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
     with TickerProviderStateMixin {
   static const Color fleetraOrange = Color(0xFFFF6B35);
 
-  late AnimationController _scaleController;
   late AnimationController _fadeController;
-  late Animation<double>   _scaleAnimation;
   late Animation<double>   _fadeAnimation;
+  late AnimationController _lottieCtrl;
 
   String _lang         = 'en';
   bool   _isRefreshing = false;
@@ -50,18 +54,13 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
     super.initState();
     _initLang();
 
-    _scaleController = AnimationController(
-        duration: const Duration(milliseconds: 600), vsync: this);
-    _fadeController  = AnimationController(
+    _fadeController = AnimationController(
         duration: const Duration(milliseconds: 800), vsync: this);
-
-    _scaleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(parent: _scaleController, curve: Curves.elasticOut));
     _fadeAnimation  = Tween<double>(begin: 0.0, end: 1.0).animate(
-        CurvedAnimation(parent: _fadeController,  curve: Curves.easeOut));
+        CurvedAnimation(parent: _fadeController, curve: Curves.easeOut));
 
-    Future.delayed(const Duration(milliseconds: 200),
-            () => _scaleController.forward());
+    _lottieCtrl = AnimationController(vsync: this);
+
     Future.delayed(const Duration(milliseconds: 400),
             () => _fadeController.forward());
 
@@ -90,8 +89,8 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
 
   @override
   void dispose() {
-    _scaleController.dispose();
     _fadeController.dispose();
+    _lottieCtrl.dispose();
     super.dispose();
   }
 
@@ -148,27 +147,10 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
               children: [
                 const Spacer(),
 
-                ScaleTransition(
-                  scale: _scaleAnimation,
-                  child: Container(
-                    width: 120, height: 120,
-                    decoration: BoxDecoration(
-                      color: isSuccess
-                          ? Colors.green.withOpacity(0.1)
-                          : Colors.red.withOpacity(0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      isSuccess
-                          ? Icons.check_circle_rounded
-                          : Icons.cancel_rounded,
-                      color: isSuccess ? Colors.green : Colors.red,
-                      size:  80,
-                    ),
-                  ),
-                ),
+                // ── Lottie animation ─────────────────────────────────────
+                _buildResultLottie(isSuccess),
 
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
 
                 FadeTransition(
                   opacity: _fadeAnimation,
@@ -222,6 +204,13 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
                           color:        AppColors.white,
                           borderRadius: BorderRadius.circular(20),
                           border:       Border.all(color: AppColors.border),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.04),
+                              blurRadius: 16,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
                         ),
                         child: Column(children: [
                           _buildDetailRow(
@@ -300,6 +289,42 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
     );
   }
 
+  // ── Lottie result animation ─────────────────────────────────────────────────
+
+  Widget _buildResultLottie(bool isSuccess) => SizedBox(
+    width: 200, height: 200,
+    child: Lottie.network(
+      isSuccess ? _lottieSuccess : _lottieFailed,
+      controller: _lottieCtrl,
+      fit: BoxFit.contain,
+      repeat: false,
+      onLoaded: (composition) {
+        _lottieCtrl
+          ..duration = composition.duration
+          ..forward(from: 0);
+      },
+      // Fallback: original static icons if Lottie can't load
+      errorBuilder: (_, __, ___) => Center(
+        child: Container(
+          width: 120, height: 120,
+          decoration: BoxDecoration(
+            color: isSuccess
+                ? Colors.green.withOpacity(0.1)
+                : Colors.red.withOpacity(0.1),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            isSuccess
+                ? Icons.check_circle_rounded
+                : Icons.cancel_rounded,
+            color: isSuccess ? Colors.green : Colors.red,
+            size:  80,
+          ),
+        ),
+      ),
+    ),
+  );
+
   Widget _buildDetailRow({
     required IconData icon,
     required String   label,
@@ -307,7 +332,14 @@ class _PaymentSuccessScreenState extends State<PaymentSuccessScreen>
     Color?            valueColor,
   }) =>
       Row(children: [
-        Icon(icon, color: fleetraOrange, size: 20),
+        Container(
+          width: 34, height: 34,
+          decoration: BoxDecoration(
+            color: fleetraOrange.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: fleetraOrange, size: 18),
+        ),
         const SizedBox(width: 12),
         Text(label,
             style: AppTypography.caption

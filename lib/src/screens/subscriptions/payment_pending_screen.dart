@@ -1,6 +1,7 @@
 // lib/src/screens/subscriptions/payment_pending_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:lottie/lottie.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/utility/app_theme.dart';
 import '../../services/socket_service.dart';
@@ -8,6 +9,10 @@ import '../../services/vehicles_refresh_service.dart';
 import '../../services/payment_notifier.dart';
 
 String _t(String lang, String en, String fr) => lang == 'fr' ? fr : en;
+
+// ── Lottie assets (LottieFiles CDN) ───────────────────────────────────────────
+const _lottiePending = 'https://assets9.lottiefiles.com/packages/lf20_myejiggj.json';
+const _lottieSuccess = 'https://assets9.lottiefiles.com/packages/lf20_lk80fpsm.json';
 
 class PaymentPendingScreen extends StatefulWidget {
   final int     paymentId;
@@ -32,6 +37,7 @@ class PaymentPendingScreen extends StatefulWidget {
 class _PaymentPendingScreenState extends State<PaymentPendingScreen>
     with TickerProviderStateMixin {
   static const Color fleetraOrange = Color(0xFFFF6B35);
+  static const Color _successGreen = Color(0xFF10B981);
 
   StreamSubscription<Map<String, dynamic>>? _paymentSub;
   bool   _handled      = false;
@@ -39,17 +45,16 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
   bool   _showSuccess  = false;
   String _lang         = 'en';
 
-  late AnimationController _pulseController;
-  late Animation<double>   _pulseAnimation;
   late AnimationController _dotsController;
+  late AnimationController _successLottieCtrl;
   int _dotCount = 1;
 
   @override
   void initState() {
     super.initState();
     _initLang();
-    _setupPulseAnimation();
     _setupDotsAnimation();
+    _successLottieCtrl = AnimationController(vsync: this);
     _listenForPaymentUpdate();
   }
 
@@ -60,15 +65,6 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
     }
     final prefs = await SharedPreferences.getInstance();
     if (mounted) setState(() => _lang = prefs.getString('language') ?? 'en');
-  }
-
-  void _setupPulseAnimation() {
-    _pulseController = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 1200),
-    )..repeat(reverse: true);
-    _pulseAnimation = Tween<double>(begin: 0.85, end: 1.0).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
   }
 
   void _setupDotsAnimation() {
@@ -108,7 +104,7 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
 
   // ── SUCCESS ────────────────────────────────────────────────────────────────
   // 1. Refresh SharedPreferences (vehicles_list)
-  // 2. Show a brief success checkmark on this screen
+  // 2. Show a brief success animation on this screen
   // 3. Signal the dashboard via PaymentNotifier (works across any stack depth)
   // 4. popUntil(first) — clears the entire payment stack
   //    The dashboard's listener fires reloadVehicles() which hits the API
@@ -127,7 +123,7 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
     if (!mounted) return;
     setState(() => _isRefreshing = false);
 
-    // Step 2 — show success checkmark for 1.5 s
+    // Step 2 — show success animation for 5 s
     setState(() => _showSuccess = true);
     await Future.delayed(const Duration(seconds: 5));
     if (!mounted) return;
@@ -148,8 +144,8 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
   @override
   void dispose() {
     _paymentSub?.cancel();
-    _pulseController.dispose();
     _dotsController.dispose();
+    _successLottieCtrl.dispose();
     super.dispose();
   }
 
@@ -174,21 +170,29 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
               children: [
                 const Spacer(flex: 2),
 
-                _showSuccess ? _buildSuccessIcon() : _buildPendingIcon(),
+                // ── Lottie animation (pending ↔ success) ──────────────────
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 400),
+                  child: _showSuccess
+                      ? _buildSuccessLottie()
+                      : _buildPendingLottie(),
+                ),
 
-                const SizedBox(height: 40),
+                const SizedBox(height: 32),
 
-                Text(
-                  _showSuccess
-                      ? _t(_lang, 'Payment Successful!', 'Paiement réussi !')
-                      : _t(_lang, 'Payment Pending',     'Paiement en attente'),
-                  style: AppTypography.h3.copyWith(
-                    fontSize: 26,
-                    color: _showSuccess
-                        ? const Color(0xFF10B981)
-                        : AppColors.primary,
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: Text(
+                    _showSuccess
+                        ? _t(_lang, 'Payment Successful!', 'Paiement réussi !')
+                        : _t(_lang, 'Payment Pending',     'Paiement en attente'),
+                    key: ValueKey(_showSuccess),
+                    style: AppTypography.h3.copyWith(
+                      fontSize: 26,
+                      color: _showSuccess ? _successGreen : AppColors.primary,
+                    ),
+                    textAlign: TextAlign.center,
                   ),
-                  textAlign: TextAlign.center,
                 ),
 
                 const SizedBox(height: 12),
@@ -227,7 +231,7 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
 
                 if (!_showSuccess) ...[
                   _buildInfoCard(),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
                   _buildHintBox(),
                 ],
 
@@ -237,17 +241,19 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
                   SizedBox(
                     width: double.infinity,
                     height: 54,
-                    child: OutlinedButton(
+                    child: OutlinedButton.icon(
                       onPressed: _showLeaveConfirmation,
+                      icon: const Icon(Icons.arrow_back_rounded,
+                          color: fleetraOrange, size: 18),
                       style: OutlinedButton.styleFrom(
-                        side:  const BorderSide(color: fleetraOrange),
+                        side:  BorderSide(color: fleetraOrange.withOpacity(0.6)),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: Text(
+                      label: Text(
                         _t(_lang, 'Back to Settings', 'Retour aux paramètres'),
                         style: const TextStyle(
-                          fontSize:   16,
+                          fontSize:   15,
                           fontWeight: FontWeight.w700,
                           color:      fleetraOrange,
                         ),
@@ -264,28 +270,54 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
     );
   }
 
-  Widget _buildPendingIcon() => ScaleTransition(
-    scale: _pulseAnimation,
-    child: Container(
-      width: 130, height: 130,
-      decoration: BoxDecoration(
-        color: fleetraOrange.withOpacity(0.1),
-        shape: BoxShape.circle,
+  // ── Lottie widgets ──────────────────────────────────────────────────────────
+
+  Widget _buildPendingLottie() => SizedBox(
+    key: const ValueKey('pending'),
+    width: 180, height: 180,
+    child: Lottie.network(
+      _lottiePending,
+      fit: BoxFit.contain,
+      // Fallback: original pulsing hourglass if Lottie can't load
+      errorBuilder: (_, __, ___) => Container(
+        width: 130, height: 130,
+        decoration: BoxDecoration(
+          color: fleetraOrange.withOpacity(0.1),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.hourglass_top_rounded,
+            color: fleetraOrange, size: 72),
       ),
-      child: const Icon(Icons.hourglass_top_rounded,
-          color: fleetraOrange, size: 72),
     ),
   );
 
-  Widget _buildSuccessIcon() => Container(
-    width: 130, height: 130,
-    decoration: BoxDecoration(
-      color: const Color(0xFF10B981).withOpacity(0.1),
-      shape: BoxShape.circle,
+  Widget _buildSuccessLottie() => SizedBox(
+    key: const ValueKey('success'),
+    width: 180, height: 180,
+    child: Lottie.network(
+      _lottieSuccess,
+      controller: _successLottieCtrl,
+      fit: BoxFit.contain,
+      repeat: false,
+      onLoaded: (composition) {
+        _successLottieCtrl
+          ..duration = composition.duration
+          ..forward(from: 0);
+      },
+      // Fallback: original static checkmark
+      errorBuilder: (_, __, ___) => Container(
+        width: 130, height: 130,
+        decoration: BoxDecoration(
+          color: _successGreen.withOpacity(0.1),
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.check_circle_rounded,
+            color: _successGreen, size: 72),
+      ),
     ),
-    child: const Icon(Icons.check_circle_rounded,
-        color: Color(0xFF10B981), size: 72),
   );
+
+  // ── Info card ───────────────────────────────────────────────────────────────
 
   Widget _buildInfoCard() => Container(
     width: double.infinity,
@@ -294,6 +326,13 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
       color:        AppColors.white,
       borderRadius: BorderRadius.circular(20),
       border:       Border.all(color: AppColors.border),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.04),
+          blurRadius: 16,
+          offset: const Offset(0, 4),
+        ),
+      ],
     ),
     child: Column(children: [
       _buildDetailRow(
@@ -325,6 +364,7 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
     decoration: BoxDecoration(
       color:        Colors.blue.withOpacity(0.06),
       borderRadius: BorderRadius.circular(14),
+      border:       Border.all(color: Colors.blue.withOpacity(0.15)),
     ),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -390,15 +430,25 @@ class _PaymentPendingScreenState extends State<PaymentPendingScreen>
     Color?            valueColor,
   }) =>
       Row(children: [
-        Icon(icon, color: fleetraOrange, size: 20),
+        Container(
+          width: 34, height: 34,
+          decoration: BoxDecoration(
+            color: fleetraOrange.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: fleetraOrange, size: 18),
+        ),
         const SizedBox(width: 12),
         Text(label,
             style: AppTypography.caption
                 .copyWith(color: AppColors.textSecondary)),
         const Spacer(),
-        Text(value,
-            style: AppTypography.subtitle1.copyWith(
-                fontSize: 14,
-                color: valueColor ?? AppColors.primary)),
+        Flexible(
+          child: Text(value,
+              textAlign: TextAlign.end,
+              style: AppTypography.subtitle1.copyWith(
+                  fontSize: 14,
+                  color: valueColor ?? AppColors.primary)),
+        ),
       ]);
 }

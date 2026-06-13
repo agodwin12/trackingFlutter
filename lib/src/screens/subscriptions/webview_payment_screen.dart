@@ -1,4 +1,5 @@
 // lib/src/screens/subscriptions/webview_payment_screen.dart
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -32,8 +33,16 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
   late final WebViewController _controller;
   bool _isLoading = true;
   bool _hasError  = false;
-  bool _handled   = false; // prevents duplicate navigation if bridge + URL both fire
+  bool _handled   = false;
   late final String _resolvedUrl;
+
+  // The PayGate domain — any navigation AWAY from this domain means
+  // PayGate has finished and is redirecting to success/cancel URL.
+  static const List<String> _paygateDomains = [
+    'paygate.staging.proxymgroup.com',
+    'paygate.proxymgroup.com',
+    'checkout.paygate',
+  ];
 
   @override
   void initState() {
@@ -43,101 +52,132 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
     _initWebView();
   }
 
-  /// PayGate sometimes returns comma-separated URLs.
-  /// Extract the first valid https:// URL, fallback to any valid URI.
   String _extractValidUrl(String raw) {
     if (!raw.contains(',')) return raw.trim();
-
     final parts = raw.split(',').map((u) => u.trim()).toList();
-
     final httpsUrl = parts.firstWhere(
           (u) => u.startsWith('https://'),
       orElse: () => '',
     );
     if (httpsUrl.isNotEmpty) return httpsUrl;
-
     for (final part in parts) {
-      try {
-        Uri.parse(part);
-        return part;
-      } catch (_) {}
+      try { Uri.parse(part); return part; } catch (_) {}
     }
-
     return parts.first;
   }
+
+  /// Returns true if the URL belongs to the PayGate payment flow.
+  /// Any URL outside PayGate domains = PayGate has finished redirecting.
+  bool _isPaygateDomain(String url) {
+    try {
+      final host = Uri.parse(url).host;
+      return _paygateDomains.any((d) => host.contains(d));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _isExternalRedirect(String url) {
+    // Ignore blank, about:blank, and the initial load URL
+    if (url.isEmpty || url == 'about:blank') return false;
+    if (url == _resolvedUrl) return false;
+    // If it's no longer on a PayGate domain → PayGate redirected out
+    return !_isPaygateDomain(url);
+  }
+
+  /// Treat as cancel if the URL explicitly says cancel/fail,
+  /// otherwise treat as success (payment confirmed).
+  bool _isCancelUrl(String url) =>
+      url.contains('/payments/cancel') ||
+          url.contains('payment_cancel')   ||
+          url.contains('status=cancel')    ||
+          url.contains('status=failed')    ||
+          url.contains('cancelled=true');
 
   void _initWebView() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
 
-    // ── JavaScript Bridge ───────────────────────────────────────────────────
-    // Angular sends PAYGATE_SUCCESS as soon as PayGate redirects (before the
-    // webhook fires). We treat it as "user finished on PayGate" and go to the
-    // pending screen — which then waits for the real webhook confirmation via
-    // Socket.IO before showing the final success screen.
-    //
-    // PAYGATE_CANCELLED means the user manually cancelled — no webhook will
-    // ever come, so we go straight to the failed screen.
+    // ── JS Bridge ────────────────────────────────────────────────────────
       ..addJavaScriptChannel(
         'FlutterWebView',
         onMessageReceived: (JavaScriptMessage message) {
-          debugPrint('📩 [WEBVIEW] JS Bridge message: ${message.message}');
-
+          debugPrint('📩 [WEBVIEW] JS Bridge: ${message.message}');
           if (_handled) return;
-
           try {
-            final Map<String, dynamic> data = jsonDecode(message.message);
-            final String type = data['type'] ?? '';
-
+            final data = jsonDecode(message.message) as Map<String, dynamic>;
+            final type = data['type'] as String? ?? '';
             if (type == 'PAYGATE_SUCCESS') {
-              debugPrint('✅ [WEBVIEW] Bridge: PAYGATE_SUCCESS → going to pending');
-              _handled = true;
-              _goToPending();
+              debugPrint('✅ [WEBVIEW] Bridge: SUCCESS → pending');
+              _navigate(toPending: true);
             } else if (type == 'PAYGATE_CANCELLED') {
-              debugPrint('❌ [WEBVIEW] Bridge: PAYGATE_CANCELLED → going to failed');
-              _handled = true;
-              _goToFailed();
-            } else {
-              debugPrint('⚠️ [WEBVIEW] Bridge: Unknown event type → $type');
+              debugPrint('❌ [WEBVIEW] Bridge: CANCELLED → failed');
+              _navigate(toPending: false);
             }
           } catch (e) {
-            debugPrint('❌ [WEBVIEW] Bridge: Failed to decode message → $e');
+            debugPrint('❌ [WEBVIEW] Bridge decode error: $e');
           }
         },
       )
-    // ───────────────────────────────────────────────────────────────────────
 
       ..setNavigationDelegate(
         NavigationDelegate(
+
+          // ── Primary intercept ────────────────────────────────────────────
+          onNavigationRequest: (NavigationRequest request) {
+            final url = request.url;
+            debugPrint('🔀 [WEBVIEW] Nav request: $url');
+
+            if (!_handled && _isExternalRedirect(url)) {
+              if (_isCancelUrl(url)) {
+                debugPrint('❌ [WEBVIEW] External redirect: cancel → failed | URL: $url');
+                _navigate(toPending: false);
+              } else {
+                debugPrint('✅ [WEBVIEW] External redirect: success → pending | URL: $url');
+                _navigate(toPending: true);
+              }
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
+
           onPageStarted: (url) {
             debugPrint('🌐 [WEBVIEW] Page started: $url');
-            if (mounted) setState(() => _isLoading = true);
+            if (mounted) setState(() { _isLoading = true; _hasError = false; });
 
-            // ── URL fallback — only fires if Angular bridge is unavailable ───
-            // Same logic: success URL → pending, cancel URL → failed.
-            if (!_handled) {
-              if (_isSuccessUrl(url)) {
-                debugPrint('✅ [WEBVIEW] Fallback: Success URL detected → pending');
-                _handled = true;
-                _goToPending();
-              } else if (_isCancelUrl(url)) {
-                debugPrint('❌ [WEBVIEW] Fallback: Cancel URL detected → failed');
-                _handled = true;
-                _goToFailed();
+            // Backup intercept — catches POST redirects
+            if (!_handled && _isExternalRedirect(url)) {
+              if (_isCancelUrl(url)) {
+                debugPrint('❌ [WEBVIEW] Page started: cancel → failed | URL: $url');
+                _navigate(toPending: false);
+              } else {
+                debugPrint('✅ [WEBVIEW] Page started: success → pending | URL: $url');
+                _navigate(toPending: true);
               }
             }
           },
+
           onPageFinished: (url) {
             debugPrint('🌐 [WEBVIEW] Page finished: $url');
             if (mounted) setState(() => _isLoading = false);
+
+            // Final safety net
+            if (!_handled && _isExternalRedirect(url)) {
+              if (_isCancelUrl(url)) {
+                debugPrint('❌ [WEBVIEW] Page finished: cancel → failed | URL: $url');
+                _navigate(toPending: false);
+              } else {
+                debugPrint('✅ [WEBVIEW] Page finished: success → pending | URL: $url');
+                _navigate(toPending: true);
+              }
+            }
           },
+
           onWebResourceError: (error) {
-            debugPrint('❌ [WEBVIEW] Error: ${error.description}');
-            if (mounted) {
-              setState(() {
-                _isLoading = false;
-                _hasError  = true;
-              });
+            debugPrint('❌ [WEBVIEW] Resource error '
+                '[mainFrame=${error.isForMainFrame}]: ${error.description}');
+            if (error.isForMainFrame == true && mounted && !_handled) {
+              setState(() { _isLoading = false; _hasError = true; });
             }
           },
         ),
@@ -145,63 +185,41 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
       ..loadRequest(Uri.parse(_resolvedUrl));
   }
 
-  // ── URL fallback helpers ──────────────────────────────────────────────────
-  bool _isSuccessUrl(String url) {
-    return url.contains('/payments/success') ||
-        url.contains('payment_success') ||
-        url.contains('status=success');
-  }
-
-  bool _isCancelUrl(String url) {
-    return url.contains('/payments/cancel') ||
-        url.contains('payment_cancel') ||
-        url.contains('status=cancel');
-  }
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /// Angular sent PAYGATE_SUCCESS (or success URL detected).
-  /// Payment may still be processing — go to pending and wait for webhook.
-  void _goToPending() {
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (context) => PaymentPendingScreen(
-          paymentId: widget.paymentId,
-          planLabel: widget.planLabel,
-          amount:    widget.amount,
-          currency:  widget.currency,
+  // ── Single navigation entry point ─────────────────────────────────────────
+  void _navigate({required bool toPending}) {
+    if (_handled) return;
+    _handled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => toPending
+              ? PaymentPendingScreen(
+            paymentId: widget.paymentId,
+            planLabel: widget.planLabel,
+            amount:    widget.amount,
+            currency:  widget.currency,
+          )
+              : PaymentFailedScreen(
+            planLabel:        widget.planLabel,
+            amount:           widget.amount,
+            currency:         widget.currency,
+            selectedLanguage: '',
+          ),
         ),
-      ),
-    );
+      );
+    });
   }
 
-  /// Angular sent PAYGATE_CANCELLED (or cancel URL detected).
-  /// User manually cancelled — no webhook is coming, go straight to failed.
-  void _goToFailed() {
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (context) => PaymentFailedScreen(
-          planLabel: widget.planLabel,
-          amount:    widget.amount,
-          currency:  widget.currency,
-          selectedLanguage: '',
-        ),
-      ),
-    );
-  }
-
+  // ── Exit dialog ───────────────────────────────────────────────────────────
   void _showExitConfirmation() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text(
-          'Leave Payment?',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
+        title: const Text('Leave Payment?',
+            style: TextStyle(fontWeight: FontWeight.w700)),
         content: const Text(
           'If you\'ve already confirmed the payment on your phone, '
               'your payment is being processed and you\'ll see the result shortly.\n\n'
@@ -210,33 +228,28 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text(
-              'Stay',
-              style: TextStyle(color: fleetraOrange),
-            ),
+            child: Text('Stay', style: TextStyle(color: fleetraOrange)),
           ),
           ElevatedButton(
             onPressed: () {
-              Navigator.pop(context); // close dialog
-              _goToPending();         // go to pending screen
+              Navigator.pop(context);
+              _navigate(toPending: true);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: fleetraOrange,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
+                  borderRadius: BorderRadius.circular(10)),
               elevation: 0,
             ),
-            child: const Text(
-              'Leave',
-              style: TextStyle(color: Colors.white),
-            ),
+            child: const Text('Leave',
+                style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
   }
 
+  // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
@@ -254,7 +267,8 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
                 child: Stack(
                   children: [
                     if (!_hasError) WebViewWidget(controller: _controller),
-                    if (_hasError) _buildErrorState(),
+                    if (_hasError)  _buildErrorState(),
+                    if (_isLoading && !_hasError) _buildLoadingOverlay(),
                   ],
                 ),
               ),
@@ -282,16 +296,11 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Secure Payment',
-                  style: AppTypography.h3.copyWith(fontSize: 18),
-                ),
-                Text(
-                  widget.planLabel,
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
+                Text('Secure Payment',
+                    style: AppTypography.h3.copyWith(fontSize: 18)),
+                Text(widget.planLabel,
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.textSecondary)),
               ],
             ),
           ),
@@ -306,13 +315,10 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
               children: [
                 const Icon(Icons.lock_rounded, color: Colors.green, size: 14),
                 const SizedBox(width: 4),
-                Text(
-                  'Secure',
-                  style: AppTypography.caption.copyWith(
-                    color: Colors.green,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                Text('Secure',
+                    style: AppTypography.caption.copyWith(
+                        color: Colors.green,
+                        fontWeight: FontWeight.w700)),
               ],
             ),
           ),
@@ -330,12 +336,9 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
           children: [
             const CircularProgressIndicator(color: fleetraOrange),
             const SizedBox(height: 16),
-            Text(
-              'Loading payment page...',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            ),
+            Text('Loading payment page...',
+                style: AppTypography.caption
+                    .copyWith(color: AppColors.textSecondary)),
           ],
         ),
       ),
@@ -351,38 +354,29 @@ class _WebViewPaymentScreenState extends State<WebViewPaymentScreen> {
           children: [
             const Text('😕', style: TextStyle(fontSize: 48)),
             const SizedBox(height: 16),
-            Text(
-              'Failed to load payment page',
-              style: AppTypography.subtitle1.copyWith(fontSize: 16),
-            ),
+            Text('Failed to load payment page',
+                style: AppTypography.subtitle1.copyWith(fontSize: 16)),
             const SizedBox(height: 8),
             Text(
               'Please check your internet connection and try again.',
-              style: AppTypography.caption.copyWith(
-                color: AppColors.textSecondary,
-              ),
+              style: AppTypography.caption
+                  .copyWith(color: AppColors.textSecondary),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: () {
-                setState(() {
-                  _hasError  = false;
-                  _isLoading = true;
-                });
+                setState(() { _hasError = false; _isLoading = true; });
                 _controller.loadRequest(Uri.parse(_resolvedUrl));
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: fleetraOrange,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                    borderRadius: BorderRadius.circular(12)),
                 elevation: 0,
               ),
-              child: const Text(
-                'Try Again',
-                style: TextStyle(color: Colors.white),
-              ),
+              child: const Text('Try Again',
+                  style: TextStyle(color: Colors.white)),
             ),
           ],
         ),

@@ -33,7 +33,7 @@ class TypeContrat {
 
 class SousContrat {
   final int      id;
-  final int?     parentId;          // ID of the parent contrat
+  final int?     parentId;
   final String   reference;
   final int      typeContratId;
   final String   typeContratLibelle;
@@ -104,7 +104,7 @@ class Lease {
   final int    compteId;
   final int    contratId;
   final String chauffeurNomComplet;
-  final String typeContratLibelle;   // ← now comes directly from API
+  final String typeContratLibelle;
   final String dateEcheance;
   final double montantAttendu;
   final double montantPaye;
@@ -124,30 +124,40 @@ class Lease {
     required this.statut,
   });
 
-  bool get isPaid     => statut == 'PAYE';
-  bool get isPartial  => statut == 'PARTIELLEMENT_PAYE';
-  bool get isUnpaid   => statut == 'NON_PAYE';           // ← add this
+  bool get isPaid       => statut == 'PAYE';
+  bool get isPartial    => statut == 'PARTIELLEMENT_PAYE';
+  bool get isUnpaid     => statut == 'NON_PAYE';
   bool get isActionable => !isPaid;
 
-  factory Lease.fromJson(Map<String, dynamic> json) => Lease(
-    id                  : json['id'] as int,
-    compteId            : json['compte_id'] as int,
-    contratId           : json['contrat_id'] as int,
-    chauffeurNomComplet : json['chauffeur_nom_complet']?.toString() ?? '',
-    typeContratLibelle  : json['type_contrat_libelle']?.toString() ?? '',
-    dateEcheance        : json['date_echeance']?.toString() ?? '',
-    montantAttendu      : double.tryParse(json['montant_attendu']?.toString() ?? '0') ?? 0,
-    montantPaye         : double.tryParse(json['montant_paye']?.toString()    ?? '0') ?? 0,
-    resteAPayer         : double.tryParse(json['reste_a_payer']?.toString()   ?? '0') ?? 0,
-    statut              : json['statut']?.toString() ?? 'NON_PAYE',
-  );
+  factory Lease.fromJson(Map<String, dynamic> json) {
+    final montantAttendu = double.tryParse(json['montant_attendu']?.toString() ?? '0') ?? 0;
+    final resteAPayer    = double.tryParse(json['reste_a_payer']?.toString()   ?? '0') ?? 0;
+
+    return Lease(
+      id                  : json['id'] as int,
+      compteId            : json['compte_id'] as int,
+      contratId           : json['contrat_id'] as int,
+      chauffeurNomComplet : json['chauffeur_nom_complet']?.toString() ?? '',
+      typeContratLibelle  : json['type_contrat_libelle']?.toString() ?? '',
+      dateEcheance        : json['date_echeance']?.toString() ?? '',
+      montantAttendu      : montantAttendu,
+      montantPaye         : double.tryParse(json['montant_paye']?.toString() ?? '0') ?? 0,
+      resteAPayer         : resteAPayer,
+      // ← normalise: API may return 'ACTIF' instead of 'NON_PAYE'/'PARTIELLEMENT_PAYE'
+      statut              : _normaliseLeaseStatut(
+        json['statut']?.toString() ?? 'NON_PAYE',
+        montantAttendu,
+        resteAPayer,
+      ),
+    );
+  }
 }
 
 // ── Contrat (from /contrats/ — for immatriculation + sous_contrats) ───────────
 
 class Contrat {
   final int      id;
-  final int?     parentId;          // non-null → this contrat is itself a sous-contrat
+  final int?     parentId;
   final String   reference;
   final String   immatriculation;
   final String?  vin;
@@ -178,7 +188,6 @@ class Contrat {
     required this.sousContrats,
   });
 
-  // Human-readable frequence string used in the dashboard rows
   String get frequence {
     switch (frequenceEnum) {
       case ContratFrequence.journalier:   return 'JOURNALIER';
@@ -188,7 +197,7 @@ class Contrat {
     }
   }
 
-  bool get isActif      => statut == ContratStatut.actif;
+  bool get isActif       => statut == ContratStatut.actif;
   bool get isSousContrat => parentId != null;
 
   factory Contrat.fromJson(
@@ -205,18 +214,17 @@ class Contrat {
     return Contrat(
       id:                (json['id'] as num?)?.toInt() ?? 0,
       parentId:          parsedParentId,
-      reference:         json['reference']      as String? ?? '',
+      reference:         json['reference']       as String? ?? '',
       immatriculation:   json['immatriculation'] as String? ?? '',
       vin:               json['vin']             as String?,
       montantTotal:      _parseDouble(json['montant_total']),
       montantRestant:    _parseDouble(json['montant_restant'] ?? json['montant_total']),
       statut:            _parseContratStatut(json['statut'] as String?),
       frequenceEnum:     _parseFrequence(json['frequence'] as String?),
-      dateDebut:         (json['date_debut']          as String?)?.substring(0, 10) ?? '',
-      dateFin:           (json['date_fin']            as String?)?.substring(0, 10) ?? '',
-      prochaineEcheance: (json['prochaine_echeance']  as String?)?.substring(0, 10) ?? '',
+      dateDebut:         (json['date_debut']         as String?)?.substring(0, 10) ?? '',
+      dateFin:           (json['date_fin']           as String?)?.substring(0, 10) ?? '',
+      prochaineEcheance: (json['prochaine_echeance'] as String?)?.substring(0, 10) ?? '',
       specificites:      _parseSpecificites(json['specificites']),
-      // Pass the parent id into each sous-contrat so they can self-identify
       sousContrats:      rawSous.map((e) {
         final m = e as Map<String, dynamic>;
         return SousContrat.fromJson(
@@ -262,6 +270,7 @@ ContratStatut _parseContratStatut(String? v) {
   }
 }
 
+// Used by SousContrat (enum-based statut)
 LeaseStatut _normaliseToLeaseStatut(String s, double total, double restant) {
   switch (s) {
     case 'SOLDE':       return LeaseStatut.paid;
@@ -275,6 +284,7 @@ LeaseStatut _normaliseToLeaseStatut(String s, double total, double restant) {
   }
 }
 
+// Used by Lease (string-based statut) — normalises ACTIF and pass-through values
 String _normaliseLeaseStatut(String s, double total, double restant) {
   switch (s) {
     case 'SOLDE':       return 'PAYE';
@@ -284,7 +294,7 @@ String _normaliseLeaseStatut(String s, double total, double restant) {
       if (restant <= 0)    return 'PAYE';
       if (restant < total) return 'PARTIELLEMENT_PAYE';
       return 'NON_PAYE';
-  // API may already send normalised values
+
     case 'PAYE':
     case 'PARTIELLEMENT_PAYE':
     case 'NON_PAYE':

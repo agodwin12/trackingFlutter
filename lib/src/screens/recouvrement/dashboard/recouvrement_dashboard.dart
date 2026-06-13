@@ -76,8 +76,29 @@ String _safeStr(dynamic v, {String fallback = ''}) {
   final s = v.toString().trim();
   return (s.isEmpty || s.toLowerCase() == 'null') ? fallback : s;
 }
-double _safeDouble(dynamic v) =>
-    double.tryParse(v?.toString() ?? '') ?? 0.0;
+
+/// Robust numeric parsers — same behaviour as the profile screen, so contrats
+/// are interpreted identically everywhere. Sequelize serialises DECIMAL/BIGINT
+/// as strings, sometimes with spaces or comma decimal separators, which the
+/// previous plain `double.tryParse` silently turned into 0.0 (the "paid stays
+/// at 0" bug).
+double _safeDouble(dynamic v, {double fallback = 0}) {
+  if (v == null)   return fallback;
+  if (v is double) return v;
+  if (v is num)    return v.toDouble();
+  final text = v.toString().trim().replaceAll(' ', '').replaceAll(',', '.');
+  if (text.isEmpty || text.toLowerCase() == 'null') return fallback;
+  return double.tryParse(text) ?? fallback;
+}
+
+int _safeInt(dynamic v, {int fallback = 0}) {
+  if (v == null) return fallback;
+  if (v is int)  return v;
+  if (v is num)  return v.toInt();
+  final text = v.toString().trim();
+  if (text.isEmpty || text.toLowerCase() == 'null') return fallback;
+  return int.tryParse(text) ?? double.tryParse(text)?.toInt() ?? fallback;
+}
 
 // ── env URLs ──────────────────────────────────────────────────────────────────
 String get _partnerApiUrl =>
@@ -111,7 +132,7 @@ class _Contrat {
   });
 
   factory _Contrat.fromJson(Map<String, dynamic> j) => _Contrat(
-    id                 : j['id'] as int,
+    id                 : _safeInt(j['id']),
     immatriculation    : _safeStr(j['immatriculation']),
     montantTotal       : _safeDouble(j['montant_total']),
     montantRestant     : _safeDouble(j['montant_restant']),
@@ -240,6 +261,9 @@ class _RecouvrementDashboardState extends State<RecouvrementDashboard> {
         if (m == null) continue;
         try {
           final c = _Contrat.fromJson(m);
+          _log('contrat[${c.id}] verse=${c.montantVerse} '
+              'restant=${c.montantRestant} total=${c.montantTotal} '
+              '(raw verse=${m['montant_verse']})');
           parsed.add(c);
           // pick first non-empty immatriculation
           if (immat == null && c.immatriculation.isNotEmpty) immat = c.immatriculation;
@@ -781,11 +805,8 @@ class _HomeTabState extends State<_HomeTab> {
   }
 
   /// Summary box — totals pulled from contrats API (montant_total, montant_verse, montant_restant)
+  /// Progress bar removed: only the three stat cards remain.
   Widget _buildSummaryBox(AppLocalizations t) {
-    final total    = _grandTotal;
-    final paidFrac = total > 0 ? (_grandPaid     / total).clamp(0.0, 1.0) : 0.0;
-    final remFrac  = total > 0 ? (_grandRemaining / total).clamp(0.0, 1.0) : 0.0;
-
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(color: _card, borderRadius: BorderRadius.circular(16),
@@ -818,24 +839,6 @@ class _HomeTabState extends State<_HomeTab> {
             subLabel: 'restant',
             topColor: _red,
           )),
-        ]),
-        const SizedBox(height: 12),
-        // Progress bar: paid vs remaining
-        ClipRRect(borderRadius: BorderRadius.circular(3), child: Row(children: [
-          if (paidFrac > 0)
-            Expanded(flex: (paidFrac * 100).round(), child: Container(height: 5, color: _green)),
-          if (remFrac > 0)
-            Expanded(flex: (remFrac  * 100).round(), child: Container(height: 5, color: _red)),
-          if (paidFrac == 0 && remFrac == 0)
-            Expanded(flex: 100, child: Container(height: 5, color: _border)),
-        ])),
-        const SizedBox(height: 8),
-        // percentage label
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('${(paidFrac * 100).toStringAsFixed(1)}% remboursé',
-              style: const TextStyle(fontSize: 10, color: _green, fontWeight: FontWeight.w600)),
-          Text('XAF ${_fmt(_grandRemaining)} restant',
-              style: const TextStyle(fontSize: 10, color: _red, fontWeight: FontWeight.w600)),
         ]),
       ]),
     );

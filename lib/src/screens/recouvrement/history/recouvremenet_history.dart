@@ -20,7 +20,8 @@ const Color _red         = Color(0xFFDC2626);
 const Color _yellow      = Color(0xFFD97706);
 const Color _purple      = Color(0xFF8B5CF6);
 
-enum _DayStatus { paid, partial, unpaid }
+// Two-state status only: a lease is either fully paid (green) or not (red).
+enum _DayStatus { paid, unpaid }
 
 class _CalDay {
   final Lease      lease;
@@ -123,9 +124,9 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
     }
   }
 
+  // Only two outcomes now: fully paid → paid, anything else (incl. partial) → unpaid.
   _DayStatus _leaseStatus(Lease l) {
-    if (l.isPaid)    return _DayStatus.paid;
-    if (l.isPartial) return _DayStatus.partial;
+    if (l.isPaid) return _DayStatus.paid;
     return _DayStatus.unpaid;
   }
 
@@ -142,16 +143,15 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
     return map;
   }
 
-  int    get _paidCount    => _leases.where((l) => l.isPaid).length;
-  int    get _partialCount => _leases.where((l) => l.isPartial).length;
-  int    get _unpaidCount  => _leases.where((l) => l.isUnpaid).length;
-  double get _totalPaid    => _leases.fold(0.0, (s, l) => s + l.montantPaye);
+  int    get _paidCount   => _leases.where((l) => l.isPaid).length;
+  // Everything not fully paid (partial included) counts as unpaid now.
+  int    get _unpaidCount => _leases.where((l) => !l.isPaid).length;
+  double get _totalPaid   => _leases.fold(0.0, (s, l) => s + l.montantPaye);
 
   Lease? get _nextUnpaid {
     final today = DateTime.now().toIso8601String().substring(0, 10);
     final list  = _leases
-        .where((l) => (l.isUnpaid || l.isPartial) &&
-        l.dateEcheance.compareTo(today) >= 0)
+        .where((l) => !l.isPaid && l.dateEcheance.compareTo(today) >= 0)
         .toList()
       ..sort((a, b) => a.dateEcheance.compareTo(b.dateEcheance));
     return list.isEmpty ? null : list.first;
@@ -165,17 +165,15 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
 
   Color _statusColor(_DayStatus s) {
     switch (s) {
-      case _DayStatus.paid:    return _green;
-      case _DayStatus.partial: return _yellow;
-      case _DayStatus.unpaid:  return _red;
+      case _DayStatus.paid:   return _green;
+      case _DayStatus.unpaid: return _red;
     }
   }
 
   String _statusLabel(_DayStatus s, AppLocalizations t) {
     switch (s) {
-      case _DayStatus.paid:    return t.statusPaid;
-      case _DayStatus.partial: return t.statusPartial;
-      case _DayStatus.unpaid:  return t.statusUnpaid;
+      case _DayStatus.paid:   return t.statusPaid;
+      case _DayStatus.unpaid: return t.statusUnpaid;
     }
   }
 
@@ -205,7 +203,6 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
   // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    // ← THE FIX: ! unwraps the nullable return of AppLocalizations.of()
     final t = AppLocalizations.of(context)!;
     return Scaffold(
       backgroundColor: _bg,
@@ -286,12 +283,10 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
     );
   }
 
+  // Two stat chips now: paid + unpaid.
   Widget _buildStatsRow(AppLocalizations t) => Row(children: [
     Expanded(child: _statChip(Icons.check_circle_outline_rounded,
         t.statDaysPaid, '$_paidCount', _green)),
-    const SizedBox(width: 8),
-    Expanded(child: _statChip(Icons.timelapse_rounded,
-        t.statusPartial, '$_partialCount', _yellow)),
     const SizedBox(width: 8),
     Expanded(child: _statChip(Icons.cancel_outlined,
         t.statMissed, '$_unpaidCount', _red)),
@@ -429,7 +424,6 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
     final first       = DateTime(_focusedMonth.year, _focusedMonth.month, 1);
     final daysInMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1, 0).day;
     final offset      = (first.weekday - 1) % 7;
-    final todayKey    = _dateKey(DateTime.now());
     final cells       = <Widget>[];
 
     for (int i = 0; i < offset; i++) cells.add(const SizedBox());
@@ -438,13 +432,11 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
       final date       = DateTime(_focusedMonth.year, _focusedMonth.month, d);
       final key        = _dateKey(date);
       final calDay     = calMap[key];
-      final isToday    = key == todayKey;
       final isSelected = _selectedDay != null && _dateKey(_selectedDay!) == key;
 
       cells.add(_buildDayCell(
         day:        d,
         calDay:     calDay,
-        isToday:    isToday,
         isSelected: isSelected,
         onTap: calDay != null
             ? () => setState(() => _selectedDay = isSelected ? null : date)
@@ -467,7 +459,6 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
   Widget _buildDayCell({
     required int      day,
     required _CalDay? calDay,
-    required bool     isToday,
     required bool     isSelected,
     VoidCallback?     onTap,
   }) {
@@ -490,32 +481,31 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         decoration: BoxDecoration(
-          color: isToday && calDay == null ? _orange.withOpacity(0.08) : bg,
+          color: bg,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: isToday ? _orange : (borderColor ?? Colors.transparent),
-            width: isToday || isSelected ? 1.5 : 1.0,
+            color: borderColor ?? Colors.transparent,
+            width: isSelected ? 1.5 : 1.0,
           ),
         ),
         child: Center(child: Text('$day', style: TextStyle(
           fontSize: 12,
-          fontWeight: isToday || isSelected ? FontWeight.w800 : FontWeight.w500,
-          color: isToday ? _orange : textColor,
+          fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
+          color: textColor,
         ))),
       ),
     );
   }
 
+  // Legend: paid + unpaid only.
   Widget _buildLegend(AppLocalizations t) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     decoration: BoxDecoration(color: _card,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _border)),
     child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-      _legendDot(_green,  t.legendPaid),
-      _legendDot(_yellow, t.legendPartial),
-      _legendDot(_red,    t.legendUnpaid),
-      _legendDot(_orange, t.legendToday),
+      _legendDot(_green, t.legendPaid),
+      _legendDot(_red,   t.legendUnpaid),
     ]),
   );
 
@@ -543,8 +533,6 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
 
     final IconData icon = calDay.status == _DayStatus.paid
         ? Icons.check_circle_rounded
-        : calDay.status == _DayStatus.partial
-        ? Icons.pending_rounded
         : Icons.cancel_rounded;
 
     return Container(
@@ -592,20 +580,6 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
         const SizedBox(height: 8),
         _detailRow(t.detailRemaining, 'XAF ${_fmt(lease.resteAPayer)}',
             valueColor: lease.resteAPayer > 0 ? _red : _green),
-
-        if (calDay.status == _DayStatus.partial) ...[
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: lease.montantAttendu > 0
-                  ? (lease.montantPaye / lease.montantAttendu).clamp(0.0, 1.0) : 0,
-              backgroundColor: _border,
-              valueColor: const AlwaysStoppedAnimation<Color>(_yellow),
-              minHeight: 6,
-            ),
-          ),
-        ],
 
         // ── Payment details (inlined, no second card) ────────────────────────
         if (payment != null) ...[
@@ -801,11 +775,9 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _border)),
     child: Row(children: [
-      Expanded(child: _summaryCol(t.summaryPaid,    '$_paidCount',    _green)),
+      Expanded(child: _summaryCol(t.summaryPaid,   '$_paidCount',   _green)),
       _vDivider(),
-      Expanded(child: _summaryCol(t.summaryPartial, '$_partialCount', _yellow)),
-      _vDivider(),
-      Expanded(child: _summaryCol(t.summaryUnpaid,  '$_unpaidCount',  _red)),
+      Expanded(child: _summaryCol(t.summaryUnpaid, '$_unpaidCount', _red)),
       _vDivider(),
       Expanded(child: _summaryCol(
           t.statTotalPaidShort, 'XAF ${_fmt(_totalPaid)}', _orange, small: true)),
@@ -896,9 +868,8 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
             if (canPay)
               Row(children: [
                 Text('${t.detailRemaining}: XAF ${_fmt(lease.resteAPayer)}',
-                    style: TextStyle(fontSize: 11,
-                        color: status == _DayStatus.partial ? _yellow : _red,
-                        fontWeight: FontWeight.w600)),
+                    style: const TextStyle(fontSize: 11,
+                        color: _red, fontWeight: FontWeight.w600)),
                 const Spacer(),
                 Icon(Icons.expand_more_rounded,
                     color: _textMuted.withOpacity(0.5), size: 16),
@@ -915,20 +886,6 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
             const SizedBox(height: 6),
             _detailRow(t.detailRemaining, 'XAF ${_fmt(lease.resteAPayer)}',
                 valueColor: lease.resteAPayer > 0 ? _red : _green),
-            if (status == _DayStatus.partial) ...[
-              const SizedBox(height: 10),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(3),
-                child: LinearProgressIndicator(
-                  value: lease.montantAttendu > 0
-                      ? (lease.montantPaye / lease.montantAttendu).clamp(0.0, 1.0)
-                      : 0,
-                  backgroundColor: _border,
-                  valueColor: const AlwaysStoppedAnimation<Color>(_yellow),
-                  minHeight: 4,
-                ),
-              ),
-            ],
             if (payment != null) ...[
               const SizedBox(height: 14),
               _sectionLabel('DÉTAILS DU PAIEMENT'),

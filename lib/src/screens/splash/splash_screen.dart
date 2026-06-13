@@ -13,7 +13,7 @@ import '../dashboard/dashboard.dart';
 import '../login/login.dart';
 import '../recouvrement/dashboard/recouvrement_dashboard.dart';
 
-const Color kSplashBg = Color(0xFFD85119);
+const Color kSplashBg = Colors.black;
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({Key? key}) : super(key: key);
@@ -70,7 +70,6 @@ class _SplashScreenState extends State<SplashScreen>
   // ── Animation setup ────────────────────────────────────────────────────
 
   void _setupAnimations() {
-    // Logo: elastic bounce pop + slight rotation on entry
     _logoCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
@@ -91,7 +90,6 @@ class _SplashScreenState extends State<SplashScreen>
       ),
     );
 
-    // Continuous gentle float up/down after entry
     _floatCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2200),
@@ -100,7 +98,6 @@ class _SplashScreenState extends State<SplashScreen>
       CurvedAnimation(parent: _floatCtrl, curve: Curves.easeInOut),
     );
 
-    // Text: slide in from right + fade
     _textCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 650),
@@ -115,7 +112,6 @@ class _SplashScreenState extends State<SplashScreen>
       CurvedAnimation(parent: _textCtrl, curve: Curves.easeIn),
     );
 
-    // Shimmer sweep across text
     _shimmerCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
@@ -126,18 +122,11 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _runAnimationSequence() async {
-    // 1. Logo bounces in with elastic scale + slight rotate
     await _logoCtrl.forward();
-
-    // 2. Text slides in from the right
     await Future.delayed(const Duration(milliseconds: 60));
     await _textCtrl.forward();
-
-    // 3. Shimmer sweeps across the text once
     await Future.delayed(const Duration(milliseconds: 150));
     await _shimmerCtrl.forward();
-
-    // 4. Mark animation complete → allow navigation
     await Future.delayed(const Duration(milliseconds: 300));
     _animationDone = true;
     _pendingNavigation?.call();
@@ -289,6 +278,11 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    // Scale logo and font so it fits any screen width safely
+    final logoSize = screenWidth * 0.18;
+    final fontSize = screenWidth * 0.09;
+
     return Scaffold(
       backgroundColor: kSplashBg,
       body: Center(
@@ -297,7 +291,7 @@ class _SplashScreenState extends State<SplashScreen>
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
 
-            // ── Animated Logo ──────────────────────────────────────────
+            // ── Animated Logo ────────────────────────────────────────
             AnimatedBuilder(
               animation: Listenable.merge([_logoCtrl, _floatCtrl]),
               builder: (context, child) {
@@ -316,18 +310,15 @@ class _SplashScreenState extends State<SplashScreen>
                 );
               },
               child: Image.asset(
-                'assets/logo.png',
-                width: 86,
-                height: 86,
-
-                color: Colors.white,
-
+                'assets/splash.png',
+                width: logoSize,
+                height: logoSize,
               ),
             ),
 
-            const SizedBox(width: 16),
+            SizedBox(width: screenWidth * 0.04),
 
-            // ── Animated text block ────────────────────────────────────
+            // ── Animated text block ──────────────────────────────────
             ClipRect(
               child: SlideTransition(
                 position: _textSlide,
@@ -365,25 +356,14 @@ class _SplashScreenState extends State<SplashScreen>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
-                      children: const [
+                      children: [
                         Text(
                           'FLEETRA',
                           style: TextStyle(
-                            fontSize: 42,
+                            fontSize: fontSize,
                             fontWeight: FontWeight.w900,
                             color: Colors.white,
-                            letterSpacing: 5,
-                            height: 1.0,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          '',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w400,
-                            color: Color(0x99FFFFFF),
-                            letterSpacing: 4,
+                            letterSpacing: screenWidth * 0.012,
                             height: 1.0,
                           ),
                         ),
