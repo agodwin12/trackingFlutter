@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/env_config.dart';
 import '../../services/notification_service.dart';
+import '../../services/token_refresh_service.dart';
 import '../dashboard/dashboard.dart';
 import '../login/login.dart';
 import '../recouvrement/dashboard/recouvrement_dashboard.dart';
@@ -152,6 +153,8 @@ class _SplashScreenState extends State<SplashScreen>
       try {
         user = jsonDecode(userData) as Map<String, dynamic>;
       } catch (_) {
+        // Corrupt stored user JSON — this is a genuinely broken session, so
+        // clearing here is correct.
         await _clearSession();
         await _waitRemaining(start);
         _scheduleNavigation(_navigateToLogin);
@@ -215,15 +218,20 @@ class _SplashScreenState extends State<SplashScreen>
       String token,
       ) async {
     try {
-      final response = await http
-          .get(
-        Uri.parse('$baseUrl/voitures/user/$userId'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-      )
-          .timeout(const Duration(seconds: 10));
+      // Route the validation call through the refresh service so an expired
+      // access token (the normal state after >1h idle or a cold restart) is
+      // silently refreshed and retried instead of treated as a logout.
+      final response = await TokenRefreshService().makeAuthenticatedRequest(
+        request: (t) => http
+            .get(
+          Uri.parse('$baseUrl/voitures/user/$userId'),
+          headers: {
+            'Authorization': 'Bearer $t',
+            'Content-Type': 'application/json',
+          },
+        )
+            .timeout(const Duration(seconds: 10)),
+      );
 
       if (!mounted) return;
 
@@ -232,28 +240,93 @@ class _SplashScreenState extends State<SplashScreen>
         final vehicles = data['vehicles'] as List? ?? [];
 
         if (vehicles.isNotEmpty) {
+          // Fresh data — refresh the cache so future cold starts have a recent
+          // vehicle to fall back on, then navigate to the first vehicle.
+          await _cacheVehicles(vehicles);
           final int firstVehicleId = (vehicles[0]['id'] as num).toInt();
-          _scheduleNavigation(() {
-            if (!mounted) return;
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ModernDashboard(vehicleId: firstVehicleId),
-              ),
-            );
-          });
-        } else {
-          await _clearSession();
-          _scheduleNavigation(_navigateToLogin);
+          _scheduleNavigation(() => _goToDashboard(firstVehicleId));
+          return;
         }
-      } else {
-        await _clearSession();
-        _scheduleNavigation(_navigateToLogin);
+
+        // 200 but empty vehicles → NON-FATAL. This is a data state, not an auth
+        // failure, so we never clear the session. Fall back to a cached vehicle
+        // if we have one; only land on login if there is nothing to show.
+        await _navigateUsingCacheOrLogin();
+        return;
       }
+
+      // Any non-200 (e.g. a 401 the refresh service couldn't resolve due to a
+      // transient failure, or a 5xx from the endpoint itself). Recover.
+      await _handleTransientFailure();
     } catch (_) {
-      await _clearSession();
+      // makeAuthenticatedRequest threw (no usable token), or the GET failed
+      // (network / timeout). Recover gracefully — never clear here.
+      await _handleTransientFailure();
+    }
+  }
+
+  /// Decide what to do when validation couldn't complete cleanly.
+  ///
+  /// If a genuine session-death logout is already in flight (the refresh
+  /// service hit a real 401 / missing local credentials), it has already
+  /// cleared prefs and redirected to login via the global navigator key — we
+  /// must do nothing here, or we risk a dashboard-vs-login redirect race.
+  ///
+  /// Otherwise the failure was transient (timeout / 5xx / no signal) and the
+  /// session is still intact, so we go optimistic and drop into the dashboard
+  /// using cached vehicle data. If that session turns out to be dead, the
+  /// dashboard's first authenticated call will 401 and the refresh service
+  /// will redirect to login then.
+  Future<void> _handleTransientFailure() async {
+    if (TokenRefreshService().sessionExpired) return;
+    await _navigateUsingCacheOrLogin();
+  }
+
+  /// Navigate to the dashboard using a cached vehicle id, or to login if no
+  /// cached vehicle exists. Never clears the session — over-eager clearing was
+  /// the original cause of the idle/restart sign-outs.
+  Future<void> _navigateUsingCacheOrLogin() async {
+    final int? vehicleId = await _readCachedVehicleId();
+    if (!mounted) return;
+    if (vehicleId != null) {
+      _scheduleNavigation(() => _goToDashboard(vehicleId));
+    } else {
       _scheduleNavigation(_navigateToLogin);
     }
+  }
+
+  Future<int?> _readCachedVehicleId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getInt('current_vehicle_id');
+      if (cached != null) return cached;
+
+      final raw = prefs.getString('vehicles_list');
+      if (raw != null) {
+        final list = jsonDecode(raw) as List;
+        if (list.isNotEmpty) return (list[0]['id'] as num).toInt();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _cacheVehicles(List vehicles) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('vehicles_list', jsonEncode(vehicles));
+      final int firstVehicleId = (vehicles[0]['id'] as num).toInt();
+      await prefs.setInt('current_vehicle_id', firstVehicleId);
+    } catch (_) {}
+  }
+
+  void _goToDashboard(int vehicleId) {
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ModernDashboard(vehicleId: vehicleId),
+      ),
+    );
   }
 
   void _scheduleNavigation(VoidCallback navigate) {

@@ -23,6 +23,12 @@ class TokenRefreshService {
 
   final List<Completer<String?>> _queue = [];
 
+  /// True once a genuine session-death logout has been triggered for this
+  /// session (refresh returned 401, or local credentials were missing).
+  /// Callers (e.g. the splash screen) use this to distinguish
+  /// "service already redirected to login" from "transient failure — recover".
+  bool get sessionExpired => _sessionExpiredGuard;
+
   // Call this after a successful login to re-arm the guard
   void resetSessionState() {
     _sessionExpiredGuard = false;
@@ -36,8 +42,18 @@ class TokenRefreshService {
     final token = await getValidAccessToken();
 
     if (token == null) {
-      debugPrint('❌ [TokenRefresh] No valid token — forcing logout');
-      await _handleLogout();
+      // No usable token. Two possibilities, neither of which should clear the
+      // session here:
+      //   1. Genuine session death — refreshAccessToken already returned 401
+      //      (or local creds were missing) and called _handleLogout(); the
+      //      guard is set and the redirect to login is already in flight.
+      //   2. Transient failure — a timeout / 5xx / network error blocked the
+      //      refresh; the stored tokens are still intact and the session is
+      //      NOT dead. We surface the failure so the caller can recover
+      //      (e.g. the splash falls back to cached data) without logging out.
+      // Either way: do NOT call _handleLogout() here. Just fail this request.
+      debugPrint(
+          '❌ [TokenRefresh] No valid token available (sessionExpired=$_sessionExpiredGuard)');
       throw Exception('Authentication required');
     }
 
@@ -59,7 +75,10 @@ class TokenRefreshService {
         debugPrint('✅ [TokenRefresh] Retrying with new token');
         return makeAuthenticatedRequest(request: request, retryCount: 1);
       }
-      // refreshAccessToken already called _handleLogout if it failed
+      // refreshAccessToken handled logout itself IF (and only if) the refresh
+      // token was genuinely expired (401). On a transient failure it left the
+      // session intact and returned null — we simply return the original 401
+      // response to the caller below, without clearing anything.
     }
 
     return response;
@@ -80,8 +99,10 @@ class TokenRefreshService {
         if (secondsLeft <= 60) {
           debugPrint('⚡ [TokenRefresh] Proactive refresh (≤60s left)');
           final refreshed = await refreshAccessToken();
-          // If refresh failed, refreshAccessToken handled logout already.
-          // Return null so the caller knows no token is available.
+          // If refresh failed, refreshAccessToken decided whether it was a
+          // genuine logout (401 / missing creds) or a transient failure.
+          // Return whatever it produced (null on failure) so the caller knows
+          // no token is available for this attempt.
           return refreshed;
         }
       }
@@ -109,6 +130,8 @@ class TokenRefreshService {
       final refreshToken = prefs.getString('refreshToken');
       final clientId = prefs.getString('client_id');
 
+      // Missing local credentials = the session is genuinely broken/half-cleared.
+      // This is NOT a transient failure, so we do log out.
       if (refreshToken == null) {
         debugPrint('❌ [TokenRefresh] No refresh token — forcing logout');
         await _handleLogout();
@@ -143,8 +166,10 @@ class TokenRefreshService {
         final String? newRefresh = data['refreshToken'] as String?;
 
         if (newAccess == null) {
-          debugPrint('❌ [TokenRefresh] Response missing accessToken — logout');
-          await _handleLogout();
+          // 200 but malformed body — treat as transient, keep the session.
+          // The next attempt may get a well-formed response.
+          debugPrint(
+              '⚠️ [TokenRefresh] 200 but missing accessToken — transient, keeping session');
           return null;
         }
 
@@ -158,21 +183,27 @@ class TokenRefreshService {
         newToken = newAccess;
         debugPrint('✅ [TokenRefresh] Tokens refreshed successfully');
       } else if (response.statusCode == 401) {
+        // The ONLY definitive "session is dead" signal. The backend returns
+        // 401 (code: REFRESH_TOKEN_EXPIRED) when the refresh token is expired
+        // or revoked. This is the one case where we clear and redirect.
         debugPrint(
             '❌ [TokenRefresh] Refresh token expired (401) — forcing logout');
         await _handleLogout();
       } else {
-        // 5xx or unexpected — treat as expired to be safe
+        // 400, 5xx, or anything else → TRANSIENT (e.g. Keycloak unreachable
+        // returns 500, malformed request returns 400). The refresh token is
+        // NOT proven dead, so we keep the session intact and just fail this
+        // attempt. Do NOT log out.
         debugPrint(
-            '⚠️ [TokenRefresh] Unexpected ${response.statusCode} — forcing logout');
-        await _handleLogout();
+            '⚠️ [TokenRefresh] Refresh got ${response.statusCode} — transient, keeping session');
       }
     } on TimeoutException {
-      debugPrint('⏰ [TokenRefresh] Refresh timed out — forcing logout');
-      await _handleLogout();
+      // Transient: server/network was slow. Session is intact — do NOT log out.
+      debugPrint('⏰ [TokenRefresh] Refresh timed out — transient, keeping session');
     } catch (e) {
-      debugPrint('🔥 [TokenRefresh] Network error: $e — forcing logout');
-      await _handleLogout();
+      // Transient: no connectivity, DNS, TLS, etc. Session is intact — do NOT
+      // log out. The user can retry once the network recovers.
+      debugPrint('🔥 [TokenRefresh] Network error: $e — transient, keeping session');
     } finally {
       _isRefreshing = false;
       for (final completer in _queue) {
