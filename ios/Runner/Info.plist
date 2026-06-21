@@ -60,6 +60,11 @@
     <!-- ✅ Firebase Messaging Auto-Init -->
     <key>FirebaseMessagingAutoInitEnabled</key>
     <true/>
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+      <string>geo</string>
+      <string>https</string>
+    </array>
 
 
 </dict>

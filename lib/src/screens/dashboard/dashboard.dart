@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/utility/app_theme.dart';
 import '../../widgets/offline_barner.dart';
@@ -35,10 +36,13 @@ class _ModernDashboardState extends State<ModernDashboard>
   String _selectedLanguage = 'en';
   bool _userHasMovedMap = false;
 
+  // ── Follow pill state ──────────────────────────────────────
+  bool _showFollowPill = false;
+  ScreenCoordinate? _pillScreenCoord;
+
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   late AnimationController _markerAnimationController;
-
 
   Animation<double>? _latAnimation;
   Animation<double>? _lngAnimation;
@@ -55,12 +59,10 @@ class _ModernDashboardState extends State<ModernDashboard>
   static const Color _lockedText = Color(0xFF212121);
   static const Color _lockedIconColor = Color(0xFF9E9E9E);
 
-
   static const CameraPosition _noGpsCamera = CameraPosition(
     target: LatLng(4.0, 12.3),
     zoom: 6,
   );
-
 
   bool _isSwitchingVehicle = false;
   String _vehicleSearchQuery = '';
@@ -78,7 +80,6 @@ class _ModernDashboardState extends State<ModernDashboard>
     _handleVehiclesRefreshed();
   }
 
-
   void _onMarkerTick() {
     if (_latAnimation == null || _lngAnimation == null || _rotationAnimation == null) return;
     if (_currentMarkerLat == null || _currentMarkerLng == null) return;
@@ -93,7 +94,6 @@ class _ModernDashboardState extends State<ModernDashboard>
     await _loadSavedVehicleId();
     await _loadLanguagePreference();
 
-
     if (!mounted) return;
 
     _controller = DashboardController(_savedVehicleId ?? widget.vehicleId);
@@ -106,7 +106,6 @@ class _ModernDashboardState extends State<ModernDashboard>
         _currentMarkerLat = _controller!.vehicleLat;
         _currentMarkerLng = _controller!.vehicleLng;
       }
-
     });
 
     _pulseController = AnimationController(
@@ -122,7 +121,6 @@ class _ModernDashboardState extends State<ModernDashboard>
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     );
-
 
     _markerAnimationController.addListener(_onMarkerTick);
 
@@ -145,21 +143,29 @@ class _ModernDashboardState extends State<ModernDashboard>
     }
   }
 
+  // ── CHANGED: auto-dismiss pill when vehicle moves or GPS lost ──
   void _setupLocationListener() {
     _controller?.addListener(() {
       if (!_controller!.hasValidPosition) {
-        // GPS signal lost — clear the stored position so the marker disappears.
         if (_currentMarkerLat != null || _currentMarkerLng != null) {
           setState(() {
             _currentMarkerLat = null;
             _currentMarkerLng = null;
+            _showFollowPill = false;
+            _pillScreenCoord = null;
           });
         }
         return;
       }
-      // GPS signal present — animate to the new position only if it changed.
       if (_controller!.vehicleLat != _currentMarkerLat ||
           _controller!.vehicleLng != _currentMarkerLng) {
+        // Dismiss pill when vehicle moves
+        if (_showFollowPill) {
+          setState(() {
+            _showFollowPill = false;
+            _pillScreenCoord = null;
+          });
+        }
         _animateMarkerToNewPosition(
             _controller!.vehicleLat, _controller!.vehicleLng);
       }
@@ -192,13 +198,11 @@ class _ModernDashboardState extends State<ModernDashboard>
   }
 
   void _animateMarkerToNewPosition(double newLat, double newLng) {
-
     if (_currentMarkerLat == null || _currentMarkerLng == null) {
       setState(() {
         _currentMarkerLat = newLat;
         _currentMarkerLng = newLng;
       });
-      // Also move the map camera to this first real position.
       if (!_userHasMovedMap) {
         _controller?.mapController?.animateCamera(
           CameraUpdate.newCameraPosition(
@@ -236,7 +240,6 @@ class _ModernDashboardState extends State<ModernDashboard>
   void _recenterMap() {
     if (_controller == null) return;
     if (!_controller!.hasValidPosition) {
-
       _controller!.mapController?.animateCamera(
         CameraUpdate.newCameraPosition(_noGpsCamera),
       );
@@ -252,12 +255,12 @@ class _ModernDashboardState extends State<ModernDashboard>
     setState(() => _userHasMovedMap = false);
   }
 
+  // ── CHANGED: added onTap to marker ────────────────────────
   Set<Marker> _createAnimatedMarkers() {
     if (_controller == null) return {};
     if (!_controller!.hasValidPosition) return {};
     if (_controller!.selectedVehicle == null) return {};
     if (_controller!.customCarIcon == null) return {};
-    // Null check — lat/lng are nullable until first real GPS fix.
     if (_currentMarkerLat == null || _currentMarkerLng == null) return {};
     return {
       Marker(
@@ -272,6 +275,7 @@ class _ModernDashboardState extends State<ModernDashboard>
               : '${_controller!.selectedVehicle!.brand} ${_controller!.selectedVehicle!.model}',
           snippet: _controller!.selectedVehicle!.immatriculation,
         ),
+        onTap: _onMarkerTapped,
       ),
     };
   }
@@ -287,7 +291,6 @@ class _ModernDashboardState extends State<ModernDashboard>
   void dispose() {
     PaymentNotifier.instance.removeListener(_onPaymentNotification);
     _pulseController.dispose();
-
     _markerAnimationController.removeListener(_onMarkerTick);
     _markerAnimationController.dispose();
     _alertSubscription?.cancel();
@@ -367,6 +370,42 @@ class _ModernDashboardState extends State<ModernDashboard>
         ),
       ),
     );
+  }
+
+  // ── NEW: marker tap → compute screen coordinate → show pill ──
+  Future<void> _onMarkerTapped() async {
+    if (_controller?.mapController == null) return;
+    if (_currentMarkerLat == null || _currentMarkerLng == null) return;
+
+    final coord = await _controller!.mapController!.getScreenCoordinate(
+      LatLng(_currentMarkerLat!, _currentMarkerLng!),
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _pillScreenCoord = coord;
+      _showFollowPill = true;
+    });
+  }
+
+  // ── NEW: open native map app with vehicle location ────────
+  Future<void> _launchNativeMap() async {
+    if (_currentMarkerLat == null || _currentMarkerLng == null) return;
+
+    final lat = _currentMarkerLat!;
+    final lng = _currentMarkerLng!;
+
+    // geo: URI — Android shows native map chooser (Google Maps, Waze, etc.)
+    // iOS does not support geo: so we fall back to Apple Maps via https
+    final Uri geoUri = Uri.parse('geo:$lat,$lng?q=$lat,$lng');
+    final Uri appleMapsUri =
+    Uri.parse('https://maps.apple.com/?ll=$lat,$lng&q=Vehicle');
+
+    if (await canLaunchUrl(geoUri)) {
+      await launchUrl(geoUri);
+    } else if (await canLaunchUrl(appleMapsUri)) {
+      await launchUrl(appleMapsUri, mode: LaunchMode.externalApplication);
+    }
   }
 
   void _showSafeZoneAlert(Map<String, dynamic> alertData) {
@@ -577,8 +616,7 @@ class _ModernDashboardState extends State<ModernDashboard>
               color: AppColors.error.withOpacity(0.1),
               borderRadius: BorderRadius.circular(12),
             ),
-            child:
-            Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 28),
+            child: Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 28),
           ),
           SizedBox(width: AppSizes.spacingM),
           Expanded(
@@ -737,7 +775,7 @@ class _ModernDashboardState extends State<ModernDashboard>
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      isScrollControlled: true,  // ← essential: lets sheet grow with keyboard
+      isScrollControlled: true,
       useRootNavigator: true,
       builder: (context) {
         if (_controller == null) return const SizedBox.shrink();
@@ -790,8 +828,7 @@ class _ModernDashboardState extends State<ModernDashboard>
 
           final CameraPosition initialCamera = controller.hasValidPosition
               ? CameraPosition(
-            target:
-            LatLng(controller.vehicleLat, controller.vehicleLng),
+            target: LatLng(controller.vehicleLat, controller.vehicleLng),
             zoom: 16,
           )
               : _noGpsCamera;
@@ -804,6 +841,7 @@ class _ModernDashboardState extends State<ModernDashboard>
                 const OfflineBanner(),
                 Expanded(
                   child: Stack(children: [
+                    // ── CHANGED: added onTap to dismiss pill ──
                     GoogleMap(
                       initialCameraPosition: initialCamera,
                       markers: _createAnimatedMarkers(),
@@ -817,8 +855,7 @@ class _ModernDashboardState extends State<ModernDashboard>
                           ),
                           radius: controller.activeSafeZone!.radiusMeters
                               .toDouble(),
-                          fillColor: const Color(0xFF10B981)
-                              .withOpacity(0.15),
+                          fillColor: const Color(0xFF10B981).withOpacity(0.15),
                           strokeColor: const Color(0xFF10B981),
                           strokeWidth: 2,
                         ),
@@ -829,6 +866,14 @@ class _ModernDashboardState extends State<ModernDashboard>
                       onCameraMove: (_) {
                         if (!_userHasMovedMap) {
                           setState(() => _userHasMovedMap = true);
+                        }
+                      },
+                      onTap: (_) {
+                        if (_showFollowPill) {
+                          setState(() {
+                            _showFollowPill = false;
+                            _pillScreenCoord = null;
+                          });
                         }
                       },
                       myLocationButtonEnabled: false,
@@ -849,8 +894,7 @@ class _ModernDashboardState extends State<ModernDashboard>
                               color: Colors.black.withOpacity(0.65),
                               borderRadius: BorderRadius.circular(20),
                             ),
-                            child:
-                            Row(mainAxisSize: MainAxisSize.min, children: [
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
                               const SizedBox(
                                 width: 12,
                                 height: 12,
@@ -877,6 +921,9 @@ class _ModernDashboardState extends State<ModernDashboard>
                     _buildRecenterButton(controller),
                     _buildCompactEngineButton(controller, locked),
                     _buildCompactStolenButton(controller, locked),
+
+                    // ── NEW: follow pill rendered above stolen button ──
+                    _buildFollowPill(controller),
 
                     if (controller.isReloadingVehicles)
                       Positioned(
@@ -1033,8 +1080,7 @@ class _ModernDashboardState extends State<ModernDashboard>
         child: GestureDetector(
           onTap: _showVehicleSelectorModal,
           child: Container(
-            padding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(20),
@@ -1046,8 +1092,7 @@ class _ModernDashboardState extends State<ModernDashboard>
               ],
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.directions_car,
-                  color: Colors.black87, size: 18),
+              const Icon(Icons.directions_car, color: Colors.black87, size: 18),
               const SizedBox(width: 8),
               Text(
                 controller.selectedVehicle!.nickname.isNotEmpty
@@ -1095,8 +1140,7 @@ class _ModernDashboardState extends State<ModernDashboard>
                   offset: const Offset(0, 2))
             ],
           ),
-          child:
-          const Icon(Icons.layers, color: Colors.black87, size: 20),
+          child: const Icon(Icons.layers, color: Colors.black87, size: 20),
         ),
       ),
     );
@@ -1232,6 +1276,80 @@ class _ModernDashboardState extends State<ModernDashboard>
               color: Colors.white,
               colorBlendMode: BlendMode.srcIn,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── NEW: follow pill widget ────────────────────────────────
+  Widget _buildFollowPill(DashboardController controller) {
+    if (!_showFollowPill || _pillScreenCoord == null) {
+      return const SizedBox.shrink();
+    }
+
+    const double pillHeight = 36.0;
+    const double pillEstimatedWidth = 180.0;
+    // Position pill 60px above the marker's screen coordinate
+    const double aboveMarkerOffset = 60.0;
+
+    final double left =
+        _pillScreenCoord!.x.toDouble() - pillEstimatedWidth / 2;
+    final double top =
+        _pillScreenCoord!.y.toDouble() - aboveMarkerOffset - pillHeight;
+
+    final String vehicleName =
+    controller.selectedVehicle?.nickname.isNotEmpty == true
+        ? controller.selectedVehicle!.nickname
+        : controller.selectedVehicle != null
+        ? '${controller.selectedVehicle!.brand} ${controller.selectedVehicle!.model}'
+        .trim()
+        : '';
+
+    return Positioned(
+      left: left.clamp(8.0, double.infinity),
+      top: top.clamp(8.0, double.infinity),
+      child: GestureDetector(
+        onTap: () {
+          setState(() => _showFollowPill = false);
+          _launchNativeMap();
+        },
+        child: Container(
+          height: pillHeight,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A1A),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.25),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.navigation_rounded,
+                color: Color(0xFF10B981),
+                size: 16,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                vehicleName.isNotEmpty
+                    ? 'Follow $vehicleName'
+                    : (_selectedLanguage == 'en'
+                    ? 'Follow vehicle'
+                    : 'Suivre le véhicule'),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -1529,11 +1647,6 @@ class _ModernDashboardState extends State<ModernDashboard>
   Widget _buildMinimalistVehicleSelector() {
     if (_controller == null) return const SizedBox.shrink();
 
-    // ── Keyboard-aware inset ────────────────────────────────────────────────
-    // viewInsets.bottom = keyboard height when visible.
-    // padding.bottom    = safe area (notch/home indicator).
-    // Adding both ensures the sheet lifts above the keyboard and the
-    // search bar remains visible at all times.
     final mediaQuery  = MediaQuery.of(context);
     final bottomInset = mediaQuery.viewInsets.bottom + mediaQuery.padding.bottom;
 
@@ -1552,12 +1665,9 @@ class _ModernDashboardState extends State<ModernDashboard>
     }).toList();
 
     return Padding(
-      // This single Padding lifts the entire sheet when the keyboard appears
       padding: EdgeInsets.only(bottom: bottomInset),
       child: Container(
         constraints: BoxConstraints(
-          // Cap at 65% of screen; when keyboard is up this naturally shrinks
-          // the list area while keeping the search bar visible
           maxHeight: mediaQuery.size.height * 0.65,
         ),
         decoration: const BoxDecoration(
@@ -1567,7 +1677,6 @@ class _ModernDashboardState extends State<ModernDashboard>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // ── drag handle ──────────────────────────────────────────────
             Container(
               margin: const EdgeInsets.only(top: 8),
               width: 32,
@@ -1576,8 +1685,6 @@ class _ModernDashboardState extends State<ModernDashboard>
                   color: Colors.grey.shade300,
                   borderRadius: BorderRadius.circular(2)),
             ),
-
-            // ── title ────────────────────────────────────────────────────
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: Align(
@@ -1593,8 +1700,6 @@ class _ModernDashboardState extends State<ModernDashboard>
                 ),
               ),
             ),
-
-            // ── search bar ───────────────────────────────────────────────
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: StatefulBuilder(
@@ -1646,10 +1751,7 @@ class _ModernDashboardState extends State<ModernDashboard>
                 },
               ),
             ),
-
             Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
-
-            // ── list ─────────────────────────────────────────────────────
             Flexible(
               child: filtered.isEmpty
                   ? Padding(
@@ -1672,8 +1774,6 @@ class _ModernDashboardState extends State<ModernDashboard>
               )
                   : ListView.separated(
                 shrinkWrap: true,
-                // No bottom padding needed here — the outer Padding
-                // already accounts for safe area + keyboard
                 padding: const EdgeInsets.only(top: 4, bottom: 12),
                 itemCount: filtered.length,
                 separatorBuilder: (_, __) =>
@@ -1794,9 +1894,8 @@ class _ModernDashboardState extends State<ModernDashboard>
     );
   }
 
-
   Future<void> _onVehicleSelected(dynamic vehicle) async {
-    if (_isSwitchingVehicle) return; // FIX #5: guard against double-tap
+    if (_isSwitchingVehicle) return;
     _isSwitchingVehicle = true;
 
     try {
@@ -1810,7 +1909,7 @@ class _ModernDashboardState extends State<ModernDashboard>
     } catch (e) {
       debugPrint('Error saving vehicle ID: $e');
     } finally {
-      _isSwitchingVehicle = false; // FIX #5: always release the lock
+      _isSwitchingVehicle = false;
     }
 
     if (!mounted) return;
@@ -1819,18 +1918,16 @@ class _ModernDashboardState extends State<ModernDashboard>
 
     setState(() {
       if (_controller!.hasValidPosition) {
-        // New vehicle already has a confirmed GPS fix — seed marker there.
         _currentMarkerLat = _controller!.vehicleLat;
         _currentMarkerLng = _controller!.vehicleLng;
       } else {
-        // No valid position for the new vehicle.
-        // Null out the coords so the marker disappears completely until
-        // the first real GPS fix arrives. No hardcoded fallback position.
         _currentMarkerLat = null;
         _currentMarkerLng = null;
       }
       _currentRotation = 0.0;
       _userHasMovedMap = false;
+      _showFollowPill = false;
+      _pillScreenCoord = null;
     });
 
     _recenterMap();

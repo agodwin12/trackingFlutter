@@ -143,7 +143,7 @@ class Contract {
     typeContratLibelle      : _toStr(j['type_contrat_libelle']),
     montantTotal            : _toDouble(j['montant_total']),
     montantRestant          : _toDouble(j['montant_restant']),
-    montantVerse            : _toDouble(j['montant_verse']),
+    montantVerse            : _toDouble(j['montant_paye']),
     montantParPaiement      : _toDouble(j['montant_par_paiement']),
     frequence               : _toStr(j['frequence']),
     dateDebut               : _toStr(j['date_debut']),

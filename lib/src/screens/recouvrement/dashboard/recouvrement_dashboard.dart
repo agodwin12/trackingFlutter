@@ -136,7 +136,7 @@ class _Contrat {
     immatriculation    : _safeStr(j['immatriculation']),
     montantTotal       : _safeDouble(j['montant_total']),
     montantRestant     : _safeDouble(j['montant_restant']),
-    montantVerse       : _safeDouble(j['montant_verse']),
+    montantVerse: _safeDouble(j['montant_paye']),
     montantParPaiement : _safeDouble(j['montant_par_paiement']),
     typeContratLibelle : _safeStr(j['type_contrat_libelle']),
     prochaineEcheance  : _safeStr(j['prochaine_echeance']),
