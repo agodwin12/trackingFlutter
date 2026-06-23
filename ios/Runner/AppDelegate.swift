@@ -17,7 +17,7 @@ import FirebaseMessaging
         print("\n🚀 App launch started")
 
         // Google Maps
-        GMSServices.provideAPIKey("YOUR_GOOGLE_MAPS_API_KEY")
+        GMSServices.provideAPIKey("AIzaSyBn88TP5X-xaRCYo5gYxvGnVy_0WYotZWo")
         print("✅ Google Maps configured")
 
         // Firebase native config
