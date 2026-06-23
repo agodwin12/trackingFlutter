@@ -20,19 +20,33 @@ import 'package:FLEETRA/src/services/env_config.dart';
 import 'package:FLEETRA/src/services/notification_service.dart';
 import 'package:FLEETRA/src/services/pin_service.dart';
 import 'package:FLEETRA/src/services/token_refresh_service.dart';
-import 'package:FLEETRA/src/providers/locale_provider.dart';       // ← ADD
+import 'package:FLEETRA/src/providers/locale_provider.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';                            // ← ADD
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:FLEETRA/l10n/app_localizations.dart';              // ← ADD (generated)
+import 'package:FLEETRA/l10n/app_localizations.dart';
+
+// ── Google Maps Android renderer fix ──────────────────────────────────────────
+import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
+import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
+// ──────────────────────────────────────────────────────────────────────────────
 
 final GlobalKey<NavigatorState> navigatorKey = NotificationService.navigatorKey;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ── Fix blank Normal/Terrain tiles on Android ────────────────────────────
+  // Satellite & Hybrid work by default but Normal/Terrain require
+  // AndroidViewSurface rendering. This check is a no-op on iOS.
+  final mapsImplementation = GoogleMapsFlutterPlatform.instance;
+  if (mapsImplementation is GoogleMapsFlutterAndroid) {
+    mapsImplementation.useAndroidViewSurface = true;
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   try {
     debugPrint('\n🚀 APP INITIALIZATION START — ${DateTime.now()}');
@@ -54,7 +68,7 @@ void main() async {
 
     debugPrint('🚀 APP INITIALIZATION COMPLETE\n');
     runApp(
-      ChangeNotifierProvider(          // ← ADD wrapper
+      ChangeNotifierProvider(
         create: (_) => LocaleProvider(),
         child: const MyApp(),
       ),
@@ -115,7 +129,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // Rebuilds MaterialApp whenever locale is toggled
     final localeProvider = context.watch<LocaleProvider>();
 
     return MaterialApp(
