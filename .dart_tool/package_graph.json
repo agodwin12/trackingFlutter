@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "FLEETRA",
-      "version": "4.0.2+1003",
+      "version": "4.0.3+1004",
       "dependencies": [
         "carousel_slider",
         "connectivity_plus",

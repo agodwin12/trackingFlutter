@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../services/env_config.dart';
 import '../../services/notification_service.dart';
@@ -23,113 +24,50 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen>
-    with TickerProviderStateMixin {
-  late final AnimationController _logoCtrl;
-  late final AnimationController _textCtrl;
-  late final AnimationController _floatCtrl;
-  late final AnimationController _shimmerCtrl;
+class _SplashScreenState extends State<SplashScreen> {
+  VideoPlayerController? _videoController;
 
-  late final Animation<double> _logoScale;
-  late final Animation<double> _logoFade;
-  late final Animation<double> _logoRotate;
-  late final Animation<double> _floatY;
-  late final Animation<Offset> _textSlide;
-  late final Animation<double> _textFade;
-  late final Animation<double> _shimmer;
-
-  bool _animationDone = false;
+  bool _splashReady = false;
   VoidCallback? _pendingNavigation;
 
-  static const int _minSplashMs = 2800;
+  static const int _minSplashMs = 5000;
 
   String get baseUrl => EnvConfig.baseUrl;
 
   @override
   void initState() {
     super.initState();
-    _setupAnimations();
-    _runAnimationSequence();
+    _initVideoSplash();
     _checkSessionAndNavigate();
   }
 
   @override
   void dispose() {
-    _logoCtrl.dispose();
-    _textCtrl.dispose();
-    _floatCtrl.dispose();
-    _shimmerCtrl.dispose();
+    _videoController?.dispose();
     super.dispose();
   }
 
-  void _setupAnimations() {
-    _logoCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    );
+  Future<void> _initVideoSplash() async {
+    try {
+      final controller = VideoPlayerController.asset(
+        'assets/videos/splash_screen.mp4',
+      );
 
-    _logoScale = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _logoCtrl, curve: Curves.elasticOut),
-    );
+      _videoController = controller;
 
-    _logoFade = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _logoCtrl,
-        curve: const Interval(0.0, 0.35, curve: Curves.easeIn),
-      ),
-    );
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.setVolume(0);
+      await controller.play();
 
-    _logoRotate = Tween<double>(begin: -0.25, end: 0.0).animate(
-      CurvedAnimation(
-        parent: _logoCtrl,
-        curve: const Interval(0.0, 0.6, curve: Curves.easeOut),
-      ),
-    );
+      if (mounted) setState(() {});
+    } catch (_) {
+      // If video fails, continue with black splash instead of blocking login.
+    }
 
-    _floatCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2200),
-    )..repeat(reverse: true);
+    await Future.delayed(const Duration(milliseconds: _minSplashMs));
 
-    _floatY = Tween<double>(begin: -5.0, end: 5.0).animate(
-      CurvedAnimation(parent: _floatCtrl, curve: Curves.easeInOut),
-    );
-
-    _textCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 650),
-    );
-
-    _textSlide = Tween<Offset>(
-      begin: const Offset(0.5, 0.0),
-      end: Offset.zero,
-    ).animate(
-      CurvedAnimation(parent: _textCtrl, curve: Curves.easeOutCubic),
-    );
-
-    _textFade = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _textCtrl, curve: Curves.easeIn),
-    );
-
-    _shimmerCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    );
-
-    _shimmer = Tween<double>(begin: -1.5, end: 2.5).animate(
-      CurvedAnimation(parent: _shimmerCtrl, curve: Curves.easeInOut),
-    );
-  }
-
-  Future<void> _runAnimationSequence() async {
-    await _logoCtrl.forward();
-    await Future.delayed(const Duration(milliseconds: 60));
-    await _textCtrl.forward();
-    await Future.delayed(const Duration(milliseconds: 150));
-    await _shimmerCtrl.forward();
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    _animationDone = true;
+    _splashReady = true;
     _pendingNavigation?.call();
   }
 
@@ -190,6 +128,7 @@ class _SplashScreenState extends State<SplashScreen>
       await _waitRemaining(start);
 
       if (TokenRefreshService().sessionExpired) {
+        await _navigateUsingCacheOrLogin();
         return;
       }
 
@@ -238,7 +177,9 @@ class _SplashScreenState extends State<SplashScreen>
 
     if (rolesRaw != null && rolesRaw.isNotEmpty) {
       try {
-        roles = (jsonDecode(rolesRaw) as List).map((e) => e.toString()).toList();
+        roles = (jsonDecode(rolesRaw) as List)
+            .map((e) => e.toString())
+            .toList();
       } catch (_) {}
     }
 
@@ -296,7 +237,6 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _handleTransientFailure() async {
-    if (TokenRefreshService().sessionExpired) return;
     await _navigateUsingCacheOrLogin();
   }
 
@@ -339,6 +279,7 @@ class _SplashScreenState extends State<SplashScreen>
 
     try {
       final prefs = await SharedPreferences.getInstance();
+
       await prefs.setString('vehicles_list', jsonEncode(vehicles));
 
       final int firstVehicleId = (vehicles[0]['id'] as num).toInt();
@@ -370,7 +311,8 @@ class _SplashScreenState extends State<SplashScreen>
 
   void _scheduleNavigation(VoidCallback navigate) {
     _pendingNavigation = navigate;
-    if (_animationDone) {
+
+    if (_splashReady) {
       navigate();
     }
   }
@@ -403,97 +345,21 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final logoSize = screenWidth * 0.18;
-    final fontSize = screenWidth * 0.09;
+    final controller = _videoController;
 
     return Scaffold(
       backgroundColor: kSplashBg,
-      body: Center(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            AnimatedBuilder(
-              animation: Listenable.merge([_logoCtrl, _floatCtrl]),
-              builder: (context, child) {
-                return Opacity(
-                  opacity: _logoFade.value,
-                  child: Transform.translate(
-                    offset: Offset(0, _floatY.value),
-                    child: Transform.rotate(
-                      angle: _logoRotate.value,
-                      child: Transform.scale(
-                        scale: _logoScale.value,
-                        child: child,
-                      ),
-                    ),
-                  ),
-                );
-              },
-              child: Image.asset(
-                'assets/splash.png',
-                width: logoSize,
-                height: logoSize,
-              ),
-            ),
-            SizedBox(width: screenWidth * 0.04),
-            ClipRect(
-              child: SlideTransition(
-                position: _textSlide,
-                child: FadeTransition(
-                  opacity: _textFade,
-                  child: AnimatedBuilder(
-                    animation: _shimmer,
-                    builder: (context, child) {
-                      return ShaderMask(
-                        blendMode: BlendMode.srcIn,
-                        shaderCallback: (bounds) {
-                          final p = _shimmer.value;
-                          return LinearGradient(
-                            begin: Alignment.centerLeft,
-                            end: Alignment.centerRight,
-                            colors: const [
-                              Colors.white,
-                              Colors.white,
-                              Color(0xFFFFE8D6),
-                              Colors.white,
-                              Colors.white,
-                            ],
-                            stops: [
-                              0.0,
-                              (p - 0.25).clamp(0.0, 1.0),
-                              p.clamp(0.0, 1.0),
-                              (p + 0.25).clamp(0.0, 1.0),
-                              1.0,
-                            ],
-                          ).createShader(bounds);
-                        },
-                        child: child,
-                      );
-                    },
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'FLEETRA',
-                          style: TextStyle(
-                            fontSize: fontSize,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.white,
-                            letterSpacing: screenWidth * 0.012,
-                            height: 1.0,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+      body: SizedBox.expand(
+        child: controller != null && controller.value.isInitialized
+            ? FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: controller.value.size.width,
+            height: controller.value.size.height,
+            child: VideoPlayer(controller),
+          ),
+        )
+            : const ColoredBox(color: kSplashBg),
       ),
     );
   }
