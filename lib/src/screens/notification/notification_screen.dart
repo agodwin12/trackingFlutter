@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sticky_headers/sticky_headers.dart';
 import '../../core/utility/app_theme.dart';
@@ -22,7 +23,7 @@ class AppNotification {
   final String title;
   final String vehicleNickname;
   final String zone;
-  final DateTime time; // ✅ Already converted to local time
+  final DateTime time; // Already converted to local time
   final bool isRead;
   final String message;
 
@@ -76,19 +77,17 @@ class AppNotification {
       zone = zoneMatch.group(1) ?? zone;
     }
 
-    // ✅ FIXED: Parse UTC time and convert to local time
+    // Parse UTC time and convert to local time
     String alertedAtStr = json['alerted_at'] ?? DateTime.now().toIso8601String();
     DateTime utcTime = DateTime.parse(alertedAtStr);
-    DateTime localTime = utcTime.toLocal(); // ← CONVERT TO LOCAL TIME
-
-    debugPrint('🕐 Time conversion: UTC=$utcTime → Local=$localTime');
+    DateTime localTime = utcTime.toLocal();
 
     return AppNotification(
       id: json['id'] ?? 0,
       type: type,
       vehicleNickname: vehicleNickname,
       zone: zone,
-      time: localTime, // ← USE LOCAL TIME
+      time: localTime,
       isRead: json['read'] == true || json['read'] == 1,
       message: message,
       title: title,
@@ -123,6 +122,14 @@ class _NotificationScreenState extends State<NotificationScreen>
   bool _hasMoreData = true;
   int _totalNotifications = 0;
 
+  // ─── Date filters (same behavior as Trips screen) ─────────────────────────
+  // null = default view (no date filter, no chip selected)
+  // 'today' | 'yesterday' | 'week' | 'month' | 'custom'
+  bool _showFilters = false;
+  String? _selectedFilter;
+  DateTime? _customStartDate;
+  DateTime? _customEndDate;
+
   AppNotification? _latestAlert;
 
   final SocketService _socketService = SocketService();
@@ -136,8 +143,6 @@ class _NotificationScreenState extends State<NotificationScreen>
     super.initState();
     debugPrint('🔔 ========== NOTIFICATIONS SCREEN INITIALIZED ==========');
     debugPrint('🚗 Vehicle ID: ${widget.vehicleId}');
-    debugPrint('🌍 Local timezone: ${DateTime.now().timeZoneName}');
-    debugPrint('🕐 Local time offset: ${DateTime.now().timeZoneOffset}');
 
     _loadLanguagePreference();
     _tabController = TabController(length: 3, vsync: this);
@@ -150,12 +155,10 @@ class _NotificationScreenState extends State<NotificationScreen>
     setState(() {
       _selectedLanguage = prefs.getString('language') ?? 'en';
     });
-    debugPrint('✅ Language loaded: $_selectedLanguage');
   }
 
   @override
   void dispose() {
-    debugPrint('🔔 Notifications screen disposed');
     _tabController.dispose();
     _alertSubscription?.cancel();
     super.dispose();
@@ -190,9 +193,6 @@ class _NotificationScreenState extends State<NotificationScreen>
     final vehicleName = alertData['nickname'] ?? (_selectedLanguage == 'en' ? 'Vehicle' : 'Véhicule');
     final zoneName = alertData['safeZoneName'] ?? (_selectedLanguage == 'en' ? 'Unknown Zone' : 'Zone inconnue');
 
-    debugPrint('📢 Showing push notification banner');
-
-    // ✅ Use local time for real-time notifications
     setState(() {
       _latestAlert = AppNotification(
         id: alertData['alertId'] ?? 0,
@@ -200,7 +200,7 @@ class _NotificationScreenState extends State<NotificationScreen>
         title: title,
         vehicleNickname: vehicleName,
         zone: zoneName,
-        time: DateTime.now(), // ← Already local time
+        time: DateTime.now(),
         isRead: false,
         message: message,
       );
@@ -209,7 +209,6 @@ class _NotificationScreenState extends State<NotificationScreen>
 
     Future.delayed(Duration(seconds: 8), () {
       if (mounted && _showPushNotification) {
-        debugPrint('⏱️ Auto-dismissing push notification banner');
         setState(() {
           _showPushNotification = false;
         });
@@ -217,20 +216,53 @@ class _NotificationScreenState extends State<NotificationScreen>
     });
   }
 
-  Future<void> _fetchNotifications({bool loadMore = false}) async {
-    if (loadMore && !_hasMoreData) {
-      debugPrint('⚠️ No more data to load');
-      return;
-    }
-    if (loadMore && _isLoadingMore) {
-      debugPrint('⚠️ Already loading more data');
-      return;
-    }
+  // ─────────────────────────────────────────────────────────────────────────
+  // DATE RANGE HELPERS (same logic as Trips screen)
+  // ─────────────────────────────────────────────────────────────────────────
 
-    debugPrint('\n📡 ========== FETCHING NOTIFICATIONS ==========');
-    debugPrint('📄 Page: $_currentPage');
-    debugPrint('📊 Page Size: $_pageSize');
-    debugPrint('🔄 Load More: $loadMore');
+  Map<String, DateTime?> _getDateRange() {
+    final now = DateTime.now();
+    switch (_selectedFilter) {
+      case 'today':
+        return {
+          'start': DateTime(now.year, now.month, now.day),
+          'end': DateTime(now.year, now.month, now.day, 23, 59, 59),
+        };
+      case 'yesterday':
+        final y = now.subtract(const Duration(days: 1));
+        return {
+          'start': DateTime(y.year, y.month, y.day),
+          'end': DateTime(y.year, y.month, y.day, 23, 59, 59),
+        };
+      case 'week':
+        final monday = now.subtract(Duration(days: now.weekday - 1));
+        return {
+          'start': DateTime(monday.year, monday.month, monday.day),
+          'end': DateTime(now.year, now.month, now.day, 23, 59, 59),
+        };
+      case 'month':
+        return {
+          'start': DateTime(now.year, now.month, 1),
+          'end': DateTime(now.year, now.month, now.day, 23, 59, 59),
+        };
+      case 'custom':
+        DateTime? end = _customEndDate;
+        if (end != null) {
+          end = DateTime(end.year, end.month, end.day, 23, 59, 59);
+        }
+        return {'start': _customStartDate, 'end': end};
+      default:
+        return {'start': null, 'end': null};
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FETCH NOTIFICATIONS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  Future<void> _fetchNotifications({bool loadMore = false}) async {
+    if (loadMore && !_hasMoreData) return;
+    if (loadMore && _isLoadingMore) return;
 
     if (loadMore) {
       setState(() => _isLoadingMore = true);
@@ -243,12 +275,28 @@ class _NotificationScreenState extends State<NotificationScreen>
     }
 
     try {
-      debugPrint('🔐 Making authenticated request...');
+      final dateRange = _getDateRange();
+
+      final queryParams = <String, String>{
+        'page': '$_currentPage',
+        'limit': '$_pageSize',
+      };
+      if (dateRange['start'] != null) {
+        queryParams['startDate'] = DateFormat('yyyy-MM-dd').format(dateRange['start']!);
+      }
+      if (dateRange['end'] != null) {
+        queryParams['endDate'] = DateFormat('yyyy-MM-dd').format(dateRange['end']!);
+      }
+
+      final uri = Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}')
+          .replace(queryParameters: queryParams);
+
+      debugPrint('📡 Fetching notifications: $uri');
 
       final response = await _tokenService.makeAuthenticatedRequest(
         request: (token) async {
           return await http.get(
-            Uri.parse('$baseUrl/alerts/vehicle/${widget.vehicleId}?page=$_currentPage&limit=$_pageSize'),
+            uri,
             headers: {
               'Content-Type': 'application/json',
               'Authorization': 'Bearer $token',
@@ -257,17 +305,12 @@ class _NotificationScreenState extends State<NotificationScreen>
         },
       );
 
-      debugPrint('📬 Response Status: ${response.statusCode}');
-
       if (response.statusCode == 200) {
-        debugPrint('✅ Success - parsing response...');
         final data = jsonDecode(response.body);
 
         if (data['success'] == true && data['data'] != null) {
           final List<dynamic> alertsJson = data['data']['alerts'] ?? [];
           final pagination = data['data']['pagination'];
-
-          debugPrint('📦 Received ${alertsJson.length} notifications');
 
           if (mounted) {
             setState(() {
@@ -294,8 +337,6 @@ class _NotificationScreenState extends State<NotificationScreen>
               _isLoadingMore = false;
             });
           }
-
-          debugPrint('✅ Notifications loaded successfully\n');
         }
       } else if (response.statusCode == 401) {
         if (mounted) {
@@ -306,8 +347,7 @@ class _NotificationScreenState extends State<NotificationScreen>
           _showErrorSnackBar(
               _selectedLanguage == 'en'
                   ? 'Failed to load notifications'
-                  : 'Échec du chargement des notifications'
-          );
+                  : 'Échec du chargement des notifications');
         }
       }
     } catch (error) {
@@ -316,8 +356,7 @@ class _NotificationScreenState extends State<NotificationScreen>
         _showErrorSnackBar(
             _selectedLanguage == 'en'
                 ? 'Network error - check your connection'
-                : 'Erreur réseau - vérifiez votre connexion'
-        );
+                : 'Erreur réseau - vérifiez votre connexion');
       }
     }
 
@@ -327,6 +366,76 @@ class _NotificationScreenState extends State<NotificationScreen>
         _isRefreshing = false;
         _isLoadingMore = false;
       });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FILTER SELECTION (same behavior as Trips screen)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _onFilterSelected(String value) {
+    setState(() {
+      _selectedFilter = _selectedFilter == value ? null : value;
+    });
+    _fetchNotifications();
+  }
+
+  void _toggleFilters() => setState(() => _showFilters = !_showFilters);
+
+  Future<void> _showCustomDatePicker() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      initialDateRange: _customStartDate != null && _customEndDate != null
+          ? DateTimeRange(start: _customStartDate!, end: _customEndDate!)
+          : null,
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: ColorScheme.light(
+            primary: AppColors.primary,
+            onPrimary: AppColors.white,
+            onSurface: AppColors.black,
+          ),
+          textButtonTheme: TextButtonThemeData(
+            style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+          ),
+        ),
+        child: child!,
+      ),
+    );
+
+    if (picked != null) {
+      setState(() {
+        _selectedFilter = 'custom';
+        _customStartDate = picked.start;
+        _customEndDate = picked.end;
+      });
+      _fetchNotifications();
+    }
+  }
+
+  String _getFilterDisplayText() {
+    if (_selectedFilter == null) {
+      return _selectedLanguage == 'en' ? 'Recent notifications' : 'Notifications récentes';
+    }
+    switch (_selectedFilter) {
+      case 'today':
+        return _selectedLanguage == 'en' ? 'Today' : 'Aujourd\'hui';
+      case 'yesterday':
+        return _selectedLanguage == 'en' ? 'Yesterday' : 'Hier';
+      case 'week':
+        return _selectedLanguage == 'en' ? 'This week' : 'Cette semaine';
+      case 'month':
+        return _selectedLanguage == 'en' ? 'This month' : 'Ce mois';
+      case 'custom':
+        if (_customStartDate != null && _customEndDate != null) {
+          return '${DateFormat('MMM dd').format(_customStartDate!)} - '
+              '${DateFormat('MMM dd').format(_customEndDate!)}';
+        }
+        return _selectedLanguage == 'en' ? 'Custom range' : 'Période personnalisée';
+      default:
+        return '';
     }
   }
 
@@ -585,48 +694,42 @@ class _NotificationScreenState extends State<NotificationScreen>
     }
   }
 
-  // ✅ FIXED: Use local time for date grouping
-  Map<String, List<AppNotification>> _groupNotificationsByDate(List<AppNotification> notifications) {
-    final Map<String, List<AppNotification>> grouped = {
-      'Today': [],
-      'Yesterday': [],
-      'This Week': [],
-      'This Month': [],
-      'Older': [],
-    };
+  // ─────────────────────────────────────────────────────────────────────────
+  // GROUP BY EXACT DAY (like Trips screen date headers)
+  // Each calendar day gets its own group: Today, Yesterday,
+  // weekday name (< 7 days), then "MMM dd, yyyy" for older days.
+  // ─────────────────────────────────────────────────────────────────────────
 
-    final now = DateTime.now(); // ← Local time
+  String _dayLabel(DateTime localTime) {
+    final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final yesterday = today.subtract(Duration(days: 1));
-    final thisWeekStart = today.subtract(Duration(days: now.weekday - 1));
-    final thisMonthStart = DateTime(now.year, now.month, 1);
+    final day = DateTime(localTime.year, localTime.month, localTime.day);
+    final diff = today.difference(day).inDays;
 
-    for (var notification in notifications) {
-      // notification.time is already in local time
-      final notificationDate = DateTime(
-        notification.time.year,
-        notification.time.month,
-        notification.time.day,
-      );
-
-      if (notificationDate.isAtSameMomentAs(today)) {
-        grouped['Today']!.add(notification);
-      } else if (notificationDate.isAtSameMomentAs(yesterday)) {
-        grouped['Yesterday']!.add(notification);
-      } else if (notificationDate.isAfter(thisWeekStart) || notificationDate.isAtSameMomentAs(thisWeekStart)) {
-        grouped['This Week']!.add(notification);
-      } else if (notificationDate.isAfter(thisMonthStart) || notificationDate.isAtSameMomentAs(thisMonthStart)) {
-        grouped['This Month']!.add(notification);
-      } else {
-        grouped['Older']!.add(notification);
-      }
+    if (diff == 0) {
+      return _selectedLanguage == 'en' ? 'Today' : 'Aujourd\'hui';
     }
+    if (diff == 1) {
+      return _selectedLanguage == 'en' ? 'Yesterday' : 'Hier';
+    }
+    if (diff < 7) {
+      return DateFormat('EEEE', _selectedLanguage == 'fr' ? 'fr' : 'en').format(localTime);
+    }
+    return DateFormat('MMM dd, yyyy', _selectedLanguage == 'fr' ? 'fr' : 'en').format(localTime);
+  }
 
-    grouped.removeWhere((key, value) => value.isEmpty);
+  Map<String, List<AppNotification>> _groupNotificationsByDay(List<AppNotification> notifications) {
+    // Sort newest first so groups appear in reverse chronological order
+    final sorted = [...notifications]..sort((a, b) => b.time.compareTo(a.time));
+
+    final Map<String, List<AppNotification>> grouped = {};
+    for (var notification in sorted) {
+      final key = _dayLabel(notification.time);
+      grouped.putIfAbsent(key, () => []).add(notification);
+    }
     return grouped;
   }
 
-  // ✅ FIXED: Format local time correctly
   String _formatDetailedTime(DateTime localTime) {
     final hour = localTime.hour > 12 ? localTime.hour - 12 : (localTime.hour == 0 ? 12 : localTime.hour);
     final minute = localTime.minute.toString().padLeft(2, '0');
@@ -683,20 +786,21 @@ class _NotificationScreenState extends State<NotificationScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              _selectedLanguage == 'en' ? 'Notifications' : 'Notifications',
+                              'Notifications',
                               style: AppTypography.h3.copyWith(fontSize: 18),
                             ),
-                            if (_unreadNotifications.isNotEmpty)
-                              Text(
-                                _selectedLanguage == 'en'
-                                    ? '${_unreadNotifications.length} unread'
-                                    : '${_unreadNotifications.length} non lue${_unreadNotifications.length > 1 ? 's' : ''}',
-                                style: AppTypography.caption.copyWith(
-                                  color: AppColors.error,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                            Text(
+                              _unreadNotifications.isNotEmpty
+                                  ? (_selectedLanguage == 'en'
+                                  ? '${_getFilterDisplayText()} • ${_unreadNotifications.length} unread'
+                                  : '${_getFilterDisplayText()} • ${_unreadNotifications.length} non lue${_unreadNotifications.length > 1 ? 's' : ''}')
+                                  : _getFilterDisplayText(),
+                              style: AppTypography.caption.copyWith(
+                                color: _unreadNotifications.isNotEmpty ? AppColors.error : AppColors.primary,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
                               ),
+                            ),
                           ],
                         ),
                       ),
@@ -711,9 +815,22 @@ class _NotificationScreenState extends State<NotificationScreen>
                         icon: Icon(Icons.refresh_rounded, size: 20),
                         color: AppColors.primary,
                       ),
+                      IconButton(
+                        onPressed: _toggleFilters,
+                        icon: Icon(
+                          Icons.tune_rounded,
+                          color: (_showFilters || _selectedFilter != null) ? AppColors.primary : AppColors.black,
+                          size: 22,
+                        ),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
                     ],
                   ),
                 ),
+
+                // Filter section (same UI as Trips screen)
+                if (_showFilters) _buildFilterSection(),
 
                 // Tabs
                 Container(
@@ -803,6 +920,127 @@ class _NotificationScreenState extends State<NotificationScreen>
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FILTER SECTION (same UI as Trips screen)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  Widget _buildFilterSection() {
+    return Container(
+      color: AppColors.white,
+      padding: EdgeInsets.all(AppSizes.spacingL),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(height: 1),
+          SizedBox(height: AppSizes.spacingM),
+          Text(
+            _selectedLanguage == 'en' ? 'Filter by Date' : 'Filtrer par date',
+            style: AppTypography.subtitle1.copyWith(fontSize: 14),
+          ),
+          SizedBox(height: AppSizes.spacingM),
+          Wrap(
+            spacing: AppSizes.spacingS,
+            runSpacing: AppSizes.spacingS,
+            children: [
+              _buildFilterChip(
+                label: _selectedLanguage == 'en' ? 'Today' : 'Aujourd\'hui',
+                icon: Icons.today_rounded,
+                value: 'today',
+              ),
+              _buildFilterChip(
+                label: _selectedLanguage == 'en' ? 'Yesterday' : 'Hier',
+                icon: Icons.calendar_today_rounded,
+                value: 'yesterday',
+              ),
+              _buildFilterChip(
+                label: _selectedLanguage == 'en' ? 'This Week' : 'Cette semaine',
+                icon: Icons.date_range_rounded,
+                value: 'week',
+              ),
+              _buildFilterChip(
+                label: _selectedLanguage == 'en' ? 'This Month' : 'Ce mois',
+                icon: Icons.calendar_month_rounded,
+                value: 'month',
+              ),
+            ],
+          ),
+          SizedBox(height: AppSizes.spacingM),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _showCustomDatePicker,
+              icon: const Icon(Icons.event_rounded, size: 18),
+              label: Text(
+                _selectedFilter == 'custom' && _customStartDate != null
+                    ? '${DateFormat('MMM dd, yyyy').format(_customStartDate!)} - '
+                    '${DateFormat('MMM dd, yyyy').format(_customEndDate!)}'
+                    : (_selectedLanguage == 'en'
+                    ? 'Choose Custom Date Range'
+                    : 'Choisir une période personnalisée'),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _selectedFilter == 'custom'
+                    ? AppColors.primary
+                    : AppColors.textSecondary,
+                side: BorderSide(
+                  color: _selectedFilter == 'custom' ? AppColors.primary : AppColors.border,
+                  width: _selectedFilter == 'custom' ? 2 : 1,
+                ),
+                backgroundColor: _selectedFilter == 'custom'
+                    ? AppColors.primaryLight
+                    : Colors.transparent,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppSizes.radiusM)),
+                padding: EdgeInsets.symmetric(horizontal: AppSizes.spacingM, vertical: 14),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterChip({
+    required String label,
+    required IconData icon,
+    required String value,
+  }) {
+    final isSelected = _selectedFilter == value;
+    return InkWell(
+      onTap: () => _onFilterSelected(value),
+      borderRadius: BorderRadius.circular(AppSizes.radiusL),
+      child: Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: AppSizes.spacingM, vertical: AppSizes.spacingS + 2),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppSizes.radiusL),
+          border: Border.all(
+            color: isSelected ? AppColors.primary : AppColors.border,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 16,
+                color: isSelected ? AppColors.white : AppColors.textSecondary),
+            SizedBox(width: AppSizes.spacingXS),
+            Text(
+              label,
+              style: AppTypography.caption.copyWith(
+                color: isSelected ? AppColors.white : AppColors.textSecondary,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -919,6 +1157,16 @@ class _NotificationScreenState extends State<NotificationScreen>
                     _selectedLanguage == 'en' ? 'No notifications' : 'Aucune notification',
                     style: AppTypography.h3.copyWith(color: AppColors.textSecondary),
                   ),
+                  if (_selectedFilter != null) ...[
+                    SizedBox(height: AppSizes.spacingS),
+                    Text(
+                      _selectedLanguage == 'en'
+                          ? 'No notifications found for ${_getFilterDisplayText().toLowerCase()}'
+                          : 'Aucune notification trouvée pour ${_getFilterDisplayText().toLowerCase()}',
+                      style: AppTypography.caption.copyWith(color: AppColors.textSecondary, fontSize: 12),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -927,7 +1175,7 @@ class _NotificationScreenState extends State<NotificationScreen>
       );
     }
 
-    final groupedNotifications = _groupNotificationsByDate(notifications);
+    final groupedNotifications = _groupNotificationsByDay(notifications);
 
     return RefreshIndicator(
       onRefresh: _handleRefresh,
@@ -980,9 +1228,23 @@ class _NotificationScreenState extends State<NotificationScreen>
                 color: AppColors.background,
                 border: Border(bottom: BorderSide(color: AppColors.border, width: 0.5)),
               ),
-              child: Text(
-                _selectedLanguage == 'en' ? groupKey : _translateGroupKey(groupKey),
-                style: AppTypography.body1.copyWith(fontWeight: FontWeight.w700, color: AppColors.textSecondary, fontSize: 13),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      groupKey,
+                      style: AppTypography.body1.copyWith(fontWeight: FontWeight.w700, color: AppColors.textSecondary, fontSize: 13),
+                    ),
+                  ),
+                  Text(
+                    '${groupNotifications.length}',
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textSecondary.withOpacity(0.7),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
               ),
             ),
             content: Column(
@@ -999,23 +1261,6 @@ class _NotificationScreenState extends State<NotificationScreen>
         },
       ),
     );
-  }
-
-  String _translateGroupKey(String key) {
-    switch (key) {
-      case 'Today':
-        return 'Aujourd\'hui';
-      case 'Yesterday':
-        return 'Hier';
-      case 'This Week':
-        return 'Cette semaine';
-      case 'This Month':
-        return 'Ce mois';
-      case 'Older':
-        return 'Plus ancien';
-      default:
-        return key;
-    }
   }
 
   Widget _buildNotificationCard(AppNotification notification, bool isRead, bool isExpanded) {
@@ -1080,7 +1325,7 @@ class _NotificationScreenState extends State<NotificationScreen>
                         ),
                         SizedBox(height: 6),
                         Text(
-                          _formatDetailedTime(notification.time), // ← Uses local time
+                          _formatDetailedTime(notification.time),
                           style: AppTypography.caption.copyWith(
                             color: AppColors.textSecondary.withOpacity(0.7),
                             fontSize: 11,

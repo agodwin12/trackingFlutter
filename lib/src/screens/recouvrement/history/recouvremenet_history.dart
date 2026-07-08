@@ -1,11 +1,13 @@
 // lib/src/screens/recouvrement/history/recouvrement_history.dart
 import 'dart:convert';
-import 'package:FLEETRA/src/screens/recouvrement/history/recouvrement_history_model.dart' hide Lease;
+ import 'package:FLEETRA/src/screens/recouvrement/history/model/recouvremenet_transaction_model.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../dashboard/recouvremenet_model.dart';
 import 'package:FLEETRA/l10n/app_localizations.dart';
 import '../../../services/token_refresh_service.dart';
+ import 'model/recouvrement_history_model.dart' hide Lease;
+import 'transaction_detail_screen.dart';
 
 // ── Colours ────────────────────────────────────────────────────────────────────
 const Color _bg          = Color(0xFF0D1117);
@@ -67,13 +69,26 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
   final _tokenService = TokenRefreshService();
   static const String _apiBase = 'https://recouvrement.proxymgroup.com/api/v1';
 
+  // ── Transactions (Paiements tab) state ─────────────────────────────────────
+  final List<PaymentTransaction> _transactions = [];
+  final ScrollController _txScrollCtrl = ScrollController();
+  bool    _txLoading     = true;   // first page / refresh
+  bool    _txLoadingMore = false;  // page N+1
+  bool    _txHasMore     = false;
+  bool    _txFirstError  = false;  // page-1 failure → full error state
+  bool    _txMoreError   = false;  // page-N failure → inline retry row
+  int     _txNextPage    = 1;
+  int     _txCount       = 0;
+
   @override
   void initState() {
     super.initState();
-    _tabCtrl      = TabController(length: 2, vsync: this);
+    _tabCtrl      = TabController(length: 3, vsync: this);
     _focusedMonth = DateTime(DateTime.now().year, DateTime.now().month);
     _leases       = List<Lease>.from(widget.leases);
     _fetchPaiements();
+    _fetchTransactions(refresh: true);
+    _txScrollCtrl.addListener(_onTxScroll);
   }
 
   @override
@@ -87,6 +102,8 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
   @override
   void dispose() {
     _tabCtrl.dispose();
+    _txScrollCtrl.removeListener(_onTxScroll);
+    _txScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -121,6 +138,84 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
       // non-fatal
     } finally {
       if (mounted) setState(() => _loadingPaiements = false);
+    }
+  }
+
+  // ── Transactions fetch (DRF paginated) ──────────────────────────────────────
+  //
+  // We deliberately never follow the `next` URL from the response — it comes
+  // back as plain http:// and would be blocked as cleartext (or drop the token
+  // through a redirect). Instead we rebuild `?page=N` on our own https base.
+  Future<void> _fetchTransactions({bool refresh = false}) async {
+    if (refresh) {
+      setState(() {
+        _txLoading    = true;
+        _txFirstError = false;
+        _txMoreError  = false;
+        _txNextPage   = 1;
+      });
+    } else {
+      if (_txLoadingMore || !_txHasMore) return;
+      setState(() {
+        _txLoadingMore = true;
+        _txMoreError   = false;
+      });
+    }
+
+    final page = refresh ? 1 : _txNextPage;
+
+    try {
+      final res = await _tokenService.makeAuthenticatedRequest(
+        request: (token) => http.get(
+          Uri.parse('$_apiBase/transactions/${page > 1 ? '?page=$page' : ''}'),
+          headers: {
+            'Authorization':              'Bearer $token',
+            'Content-Type':               'application/json',
+            'ngrok-skip-browser-warning': 'true',
+          },
+        ).timeout(const Duration(seconds: 15)),
+      );
+
+      if (res.statusCode == 200) {
+        final pageData =
+        TransactionPage.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+        if (!mounted) return;
+        setState(() {
+          if (refresh) _transactions.clear();
+          _transactions.addAll(pageData.results);
+          _txCount    = pageData.count;
+          _txHasMore  = pageData.hasNext;
+          _txNextPage = page + 1;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() {
+          if (refresh && _transactions.isEmpty) _txFirstError = true;
+          if (!refresh) _txMoreError = true;
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        if (refresh && _transactions.isEmpty) _txFirstError = true;
+        if (!refresh) _txMoreError = true;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _txLoading     = false;
+          _txLoadingMore = false;
+        });
+      }
+    }
+  }
+
+  void _onTxScroll() {
+    if (!_txScrollCtrl.hasClients) return;
+    final pos = _txScrollCtrl.position;
+    if (pos.pixels >= pos.maxScrollExtent - 300 &&
+        _txHasMore && !_txLoadingMore && !_txLoading && !_txMoreError) {
+      _fetchTransactions();
     }
   }
 
@@ -162,6 +257,8 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
 
   String _dateKey(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
+
+  bool get _isFr => Localizations.localeOf(context).languageCode == 'fr';
 
   Color _statusColor(_DayStatus s) {
     switch (s) {
@@ -214,6 +311,7 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
           children: [
             _buildCalendarTab(t),
             _buildListTab(t),
+            _buildPaymentsTab(t),
           ],
         )),
       ])),
@@ -258,7 +356,11 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
       unselectedLabelColor: _textMuted,
       labelStyle:           const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
       unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-      tabs: [Tab(text: t.tabCalendar), Tab(text: t.tabRecords)],
+      tabs: [
+        Tab(text: t.tabCalendar),
+        Tab(text: t.tabRecords),
+        Tab(text: _isFr ? 'Paiements' : 'Payments'),
+      ],
     ),
   );
 
@@ -912,6 +1014,238 @@ class _LeaseHistoryScreenState extends State<LeaseHistoryScreen>
               ),
             ],
           ],
+        ]),
+      ),
+    );
+  }
+
+  // ══ TAB 3 — PAYMENTS (transactions) ══════════════════════════════════════
+  Color _txStatusColor(TransactionStatus s) {
+    switch (s) {
+      case TransactionStatus.valide:  return _green;
+      case TransactionStatus.echec:   return _red;
+      case TransactionStatus.pending:
+      case TransactionStatus.unknown: return _yellow;
+    }
+  }
+
+  String _txStatusLabel(PaymentTransaction tx) {
+    switch (tx.status) {
+      case TransactionStatus.valide:  return _isFr ? 'Réussi'    : 'Successful';
+      case TransactionStatus.echec:   return _isFr ? 'Échoué'    : 'Failed';
+      case TransactionStatus.pending: return _isFr ? 'En attente': 'Pending';
+      case TransactionStatus.unknown:
+        return tx.rawStatus.isEmpty ? '—' : tx.rawStatus;
+    }
+  }
+
+  IconData _txStatusIcon(TransactionStatus s) {
+    switch (s) {
+      case TransactionStatus.valide:  return Icons.check_rounded;
+      case TransactionStatus.echec:   return Icons.close_rounded;
+      case TransactionStatus.pending:
+      case TransactionStatus.unknown: return Icons.hourglass_top_rounded;
+    }
+  }
+
+  String _txTwo(int n) => n.toString().padLeft(2, '0');
+
+  String _txDateHeader(DateTime d) {
+    final now       = DateTime.now();
+    final today     = DateTime(now.year, now.month, now.day);
+    final thatDay   = DateTime(d.year, d.month, d.day);
+    final diff      = today.difference(thatDay).inDays;
+    if (diff == 0) return _isFr ? "Aujourd'hui" : 'Today';
+    if (diff == 1) return _isFr ? 'Hier'        : 'Yesterday';
+    final ms = _isFr
+        ? ['','Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc']
+        : ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${d.day} ${ms[d.month]} ${d.year}';
+  }
+
+  Widget _buildPaymentsTab(AppLocalizations t) {
+    // First load
+    if (_txLoading && _transactions.isEmpty) {
+      return const Center(child: CircularProgressIndicator(
+          color: _orange, strokeWidth: 2.5));
+    }
+
+    // Page-1 failure with nothing to show → full error state with retry
+    if (_txFirstError && _transactions.isEmpty) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.wifi_off_rounded, color: _textMuted, size: 48),
+        const SizedBox(height: 12),
+        Text(_isFr ? 'Impossible de charger les paiements'
+            : 'Unable to load payments',
+            style: const TextStyle(color: _textMuted, fontSize: 14)),
+        const SizedBox(height: 16),
+        SizedBox(height: 40, child: ElevatedButton.icon(
+          onPressed: () => _fetchTransactions(refresh: true),
+          icon: const Icon(Icons.refresh_rounded, size: 16),
+          label: Text(_isFr ? 'Réessayer' : 'Retry',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _orange, foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            elevation: 0,
+          ),
+        )),
+      ]));
+    }
+
+    // Empty state
+    if (_transactions.isEmpty) {
+      return RefreshIndicator(
+        color: _orange, backgroundColor: _card,
+        onRefresh: () => _fetchTransactions(refresh: true),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(height: MediaQuery.of(context).size.height * 0.25),
+            const Icon(Icons.receipt_long_rounded, color: _textMuted, size: 48),
+            const SizedBox(height: 12),
+            Center(child: Text(
+                _isFr ? 'Aucun paiement pour le moment' : 'No payments yet',
+                style: const TextStyle(color: _textMuted, fontSize: 14))),
+          ],
+        ),
+      );
+    }
+
+    // Grouped rows with date headers, newest first (API order)
+    final children = <Widget>[
+      _buildTxSummary(),
+      const SizedBox(height: 16),
+    ];
+    String? currentHeader;
+    for (final tx in _transactions) {
+      final header = _txDateHeader(tx.createdAt);
+      if (header != currentHeader) {
+        currentHeader = header;
+        children.add(Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 10),
+          child: Text(header.toUpperCase(), style: const TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w700,
+              color: _textMuted, letterSpacing: 1.5)),
+        ));
+      }
+      children.add(Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: _buildTxRow(tx),
+      ));
+    }
+
+    // Footer: loading spinner / inline retry / end-of-list marker
+    if (_txLoadingMore) {
+      children.add(const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Center(child: SizedBox(width: 22, height: 22,
+            child: CircularProgressIndicator(color: _orange, strokeWidth: 2.5))),
+      ));
+    } else if (_txMoreError) {
+      children.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Center(child: TextButton.icon(
+          onPressed: () => _fetchTransactions(),
+          icon: const Icon(Icons.refresh_rounded, color: _orange, size: 16),
+          label: Text(_isFr ? 'Réessayer le chargement' : 'Retry loading',
+              style: const TextStyle(color: _orange, fontSize: 12,
+                  fontWeight: FontWeight.w700)),
+        )),
+      ));
+    } else if (!_txHasMore && _transactions.length >= 10) {
+      children.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Center(child: Text(
+            _isFr ? '— Fin de l\'historique —' : '— End of history —',
+            style: TextStyle(fontSize: 11, color: _textMuted.withOpacity(0.6)))),
+      ));
+    }
+
+    return RefreshIndicator(
+      color: _orange, backgroundColor: _card,
+      onRefresh: () => _fetchTransactions(refresh: true),
+      child: ListView(
+        controller: _txScrollCtrl,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        children: children,
+      ),
+    );
+  }
+
+  Widget _buildTxSummary() {
+    final successCount = _transactions.where((tx) => tx.isSuccess).length;
+    final failedCount  = _transactions.where((tx) => tx.isFailed).length;
+    final totalPaid    = _transactions
+        .where((tx) => tx.isSuccess)
+        .fold(0.0, (s, tx) => s + tx.amount);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: _card,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _border)),
+      child: Row(children: [
+        Expanded(child: _summaryCol(
+            _isFr ? 'Réussis' : 'Successful', '$successCount', _green)),
+        _vDivider(),
+        Expanded(child: _summaryCol(
+            _isFr ? 'Échoués' : 'Failed', '$failedCount', _red)),
+        _vDivider(),
+        Expanded(child: _summaryCol(
+            _isFr ? 'Total payé' : 'Total paid',
+            'XAF ${_fmt(totalPaid)}', _orange, small: true)),
+      ]),
+    );
+  }
+
+  Widget _buildTxRow(PaymentTransaction tx) {
+    final color = _txStatusColor(tx.status);
+    final label = _txStatusLabel(tx);
+    final time  = '${_txTwo(tx.createdAt.hour)}:${_txTwo(tx.createdAt.minute)}';
+
+    return GestureDetector(
+      onTap: () => Navigator.push(context, MaterialPageRoute(
+        builder: (_) => TransactionDetailScreen(transaction: tx),
+      )),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _card, borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _border),
+        ),
+        child: Row(children: [
+          Container(width: 42, height: 42,
+              decoration: BoxDecoration(color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10)),
+              child: Icon(_txStatusIcon(tx.status), color: color, size: 20)),
+          const SizedBox(width: 14),
+          Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('XAF ${_fmt(tx.amount)}', style: const TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary)),
+            const SizedBox(height: 2),
+            Text(tx.reference, style: const TextStyle(
+                fontSize: 11, color: _textMuted),
+                overflow: TextOverflow.ellipsis),
+          ])),
+          const SizedBox(width: 8),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(6)),
+              child: Text(label, style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+            ),
+            const SizedBox(height: 4),
+            Text(time, style: const TextStyle(
+                fontSize: 11, color: _textMuted)),
+          ]),
+          const SizedBox(width: 6),
+          Icon(Icons.chevron_right_rounded,
+              color: _textMuted.withOpacity(0.5), size: 18),
         ]),
       ),
     );

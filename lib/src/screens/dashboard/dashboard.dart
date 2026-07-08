@@ -13,7 +13,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-
+import 'dart:io';
 import '../../core/utility/app_theme.dart';
 import '../../widgets/offline_barner.dart';
 import '../settings/settings.dart';
@@ -269,12 +269,6 @@ class _ModernDashboardState extends State<ModernDashboard>
         icon: _controller!.customCarIcon!,
         anchor: const Offset(0.5, 0.5),
         rotation: _currentRotation,
-        infoWindow: InfoWindow(
-          title: _controller!.selectedVehicle!.nickname.isNotEmpty
-              ? _controller!.selectedVehicle!.nickname
-              : '${_controller!.selectedVehicle!.brand} ${_controller!.selectedVehicle!.model}',
-          snippet: _controller!.selectedVehicle!.immatriculation,
-        ),
         onTap: _onMarkerTapped,
       ),
     };
@@ -376,6 +370,9 @@ class _ModernDashboardState extends State<ModernDashboard>
   Future<void> _onMarkerTapped() async {
     if (_controller?.mapController == null) return;
     if (_currentMarkerLat == null || _currentMarkerLng == null) return;
+
+    await Future.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
 
     final coord = await _controller!.mapController!.getScreenCoordinate(
       LatLng(_currentMarkerLat!, _currentMarkerLng!),
@@ -1293,10 +1290,13 @@ class _ModernDashboardState extends State<ModernDashboard>
     // Position pill 60px above the marker's screen coordinate
     const double aboveMarkerOffset = 60.0;
 
+    final double dpr = Platform.isAndroid
+        ? MediaQuery.of(context).devicePixelRatio
+        : 1.0;
     final double left =
-        _pillScreenCoord!.x.toDouble() - pillEstimatedWidth / 2;
+        (_pillScreenCoord!.x.toDouble() / dpr) - pillEstimatedWidth / 2;
     final double top =
-        _pillScreenCoord!.y.toDouble() - aboveMarkerOffset - pillHeight;
+        (_pillScreenCoord!.y.toDouble() / dpr) - aboveMarkerOffset - pillHeight;
 
     final String vehicleName =
     controller.selectedVehicle?.nickname.isNotEmpty == true
